@@ -1,0 +1,3465 @@
+diff --git a/__tests__/components/automations/recommended-automations.test.tsx b/__tests__/components/automations/recommended-automations.test.tsx
+index 89acc81350b4..10ca335ffcaa 100644
+--- a/__tests__/components/automations/recommended-automations.test.tsx
++++ b/__tests__/components/automations/recommended-automations.test.tsx
+@@ -17,11 +17,12 @@ import {
+   setRegisteredBackends,
+ } from "#/api/backend-registry/active-store";
+ import { ActiveBackendProvider } from "#/contexts/active-backend-context";
+-import type { Backend } from "#/api/backend-registry/types";
+ import {
+-  RecommendedAutomationsLauncher,
+-  buildAutomationPrompt,
+-} from "#/components/features/automations/recommended-automations-launcher";
++  NavigationProvider,
++  type NavigationContextValue,
++} from "#/context/navigation-context";
++import type { Backend } from "#/api/backend-registry/types";
++import { RecommendedAutomationsLauncher } from "#/components/features/automations/recommended-automations-launcher";
+ import {
+   RecommendedAutomationsSection,
+   getAutomationsByPopularity,
+@@ -75,12 +76,25 @@ const cloudBackend: Backend = {
+   kind: "cloud",
+ };
+ 
++const mockNavigate = vi.fn();
++
++const navigationValue: NavigationContextValue = {
++  currentPath: "/automations",
++  conversationId: null,
++  isNavigating: false,
++  navigate: mockNavigate,
++};
++
+ function renderLauncher({ withBackendProvider = false } = {}) {
+   const queryClient = new QueryClient({
+     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+   });
+ 
+-  const launcher = <RecommendedAutomationsLauncher />;
++  const launcher = (
++    <NavigationProvider value={navigationValue}>
++      <RecommendedAutomationsLauncher />
++    </NavigationProvider>
++  );
+ 
+   return render(
+     <QueryClientProvider client={queryClient}>
+@@ -383,26 +397,73 @@ describe("recommended automations", () => {
+     expect(mockCreateConversationMutate).not.toHaveBeenCalled();
+   });
+ 
+-  it("launches directly with the catalog prompt when the required MCP is already installed", () => {
++  it("opens the setup form for an automation that ships one, creating nothing", () => {
++    // Arrange
+     mockUseSettings.mockReturnValue({
+       data: settingsWithGithubMcp(),
+     });
+ 
+     renderLauncher();
+ 
++    // Act
+     fireEvent.click(
+       screen.getByTestId("recommended-automation-card-github-pr-reviewer"),
+     );
+     fireEvent.click(screen.getByTestId("responder-deployment-continue-local"));
+ 
+-    expect(mockCreateConversationMutate).toHaveBeenCalledTimes(1);
+-    expect(screen.queryByTestId("mcp-install-modal")).not.toBeInTheDocument();
++    // Assert — nothing exists until the user confirms in the setup form.
++    expect(mockNavigate).toHaveBeenCalledWith(
++      "/automations/new/github-pr-reviewer",
++    );
++    expect(mockCreateConversationMutate).not.toHaveBeenCalled();
++  });
+ 
++  it("launches an automation that ships no setup form with its slash command", () => {
++    // Arrange
++    mockUseSettings.mockReturnValue({
++      data: settingsWithMcpConfig({
++        linear: { url: "https://mcp.linear.app/mcp" },
++      }),
++    });
++
++    renderLauncher();
++
++    // Act
++    fireEvent.click(
++      screen.getByTestId("recommended-automation-card-linear-triage-assistant"),
++    );
++
++    // Assert
++    expect(mockCreateConversationMutate).toHaveBeenCalledTimes(1);
+     const [, options] = mockCreateConversationMutate.mock.calls[0];
+     options.onSuccess({ conversation_id: "conversation-1" });
+ 
+     const draft = getConversationState("conversation-1").draftMessage;
+-    expect(draft).toBeTruthy();
++    expect(draft).toBe("/linear-triage:setup");
++  });
++
++  it("launches without waiting for an integration the automation can start without", () => {
++    // Arrange — Slack and Linear are connected; Notion, which the entry marks
++    // as connectable later, is not.
++    mockUseSettings.mockReturnValue({
++      data: settingsWithMcpConfig({
++        slack: { url: "https://mcp.slack.com/mcp" },
++        linear: { url: "https://mcp.linear.app/mcp" },
++      }),
++    });
++
++    renderLauncher();
++
++    // Act
++    fireEvent.click(
++      screen.getByTestId(
++        "recommended-automation-card-incident-retrospective-drafter",
++      ),
++    );
++
++    // Assert — nothing stands between the click and the launch.
++    expect(screen.queryByTestId("mcp-install-modal")).not.toBeInTheDocument();
++    expect(mockNavigate).toHaveBeenCalledTimes(1);
+   });
+ 
+   it("prompts to install when the required MCP server is disabled", async () => {
+@@ -445,7 +506,7 @@ describe("recommended automations", () => {
+       screen.getByTestId("recommended-automation-card-github-pr-reviewer"),
+     );
+ 
+-    expect(mockCreateConversationMutate).toHaveBeenCalledTimes(1);
++    expect(mockNavigate).toHaveBeenCalledTimes(1);
+   });
+ 
+   it("hides the recommended automations section on cloud backends", () => {
+@@ -479,7 +540,9 @@ describe("recommended automations", () => {
+ 
+     await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+     await waitFor(() =>
+-      expect(mockCreateConversationMutate).toHaveBeenCalledTimes(1),
++      expect(mockNavigate).toHaveBeenCalledWith(
++        "/automations/new/github-pr-reviewer",
++      ),
+     );
+   });
+ 
+@@ -517,14 +580,3 @@ describe("recommended automations", () => {
+     ).not.toBeInTheDocument();
+   });
+ });
+-
+-describe("buildAutomationPrompt", () => {
+-  it("passes the prompt through verbatim", () => {
+-    expect(buildAutomationPrompt("Do something useful")).toBe(
+-      "Do something useful",
+-    );
+-    expect(buildAutomationPrompt("/slack-monitor:poll")).toBe(
+-      "/slack-monitor:poll",
+-    );
+-  });
+-});
+diff --git a/__tests__/components/manifest/manifest-form-field.test.tsx b/__tests__/components/manifest/manifest-form-field.test.tsx
+new file mode 100644
+index 000000000000..0760a7c06a3f
+--- /dev/null
++++ b/__tests__/components/manifest/manifest-form-field.test.tsx
+@@ -0,0 +1,119 @@
++import { useState } from "react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  __resetActiveStoreForTests,
++  setActiveSelection,
++  setRegisteredBackends,
++} from "#/api/backend-registry/active-store";
++import { SetupFormField } from "#/components/features/manifest/manifest-form-field";
++import { ActiveBackendProvider } from "#/contexts/active-backend-context";
++import type { Backend } from "#/api/backend-registry/types";
++import type { SetupFormField as SetupFormFieldDefinition } from "#/manifests/types";
++
++const LOCAL_BACKEND: Backend = {
++  id: "local-1",
++  name: "Local",
++  host: "http://localhost:18000",
++  apiKey: "",
++  kind: "local",
++};
++
++const CLOUD_BACKEND: Backend = {
++  id: "cloud-1",
++  name: "OpenHands Cloud",
++  host: "https://app.all-hands.dev",
++  apiKey: "bearer-token",
++  kind: "cloud",
++};
++
++/** The repository input `github-pr-reviewer` declares, in its published shape. */
++const REPOSITORY_FIELD: SetupFormFieldDefinition = {
++  type: "repo-picker",
++  label: "Repository",
++  help: "The repository whose pull requests will be reviewed.",
++  provider: "github",
++  required: true,
++};
++
++/** Holds the field value the way the setup dialog does, so typing accumulates. */
++function Harness({ onValueChange }: { onValueChange: (value: string) => void }) {
++  const [value, setValue] = useState("");
++
++  return (
++    <SetupFormField
++      name="repository"
++      field={REPOSITORY_FIELD}
++      value={value}
++      options={[]}
++      repository={null}
++      disabled={false}
++      onChange={(next) => {
++        setValue(next);
++        onValueChange(next);
++      }}
++      onRepositoryChange={vi.fn()}
++      onBlur={vi.fn()}
++    />
++  );
++}
++
++function renderRepositoryField(backend: Backend) {
++  setRegisteredBackends([backend]);
++  setActiveSelection({ backendId: backend.id });
++
++  const onValueChange = vi.fn();
++  render(
++    <QueryClientProvider
++      client={
++        new QueryClient({ defaultOptions: { queries: { retry: false } } })
++      }
++    >
++      <ActiveBackendProvider>
++        <Harness onValueChange={onValueChange} />
++      </ActiveBackendProvider>
++    </QueryClientProvider>,
++  );
++
++  return { onValueChange, user: userEvent.setup() };
++}
++
++beforeEach(() => {
++  __resetActiveStoreForTests();
++});
++
++afterEach(() => {
++  __resetActiveStoreForTests();
++});
++
++describe("SetupFormField repo-picker", () => {
++  it("lets a repository be typed on a backend that cannot list them", async () => {
++    // Arrange — a local backend, where GitService answers every repository
++    // query with an empty page.
++    const { onValueChange, user } = renderRepositoryField(LOCAL_BACKEND);
++
++    // Act
++    await user.type(
++      screen.getByTestId("setup-field-repository"),
++      "OpenHands/agent-server-gui",
++    );
++
++    // Assert — the required field is answerable, in the `owner/repo` shape the
++    // create payload sends as `repos[0].url`.
++    expect(onValueChange).toHaveBeenLastCalledWith(
++      "OpenHands/agent-server-gui",
++    );
++  });
++
++  it("browses the account's repositories on a cloud backend", () => {
++    // Arrange / Act
++    renderRepositoryField(CLOUD_BACKEND);
++
++    // Assert — the picker stays the way a repository is chosen wherever it can
++    // actually answer, so there is nothing to type into.
++    expect(screen.getByTestId("git-repo-dropdown")).toBeInTheDocument();
++    expect(screen.queryByTestId("setup-field-repository")).toBeNull();
++  });
++});
+diff --git a/__tests__/components/manifest/manifest-setup-dialog.test.tsx b/__tests__/components/manifest/manifest-setup-dialog.test.tsx
+new file mode 100644
+index 000000000000..1ddb42345412
+--- /dev/null
++++ b/__tests__/components/manifest/manifest-setup-dialog.test.tsx
+@@ -0,0 +1,214 @@
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { render, screen, waitFor } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import AutomationService from "#/api/automation-service/automation-service.api";
++import { SetupDialog } from "#/components/features/manifest/manifest-setup-dialog";
++import type { SetupPrerequisitesResult } from "#/hooks/query/use-manifest-prerequisites";
++import type { SetupEntry } from "#/manifests/types";
++import { createSetupEntry } from "../../manifests/manifest-test-data";
++
++/**
++ * The dialog is the part of setup that is not pure: it owns the step order, the
++ * local check that has to pass before the service is asked anything, what the
++ * action is handed, and where a finished setup lands. Each stage it drives has
++ * its own test, so those are stubbed here and only the wiring is exercised.
++ */
++const mocks = vi.hoisted(() => ({
++  navigate: vi.fn(),
++  runAction: vi.fn(),
++  prerequisites: vi.fn(),
++  tracking: {
++    trackAutomationSetupOpened: vi.fn(),
++    trackAutomationSetupValidated: vi.fn(),
++    trackAutomationSetupCreated: vi.fn(),
++    trackAutomationSetupFailed: vi.fn(),
++  },
++}));
++
++vi.mock("react-router", async (importOriginal) => ({
++  ...(await importOriginal<typeof import("react-router")>()),
++  useNavigate: () => mocks.navigate,
++}));
++
++// A local backend, where the repository field is a plain input rather than the
++// picker only a cloud backend can populate.
++vi.mock("#/contexts/active-backend-context", () => ({
++  useActiveBackend: () => ({
++    backend: { id: "local-1", kind: "local" },
++    orgId: null,
++  }),
++}));
++
++vi.mock("#/hooks/query/use-manifest-capabilities", () => ({
++  useSetupCapabilities: () => ({
++    capabilities: null,
++    supported: "unknown",
++    unmet: [],
++    isLoading: false,
++  }),
++}));
++
++vi.mock("#/hooks/query/use-manifest-prerequisites", () => ({
++  useSetupPrerequisites: () => mocks.prerequisites(),
++}));
++
++vi.mock("#/manifests/manifest-actions", () => ({
++  useSetupAction: () => mocks.runAction,
++}));
++
++vi.mock("#/hooks/use-tracking", () => ({
++  useTracking: () => mocks.tracking,
++}));
++
++vi.mock("#/api/automation-service/automation-service.api", () => ({
++  default: { validateDraft: vi.fn() },
++}));
++
++const NOTHING_TO_CONNECT: SetupPrerequisitesResult = {
++  blockingIntegrations: [],
++  warningIntegrations: [],
++  isBlocked: false,
++  isLoading: false,
++};
++
++const ENTRY: SetupEntry = createSetupEntry();
++
++function renderDialog() {
++  const user = userEvent.setup();
++  render(
++    <QueryClientProvider
++      client={
++        new QueryClient({ defaultOptions: { queries: { retry: false } } })
++      }
++    >
++      <SetupDialog entry={ENTRY} onClose={vi.fn()} />
++    </QueryClientProvider>,
++  );
++  return { user };
++}
++
++/** Answer the two required fields the entry ships without a default. */
++async function fillForm(user: ReturnType<typeof userEvent.setup>) {
++  await user.type(
++    screen.getByTestId("setup-field-repository"),
++    "OpenHands/agent-server-gui",
++  );
++  await user.type(screen.getByTestId("setup-field-widgetName"), "Widgets");
++}
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  mocks.prerequisites.mockReturnValue(NOTHING_TO_CONNECT);
++  vi.mocked(AutomationService.validateDraft).mockResolvedValue({
++    valid: true,
++    errors: [],
++  });
++});
++
++describe("SetupDialog", () => {
++  it("asks about an unconnected integration before it asks anything else", async () => {
++    // Arrange — an advisory integration, which is shown but does not block.
++    mocks.prerequisites.mockReturnValue({
++      ...NOTHING_TO_CONNECT,
++      warningIntegrations: [
++        {
++          id: "github",
++          requirement: { message: "Used to read widgets.", required: false },
++          entry: null,
++        },
++      ],
++    });
++    const { user } = renderDialog();
++
++    // Act
++    expect(screen.getByTestId("setup-prerequisites")).toBeInTheDocument();
++    await user.click(screen.getByTestId("setup-continue-button"));
++
++    // Assert
++    expect(screen.getByTestId("setup-field-widgetName")).toBeInTheDocument();
++    expect(screen.queryByTestId("setup-prerequisites")).toBeNull();
++  });
++
++  it("holds an unanswered required field back from the service", async () => {
++    // Arrange — nothing typed, so two required fields are still empty.
++    const { user } = renderDialog();
++
++    // Act
++    await user.click(screen.getByTestId("setup-continue-button"));
++
++    // Assert — the local check reports the field's own code rather than
++    // collapsing every failure into one message, and nothing was sent.
++    expect(
++      screen.getByTestId("setup-field-widgetName-error"),
++    ).toHaveTextContent("SETUP$VALIDATION_REQUIRED");
++    expect(AutomationService.validateDraft).not.toHaveBeenCalled();
++    expect(screen.queryByTestId("setup-review")).toBeNull();
++  });
++
++  it("creates from the derived payload and opens what was created", async () => {
++    // Arrange
++    mocks.runAction.mockResolvedValue({ response: { id: "automation-1" } });
++    const { user } = renderDialog();
++    await fillForm(user);
++
++    // Act
++    await user.click(screen.getByTestId("setup-continue-button"));
++    await waitFor(() =>
++      expect(screen.getByTestId("setup-review")).toBeInTheDocument(),
++    );
++    await user.click(screen.getByTestId("setup-continue-button"));
++
++    // Assert — the action is handed the derived request body, not the raw
++    // answers, and the new automation is where setup lands.
++    await waitFor(() =>
++      expect(mocks.navigate).toHaveBeenCalledWith("/automations/automation-1", {
++        replace: true,
++      }),
++    );
++    expect(mocks.runAction.mock.calls[0][2]).toEqual({
++      name: "Widget monitor - OpenHands/agent-server-gui",
++      prompt: "Report on Widgets in OpenHands/agent-server-gui.",
++      repos: [{ url: "OpenHands/agent-server-gui", provider: "github" }],
++      trigger: { type: "cron", schedule: "*/15 * * * *" },
++    });
++  });
++
++  it("returns a rejected create to the field the service blamed", async () => {
++    // Arrange — a validation failure addressed by payload path, which only the
++    // derived error map can turn back into a field.
++    mocks.runAction.mockRejectedValue(
++      Object.assign(new Error("Unprocessable Entity"), {
++        name: "HttpError",
++        status: 422,
++        response: {
++          detail: [
++            {
++              loc: ["body", "trigger", "cron", "schedule"],
++              msg: "Interval is too short",
++            },
++          ],
++        },
++      }),
++    );
++    const { user } = renderDialog();
++    await fillForm(user);
++
++    // Act
++    await user.click(screen.getByTestId("setup-continue-button"));
++    await waitFor(() =>
++      expect(screen.getByTestId("setup-review")).toBeInTheDocument(),
++    );
++    await user.click(screen.getByTestId("setup-continue-button"));
++
++    // Assert — back on the form, with the message against `schedule` rather
++    // than against the form as a whole.
++    await waitFor(() =>
++      expect(
++        screen.getByTestId("setup-field-schedule-error"),
++      ).toHaveTextContent("Interval is too short"),
++    );
++    expect(screen.queryByTestId("setup-review")).toBeNull();
++    expect(mocks.navigate).not.toHaveBeenCalled();
++  });
++});
+diff --git a/__tests__/constants/extensions-catalogs.test.ts b/__tests__/constants/extensions-catalogs.test.ts
+index 985a09ed94d7..62994dbba2a6 100644
+--- a/__tests__/constants/extensions-catalogs.test.ts
++++ b/__tests__/constants/extensions-catalogs.test.ts
+@@ -1,6 +1,8 @@
+ import { describe, expect, it } from "vitest";
+ import { AUTOMATION_CATALOG } from "@openhands/extensions/automations";
+ import { INTEGRATION_CATALOG } from "@openhands/extensions/integrations";
++import { SETUP_REGISTRY } from "#/manifests/manifest-sources";
++import { getIntegrationIds } from "#/utils/automation-catalog";
+ import {
+   getDefaultMcpTransport,
+   getInstallableMcpConnectionOption,
+@@ -69,10 +71,23 @@ describe("OpenHands extensions catalogs", () => {
+ 
+     const knownMcpIds = new Set(INTEGRATION_CATALOG.map((entry) => entry.id));
+     for (const automation of AUTOMATION_CATALOG) {
+-      expect(automation.requiredIntegrationIds.length).toBeGreaterThan(0);
+-      expect(
+-        automation.requiredIntegrationIds.every((id) => knownMcpIds.has(id)),
+-      ).toBe(true);
++      const integrationIds = getIntegrationIds(automation);
++      expect(integrationIds.length).toBeGreaterThan(0);
++      expect(integrationIds.every((id) => knownMcpIds.has(id))).toBe(true);
+     }
+   });
++
++  it("admits every setup experience the automation catalog ships", () => {
++    // Arrange — the pinned package is the whole source of setup manifests, and
++    // a shipped one that fails admission is dropped silently.
++    const shipped = AUTOMATION_CATALOG.filter(
++      (automation) => !!automation.setup,
++    );
++    expect(shipped.length).toBeGreaterThan(0);
++
++    // Act / Assert
++    expect(SETUP_REGISTRY.entries.map((entry) => entry.id)).toEqual(
++      shipped.map((automation) => automation.id),
++    );
++  });
+ });
+diff --git a/__tests__/hooks/query/use-manifest-prerequisites.test.tsx b/__tests__/hooks/query/use-manifest-prerequisites.test.tsx
+new file mode 100644
+index 000000000000..ef7f296d45f4
+--- /dev/null
++++ b/__tests__/hooks/query/use-manifest-prerequisites.test.tsx
+@@ -0,0 +1,104 @@
++import React from "react";
++import { describe, expect, it, vi, beforeEach } from "vitest";
++import { renderHook, waitFor } from "@testing-library/react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { useSetupPrerequisites } from "#/hooks/query/use-manifest-prerequisites";
++import SettingsService from "#/api/settings-service/settings-service.api";
++import { createSetupEntry } from "../../manifests/manifest-test-data";
++import type { SetupEntry } from "#/manifests/types";
++
++vi.mock("#/api/settings-service/settings-service.api", () => ({
++  default: { getSettings: vi.fn() },
++}));
++
++vi.mock("#/contexts/active-backend-context", () => ({
++  useActiveBackend: () => ({
++    backend: { id: "test-backend", kind: "local" },
++    orgId: null,
++  }),
++}));
++
++/** The endpoint the packaged GitHub integration is installed against. */
++const GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/";
++
++function createWrapper() {
++  const queryClient = new QueryClient({
++    defaultOptions: { queries: { retry: false } },
++  });
++  return ({ children }: { children: React.ReactNode }) => (
++    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
++  );
++}
++
++function withIntegrations(
++  integrations: SetupEntry["requires"]["integrations"],
++): SetupEntry {
++  return createSetupEntry({ requires: { integrations } });
++}
++
++function renderPrerequisites(entry: SetupEntry) {
++  return renderHook(() => useSetupPrerequisites(entry), {
++    wrapper: createWrapper(),
++  });
++}
++
++describe("useSetupPrerequisites", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    // Nothing connected, unless a test says otherwise.
++    vi.mocked(SettingsService.getSettings).mockResolvedValue({} as never);
++  });
++
++  it("blocks setup while a required integration is not connected", async () => {
++    // Arrange
++    const entry = withIntegrations({
++      github: { message: "Reads pull requests." },
++    });
++
++    // Act
++    const { result } = renderPrerequisites(entry);
++
++    // Assert
++    await waitFor(() => expect(result.current.isLoading).toBe(false));
++    expect(result.current.isBlocked).toBe(true);
++  });
++
++  it("lets setup continue when an unconnected integration is only advisory", async () => {
++    // Arrange
++    const entry = withIntegrations({
++      notion: { message: "Publishes the result.", required: false },
++    });
++
++    // Act
++    const { result } = renderPrerequisites(entry);
++
++    // Assert
++    await waitFor(() => expect(result.current.isLoading).toBe(false));
++    expect({
++      isBlocked: result.current.isBlocked,
++      warned: result.current.warningIntegrations.map(({ id }) => id),
++    }).toEqual({ isBlocked: false, warned: ["notion"] });
++  });
++
++  it("has nothing to block on once the integration is connected", async () => {
++    // Arrange
++    vi.mocked(SettingsService.getSettings).mockResolvedValue({
++      agent_settings: {
++        mcp_config: { mcpServers: { github: { url: GITHUB_MCP_URL } } },
++      },
++    } as never);
++    const entry = withIntegrations({
++      github: { message: "Reads pull requests." },
++    });
++
++    // Act
++    const { result } = renderPrerequisites(entry);
++
++    // Assert
++    await waitFor(() => expect(result.current.isLoading).toBe(false));
++    expect({
++      isBlocked: result.current.isBlocked,
++      blocking: result.current.blockingIntegrations,
++    }).toEqual({ isBlocked: false, blocking: [] });
++  });
++});
+diff --git a/__tests__/hooks/use-manifest-preflight.test.tsx b/__tests__/hooks/use-manifest-preflight.test.tsx
+new file mode 100644
+index 000000000000..3d27255e278d
+--- /dev/null
++++ b/__tests__/hooks/use-manifest-preflight.test.tsx
+@@ -0,0 +1,77 @@
++import { renderHook } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import AutomationService from "#/api/automation-service/automation-service.api";
++import { useSetupPreflight } from "#/hooks/use-manifest-preflight";
++import { createSetupEntry } from "../manifests/manifest-test-data";
++
++vi.mock("#/api/automation-service/automation-service.api", () => ({
++  default: { validateDraft: vi.fn() },
++}));
++
++/** A local call's failure, which arrives as an `AxiosError`. */
++function axiosFailure(status: number) {
++  return Object.assign(new Error(`Request failed with status ${status}`), {
++    isAxiosError: true,
++    response: { status },
++  });
++}
++
++/** A cloud call's failure, which arrives as the shared client's `HttpError`. */
++function httpFailure(status: number) {
++  return Object.assign(new Error(`Request failed with status ${status}`), {
++    name: "HttpError",
++    status,
++  });
++}
++
++const ENTRY = createSetupEntry();
++const VALUES = { repository: "OpenHands/agent-server-gui", widgetName: "W" };
++
++function runPreflightAgainst(error: unknown) {
++  vi.mocked(AutomationService.validateDraft).mockRejectedValue(error);
++  const { result } = renderHook(() => useSetupPreflight(ENTRY));
++  return result.current(VALUES);
++}
++
++let warn: ReturnType<typeof vi.spyOn>;
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  warn = vi.spyOn(console, "warn").mockImplementation(() => {});
++});
++
++afterEach(() => {
++  warn.mockRestore();
++});
++
++describe("useSetupPreflight", () => {
++  it.each([
++    ["a local deployment without the route", axiosFailure(404)],
++    ["a cloud deployment that has not implemented it", httpFailure(501)],
++  ])("has no verdict and nothing to report for %s", async (_case, error) => {
++    // Act
++    const result = await runPreflightAgainst(error);
++
++    // Assert — preflight is advisory, and an absent endpoint is an expected
++    // state rather than something worth reporting.
++    expect(result).toBeNull();
++    expect(warn).not.toHaveBeenCalled();
++  });
++
++  it.each([
++    ["a validator that is failing", httpFailure(500)],
++    ["a rejected session", axiosFailure(401)],
++    ["a request that never got a response", new Error("Network Error")],
++  ])("reports %s while still letting setup continue", async (_case, error) => {
++    // Act
++    const result = await runPreflightAgainst(error);
++
++    // Assert — the user is not blocked, but the failure is not invisible
++    // either; without this it reads exactly like an unimplemented endpoint.
++    expect(result).toBeNull();
++    expect(warn).toHaveBeenCalledWith(
++      "Automation setup preflight failed:",
++      error,
++    );
++  });
++});
+diff --git a/__tests__/manifests/automation-setup.test.ts b/__tests__/manifests/automation-setup.test.ts
+new file mode 100644
+index 000000000000..74501f9780e7
+--- /dev/null
++++ b/__tests__/manifests/automation-setup.test.ts
+@@ -0,0 +1,364 @@
++import { describe, expect, it, vi } from "vitest";
++import {
++  buildAssistedMessage,
++  buildCreatePayload,
++  buildPreflightBody,
++  deriveErrorMap,
++} from "#/manifests/automation-setup";
++import { validateSetupEntry } from "#/manifests/manifest-validation";
++import type { SetupEntry } from "#/manifests/types";
++
++// The command a skill publishes in its own frontmatter, which the host looks up
++// rather than storing. Pinned here so the assertion does not move when the
++// packaged catalog does.
++vi.mock("@openhands/extensions/skills", () => ({
++  SKILLS_CATALOG: [
++    {
++      name: "incident-retrospective",
++      description: "Draft an incident retrospective.",
++      triggers: ["/incident-retro:setup"],
++      content: "",
++    },
++  ],
++}));
++
++/**
++ * The setup blocks published in `OpenHands/extensions`, and the request bodies
++ * its contract fixtures say they must produce. Those bodies were verified
++ * against the live service, and the create model forbids extra keys, so any
++ * divergence here is a 422 in production rather than a cosmetic difference.
++ */
++const PR_REVIEWER: SetupEntry = {
++  id: "github-pr-reviewer",
++  name: "GitHub Code Review Agent",
++  description: "Watch for a configurable label on GitHub pull requests.",
++  requires: {
++    integrations: {
++      github: { message: "Used to read pull requests and post comments." },
++    },
++    features: ["repoClone", "presetPrompt"],
++  },
++  setup: {
++    version: "1.0",
++    mode: "direct",
++    form: {
++      triggers: {
++        cron: {
++          schedule: {
++            type: "cron",
++            label: "Check frequency",
++            help: "How often to look for newly labelled pull requests.",
++            default: "*/15 * * * *",
++            required: true,
++          },
++          timezone: {
++            type: "timezone",
++            label: "Timezone",
++            help: "Timezone the schedule is interpreted in.",
++            default: "UTC",
++            required: true,
++          },
++        },
++      },
++      args: {
++        repository: {
++          type: "repo-picker",
++          label: "Repository",
++          help: "The repository whose pull requests will be reviewed.",
++          provider: "github",
++          required: true,
++        },
++        triggerLabel: {
++          type: "text",
++          label: "Trigger label",
++          help: "Only pull requests carrying this label are reviewed.",
++          default: "openhands-review",
++          required: true,
++          constraints: { minLength: 1, maxLength: 50 },
++        },
++        reviewTone: {
++          type: "select",
++          label: "Review tone",
++          help: "How detailed the review comments should be.",
++          default: "concise",
++          required: true,
++          options: [
++            { value: "concise", label: "Concise" },
++            { value: "thorough", label: "Thorough" },
++          ],
++        },
++      },
++    },
++    prompt:
++      "Review pull requests labeled '{{form.triggerLabel}}' in {{form.repository}}. Review tone: {{form.reviewTone}}.",
++  },
++};
++
++const REPO_MONITOR: SetupEntry = {
++  id: "github-repo-monitor",
++  name: "GitHub repository monitor",
++  description: "Watch a repository for @OpenHands mentions.",
++  requires: {
++    integrations: {
++      github: { message: "Used to read comments and post replies." },
++    },
++    features: ["repoClone", "presetPrompt", "webhookDelivery"],
++  },
++  setup: {
++    version: "1.0",
++    mode: "direct",
++    form: {
++      triggers: {
++        event: {
++          on: {
++            type: "select",
++            label: "Respond to",
++            help: "Which GitHub comment event starts a conversation.",
++            default: "issue_comment.created",
++            required: true,
++            options: [
++              {
++                value: "issue_comment.created",
++                label: "Comments on issues and pull requests",
++              },
++              {
++                value: "pull_request_review_comment.created",
++                label: "Pull request review comments only",
++              },
++            ],
++          },
++          triggerPhrase: {
++            type: "text",
++            label: "Trigger phrase",
++            help: "Only comments containing this phrase start a conversation.",
++            default: "@openhands",
++            required: true,
++            constraints: {
++              minLength: 2,
++              maxLength: 50,
++              format: "safeExpressionLiteral",
++            },
++          },
++        },
++      },
++      args: {
++        repository: {
++          type: "repo-picker",
++          label: "Repository",
++          help: "The repository or repositories to watch for mentions.",
++          provider: "github",
++          required: true,
++        },
++        ref: {
++          type: "text",
++          label: "Base branch",
++          help: "Branch checked out when the agent responds.",
++          default: "main",
++          required: true,
++          constraints: { minLength: 1, maxLength: 255 },
++        },
++      },
++    },
++    prompt:
++      "A comment in {{form.repository}} mentions '{{form.triggerPhrase}}'. Read the surrounding issue or pull request context from the event payload, then post a helpful reply as a comment on the same thread.",
++    filter:
++      "icontains(comment.body, '{{form.triggerPhrase}}') && glob(repository.full_name, '{{form.repository}}')",
++  },
++};
++
++const RETRO_DRAFTER: SetupEntry = {
++  id: "incident-retrospective-drafter",
++  name: "Incident retrospective drafter",
++  description: "Collect incident chatter and draft a timeline.",
++  requires: {
++    integrations: {
++      slack: { message: "Reads incident discussion and timestamps." },
++      linear: { message: "Reads follow-up tickets, owners, and status." },
++      notion: {
++        message: "Publishes the drafted retrospective.",
++        required: false,
++      },
++    },
++    features: ["mcpTools", "conversationDispatch"],
++  },
++  skill: "incident-retrospective",
++  setup: {
++    version: "1.0",
++    mode: "assisted",
++    form: {
++      note: "These answers start the conversation.",
++      args: {
++        incidentChannel: {
++          type: "text",
++          label: "Incident channel",
++          help: "The Slack channel where incidents are discussed.",
++          required: false,
++          constraints: { maxLength: 100 },
++        },
++        linearTeam: {
++          type: "text",
++          label: "Linear team",
++          help: "The team whose follow-up tickets belong in the retrospective.",
++          required: false,
++          constraints: { maxLength: 100 },
++        },
++        notionDestination: {
++          type: "text",
++          label: "Notion destination",
++          help: "Page or database where drafts should be published.",
++          required: false,
++          constraints: { maxLength: 200 },
++        },
++        triggerPreference: {
++          type: "select",
++          label: "How should it run?",
++          help: "A starting preference only.",
++          default: "undecided",
++          required: false,
++          options: [
++            { value: "undecided", label: "Let the agent recommend one" },
++            { value: "scheduled", label: "On a schedule" },
++          ],
++        },
++        notes: {
++          type: "textarea",
++          label: "Anything else the agent should know?",
++          help: "Incident naming conventions, who should be notified.",
++          required: false,
++          constraints: { maxLength: 2000 },
++        },
++      },
++    },
++    message:
++      "The user supplied these starting points. Confirm each one, ask about anything left blank, then create the automation.\n\n- Incident channel: {{form.incidentChannel}}\n- Linear team: {{form.linearTeam}}\n- Notion destination: {{form.notionDestination}}\n- Preferred trigger: {{form.triggerPreference}}\n- Notes: {{form.notes}}\n\nStill undecided and required before creation: the incident identifier format and the approved Notion retrospective template.",
++  },
++};
++
++const PR_REVIEWER_VALUES = {
++  repository: "OpenHands/agent-server-gui",
++  triggerLabel: "openhands-review",
++  reviewTone: "thorough",
++  schedule: "*/15 * * * *",
++  timezone: "UTC",
++};
++
++const PR_REVIEWER_DRAFT = {
++  name: "GitHub Code Review Agent - OpenHands/agent-server-gui",
++  prompt:
++    "Review pull requests labeled 'openhands-review' in OpenHands/agent-server-gui. Review tone: thorough.",
++  repos: [{ url: "OpenHands/agent-server-gui", provider: "github" }],
++  trigger: { type: "cron", schedule: "*/15 * * * *", timezone: "UTC" },
++};
++
++describe("buildCreatePayload", () => {
++  it("derives the scheduled request body the contract fixture pins", () => {
++    // Act
++    const payload = buildCreatePayload(PR_REVIEWER, PR_REVIEWER_VALUES);
++
++    // Assert
++    expect(payload).toEqual(PR_REVIEWER_DRAFT);
++  });
++
++  it("derives an event trigger's source and filter, which no manifest states", () => {
++    // Act
++    const payload = buildCreatePayload(REPO_MONITOR, {
++      repository: "OpenHands/agent-server-gui",
++      triggerPhrase: "@openhands",
++      on: "issue_comment.created",
++      ref: "main",
++    });
++
++    // Assert
++    expect(payload).toEqual({
++      name: "GitHub repository monitor - OpenHands/agent-server-gui",
++      prompt:
++        "A comment in OpenHands/agent-server-gui mentions '@openhands'. Read the surrounding issue or pull request context from the event payload, then post a helpful reply as a comment on the same thread.",
++      repos: [
++        {
++          url: "OpenHands/agent-server-gui",
++          ref: "main",
++          provider: "github",
++        },
++      ],
++      trigger: {
++        type: "event",
++        source: "github",
++        on: "issue_comment.created",
++        filter:
++          "icontains(comment.body, '@openhands') && glob(repository.full_name, 'OpenHands/agent-server-gui')",
++      },
++    });
++  });
++
++  it("sends no request body for an entry that hands setup to a conversation", () => {
++    // Act
++    const payload = buildCreatePayload(RETRO_DRAFTER, {});
++
++    // Assert
++    expect(payload).toBeNull();
++  });
++});
++
++describe("buildPreflightBody", () => {
++  it("wraps the draft in the envelope the validate endpoint expects", () => {
++    // Act
++    const body = buildPreflightBody(PR_REVIEWER, PR_REVIEWER_VALUES);
++
++    // Assert
++    expect(body).toEqual({
++      automationId: "github-pr-reviewer",
++      endpoint: "/v1/preset/prompt",
++      draft: PR_REVIEWER_DRAFT,
++    });
++  });
++});
++
++describe("deriveErrorMap", () => {
++  it("recovers which fields built each payload path", () => {
++    // Act
++    const errorMap = deriveErrorMap(PR_REVIEWER);
++
++    // Assert
++    expect(errorMap).toEqual({
++      name: ["repository"],
++      prompt: ["triggerLabel", "repository", "reviewTone"],
++      "repos[0].url": ["repository"],
++      "trigger.schedule": ["schedule"],
++      "trigger.timezone": ["timezone"],
++    });
++  });
++});
++
++describe("buildAssistedMessage", () => {
++  it("opens with the owning skill's command and the interpolated answers", () => {
++    // Act
++    const message = buildAssistedMessage(RETRO_DRAFTER, {
++      incidentChannel: "#incidents",
++      linearTeam: "Reliability",
++      notionDestination: "",
++      triggerPreference: "undecided",
++      notes: "",
++    });
++
++    // Assert
++    expect(message).toBe(
++      "/incident-retro:setup\n\nThe user supplied these starting points. Confirm each one, ask about anything left blank, then create the automation.\n\n- Incident channel: #incidents\n- Linear team: Reliability\n- Notion destination: \n- Preferred trigger: undecided\n- Notes: \n\nStill undecided and required before creation: the incident identifier format and the approved Notion retrospective template.",
++    );
++  });
++});
++
++describe("the published manifests", () => {
++  // The host enforces invariants its own derivation depends on, which the
++  // published schema does not. Every shipped entry has to satisfy them too.
++  it.each([
++    ["github-pr-reviewer", PR_REVIEWER],
++    ["github-repo-monitor", REPO_MONITOR],
++    ["incident-retrospective-drafter", RETRO_DRAFTER],
++  ])("admits %s", (_id, entry) => {
++    // Act
++    const result = validateSetupEntry(entry);
++
++    // Assert
++    expect(result).toEqual({ valid: true, errors: [] });
++  });
++});
+diff --git a/__tests__/manifests/manifest-capabilities.test.ts b/__tests__/manifests/manifest-capabilities.test.ts
+new file mode 100644
+index 000000000000..261f6aba37fc
+--- /dev/null
++++ b/__tests__/manifests/manifest-capabilities.test.ts
+@@ -0,0 +1,79 @@
++import { describe, expect, it } from "vitest";
++import { assessCapabilityRequirements } from "#/manifests/manifest-capabilities";
++import type { DeploymentCapabilities } from "#/manifests/types";
++import { createSetup, createSetupEntry } from "./manifest-test-data";
++
++const READY_DEPLOYMENT: DeploymentCapabilities = {
++  ready: true,
++  triggerKinds: ["cron"],
++  eventSources: [],
++  eventTypes: [],
++  triggers: { cron: { minIntervalSeconds: 60, timezones: ["UTC"] } },
++  features: ["repoClone", "presetPrompt"],
++};
++
++describe("assessCapabilityRequirements", () => {
++  it("supports a manifest whose every requirement the deployment reports", () => {
++    // Arrange
++    const entry = createSetupEntry({
++      requires: {
++        integrations: { github: { message: "Used to read widgets." } },
++        features: ["repoClone"],
++      },
++    });
++
++    // Act
++    const assessment = assessCapabilityRequirements(entry, READY_DEPLOYMENT);
++
++    // Assert
++    expect(assessment).toEqual({ supported: true, unmet: [] });
++  });
++
++  it("names every requirement the deployment left unreported", () => {
++    // Arrange — the `cronOnly` deployment shape: reachable and ready, but no
++    // webhooks can be delivered to it, so it offers neither the feature nor
++    // the trigger kind an event-driven entry needs.
++    const entry = createSetupEntry({
++      requires: {
++        integrations: { github: { message: "Used to read widgets." } },
++        features: ["repoClone", "webhookDelivery"],
++      },
++      setup: createSetup({
++        form: {
++          triggers: {
++            event: {
++              on: {
++                type: "select",
++                label: "Respond to",
++                help: "Which event.",
++                required: true,
++                options: [{ value: "push", label: "Push" }],
++              },
++            },
++          },
++          args: {},
++        },
++      }),
++    });
++
++    // Act
++    const assessment = assessCapabilityRequirements(entry, READY_DEPLOYMENT);
++
++    // Assert — both names, so the block can say what is missing.
++    expect(assessment).toEqual({
++      supported: false,
++      unmet: ["webhookDelivery", "event"],
++    });
++  });
++
++  it("does not support any manifest while the deployment reports it is not ready", () => {
++    // Act
++    const assessment = assessCapabilityRequirements(createSetupEntry(), {
++      ...READY_DEPLOYMENT,
++      ready: false,
++    });
++
++    // Assert — no single requirement is the reason, so none is named.
++    expect(assessment).toEqual({ supported: false, unmet: [] });
++  });
++});
+diff --git a/__tests__/manifests/manifest-error-map.test.ts b/__tests__/manifests/manifest-error-map.test.ts
+new file mode 100644
+index 000000000000..64f9295cdd58
+--- /dev/null
++++ b/__tests__/manifests/manifest-error-map.test.ts
+@@ -0,0 +1,121 @@
++import { describe, expect, it } from "vitest";
++import {
++  mapServiceErrors,
++  normalizeServiceErrors,
++} from "#/manifests/manifest-error-map";
++
++/** The body the host derived, as the service received it. */
++const PAYLOAD = {
++  name: "PR Reviewer - OpenHands/agent-server-gui",
++  prompt: "Review pull requests labeled 'openhands-review'.",
++  repos: [{ url: "OpenHands/agent-server-gui", ref: "main" }],
++  trigger: { type: "cron", schedule: "0 0 31 2 *", timezone: "UTC" },
++};
++
++/** As `deriveErrorMap` produces it: every path maps to the fields that built it. */
++const ERROR_MAP = {
++  "repos[0].ref": ["ref"],
++  "trigger.schedule": ["schedule"],
++  prompt: ["triggerLabel", "reviewTone"],
++};
++
++describe("normalizeServiceErrors", () => {
++  it("reads field-addressed errors out of a preflight result", () => {
++    // Act
++    const errors = normalizeServiceErrors(
++      {
++        valid: false,
++        errors: [
++          {
++            field: "trigger.schedule",
++            message: "Minimum interval for this deployment is 5 minutes.",
++          },
++        ],
++      },
++      PAYLOAD,
++    );
++
++    // Assert
++    expect(errors).toEqual([
++      {
++        path: "trigger.schedule",
++        message: "Minimum interval for this deployment is 5 minutes.",
++      },
++    ]);
++  });
++
++  it("resolves a rejection addressed through a discriminated union", () => {
++    // The service names the branch it validated against — `trigger.cron` —
++    // but the body it received has no `cron` key. Walking the payload and
++    // skipping segments that do not resolve reduces the address to one the
++    // manifest can map, without the host knowing what a trigger is.
++
++    // Act
++    const errors = normalizeServiceErrors(
++      {
++        detail: [
++          {
++            loc: ["body", "trigger", "cron", "schedule"],
++            msg: "Cron expression cannot produce any future fire times.",
++          },
++        ],
++      },
++      PAYLOAD,
++    );
++
++    // Assert
++    expect(errors[0].path).toBe("trigger.schedule");
++  });
++
++  it("addresses an element of a list by its index", () => {
++    // Act
++    const errors = normalizeServiceErrors(
++      { detail: [{ loc: ["body", "repos", 0, "ref"], msg: "Unknown ref." }] },
++      PAYLOAD,
++    );
++
++    // Assert
++    expect(errors[0].path).toBe("repos[0].ref");
++  });
++});
++
++describe("mapServiceErrors", () => {
++  it("highlights the field that produced the rejected value", () => {
++    // Act
++    const { fieldErrors } = mapServiceErrors(
++      [{ path: "trigger.schedule", message: "Too frequent." }],
++      ERROR_MAP,
++    );
++
++    // Assert
++    expect(fieldErrors).toEqual({ schedule: "Too frequent." });
++  });
++
++  it("highlights every field that contributed to a combined value", () => {
++    // Act
++    const { fieldErrors } = mapServiceErrors(
++      [{ path: "prompt", message: "Prompt is too long." }],
++      ERROR_MAP,
++    );
++
++    // Assert
++    expect(fieldErrors).toEqual({
++      triggerLabel: "Prompt is too long.",
++      reviewTone: "Prompt is too long.",
++    });
++  });
++
++  it("surfaces an unmappable rejection against the form rather than losing it", () => {
++    // Act
++    const { fieldErrors, formErrors } = mapServiceErrors(
++      [{ path: "tarball_path", message: "Upload failed." }],
++      ERROR_MAP,
++    );
++
++    // Assert
++    expect({ fieldErrors, formErrors }).toEqual({
++      fieldErrors: {},
++      formErrors: ["Upload failed."],
++    });
++  });
++});
+diff --git a/__tests__/manifests/manifest-local-validation.test.ts b/__tests__/manifests/manifest-local-validation.test.ts
+new file mode 100644
+index 000000000000..1aa1583a4ee4
+--- /dev/null
++++ b/__tests__/manifests/manifest-local-validation.test.ts
+@@ -0,0 +1,143 @@
++import { describe, expect, it } from "vitest";
++import {
++  getFieldOptions,
++  getInitialFormValues,
++  resolveFieldOverrides,
++  validateFormValues,
++} from "#/manifests/manifest-local-validation";
++import type { DeploymentCapabilities } from "#/manifests/types";
++import { createSetup } from "./manifest-test-data";
++
++const SETUP = createSetup({
++  form: {
++    args: {
++      widgetName: {
++        type: "text",
++        label: "Widget name",
++        help: "What to call it.",
++        required: true,
++        constraints: { maxLength: 10 },
++      },
++      matchPhrase: {
++        type: "text",
++        label: "Match phrase",
++        help: "Becomes part of a filter expression.",
++        required: false,
++        constraints: { format: "safeExpressionLiteral" },
++      },
++      size: {
++        type: "select",
++        label: "Size",
++        help: "How big.",
++        default: "small",
++        required: false,
++        options: [{ value: "small", label: "Small" }],
++      },
++      timezone: {
++        type: "timezone",
++        label: "Timezone",
++        help: "Which zone the schedule is read in.",
++        required: false,
++      },
++    },
++  },
++});
++
++describe("validateFormValues", () => {
++  it("reports a required field the user left blank", () => {
++    // Act
++    const errors = validateFormValues(SETUP, { widgetName: "   " });
++
++    // Assert
++    expect(errors.widgetName).toEqual({ code: "required" });
++  });
++
++  it("reports a value longer than the manifest allows", () => {
++    // Act
++    const errors = validateFormValues(SETUP, {
++      widgetName: "a-very-long-widget-name",
++    });
++
++    // Assert
++    expect(errors.widgetName).toEqual({ code: "maxLength", length: 10 });
++  });
++
++  it("rejects characters that would break out of an expression literal", () => {
++    // Act
++    const errors = validateFormValues(SETUP, {
++      widgetName: "ok",
++      matchPhrase: 'he said "hi"',
++    });
++
++    // Assert
++    expect(errors.matchPhrase).toEqual({ code: "unsafeExpressionLiteral" });
++  });
++
++  it("rejects a choice that is not on offer", () => {
++    // Act
++    const errors = validateFormValues(SETUP, {
++      widgetName: "ok",
++      size: "enormous",
++    });
++
++    // Assert
++    expect(errors.size).toEqual({ code: "invalidOption" });
++  });
++
++  it("passes a form that satisfies every declared constraint", () => {
++    // Act
++    const errors = validateFormValues(SETUP, {
++      widgetName: "ok",
++      matchPhrase: "ship it",
++      size: "small",
++    });
++
++    // Assert
++    expect(errors).toEqual({});
++  });
++});
++
++describe("deployment-supplied constraints", () => {
++  it("offers the timezones the deployment reports, which no manifest declares", () => {
++    // Arrange — the accepted zones belong to the deployment, not the manifest.
++    const capabilities = {
++      triggers: { cron: { minIntervalSeconds: 60, timezones: ["UTC", "CET"] } },
++    } as DeploymentCapabilities;
++
++    // Act
++    const overrides = resolveFieldOverrides(SETUP, capabilities);
++
++    // Assert
++    expect(
++      getFieldOptions("timezone", SETUP.form.args.timezone, overrides),
++    ).toEqual([
++      { value: "UTC", label: "UTC" },
++      { value: "CET", label: "CET" },
++    ]);
++  });
++
++  it("keeps the manifest's own options when the deployment cannot be asked", () => {
++    // Act
++    const overrides = resolveFieldOverrides(SETUP, null);
++
++    // Assert
++    expect(getFieldOptions("size", SETUP.form.args.size, overrides)).toEqual(
++      SETUP.form.args.size.options,
++    );
++  });
++});
++
++describe("getInitialFormValues", () => {
++  it("seeds every declared field with its declared default", () => {
++    // Act
++    const values = getInitialFormValues(SETUP);
++
++    // Assert
++    expect(values).toEqual({
++      widgetName: "",
++      matchPhrase: "",
++      size: "small",
++      timezone: "",
++    });
++  });
++});
+diff --git a/__tests__/manifests/manifest-registry.test.ts b/__tests__/manifests/manifest-registry.test.ts
+new file mode 100644
+index 000000000000..a202345a3a40
+--- /dev/null
++++ b/__tests__/manifests/manifest-registry.test.ts
+@@ -0,0 +1,77 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { createSetupRegistry } from "#/manifests/manifest-registry";
++import {
++  createSetup,
++  createSetupEntry,
++  createSetupEntryWith,
++} from "./manifest-test-data";
++
++describe("createSetupRegistry", () => {
++  beforeEach(() => {
++    // Rejections are reported for the manifest author, not the user.
++    vi.spyOn(console, "warn").mockImplementation(() => {});
++  });
++
++  afterEach(() => {
++    vi.restoreAllMocks();
++  });
++
++  it("resolves an admitted manifest by its id", () => {
++    // Arrange
++    const entry = createSetupEntry();
++    const registry = createSetupRegistry([entry]);
++
++    // Act
++    const resolved = registry.findById("widget-monitor");
++
++    // Assert
++    expect(resolved).toBe(entry);
++  });
++
++  it("claims no id the catalog did not offer", () => {
++    // Arrange
++    const registry = createSetupRegistry([createSetupEntry()]);
++
++    // Act
++    const resolved = registry.findById("something-else");
++
++    // Assert
++    expect(resolved).toBeNull();
++  });
++
++  it("passes over a catalog entry that ships no setup experience", () => {
++    // Arrange — a card-only entry is the normal case, not a rejection.
++    const cardOnly = { id: "card-only", name: "Card only" };
++
++    // Act
++    const registry = createSetupRegistry([cardOnly, createSetupEntry()]);
++
++    // Assert
++    expect(registry.entries).toHaveLength(1);
++  });
++
++  it("drops a manifest that fails admission instead of rendering part of it", () => {
++    // Arrange
++    const rejected = createSetupEntryWith({
++      setup: createSetup({ version: "2.0" as "1.0" }),
++    });
++
++    // Act
++    const registry = createSetupRegistry([rejected, createSetupEntry()]);
++
++    // Assert
++    expect(registry.entries).toHaveLength(1);
++  });
++
++  it("keeps the first claim on an id so a later manifest cannot hijack it", () => {
++    // Arrange
++    const first = createSetupEntry({ name: "First" });
++    const second = createSetupEntry({ name: "Second" });
++
++    // Act
++    const registry = createSetupRegistry([first, second]);
++
++    // Assert
++    expect(registry.findById("widget-monitor")).toBe(first);
++  });
++});
+diff --git a/__tests__/manifests/manifest-test-data.ts b/__tests__/manifests/manifest-test-data.ts
+new file mode 100644
+index 000000000000..552cd38b882d
+--- /dev/null
++++ b/__tests__/manifests/manifest-test-data.ts
+@@ -0,0 +1,67 @@
++import type { SetupBlock, SetupEntry } from "#/manifests/types";
++
++/**
++ * A minimal catalog entry the host will admit.
++ *
++ * Tests override only the part they exercise. The three published entries live
++ * in `automation-setup.test.ts`, where the derived request bodies are pinned
++ * against the contract fixtures.
++ */
++export function createSetupEntry(
++  overrides: Partial<SetupEntry> = {},
++): SetupEntry {
++  return {
++    id: "widget-monitor",
++    name: "Widget monitor",
++    description: "Watch widgets and report on them.",
++    requires: {
++      integrations: { github: { message: "Used to read widgets." } },
++    },
++    setup: createSetup(),
++    ...overrides,
++  };
++}
++
++export function createSetup(overrides: Partial<SetupBlock> = {}): SetupBlock {
++  return {
++    version: "1.0",
++    mode: "direct",
++    form: {
++      triggers: {
++        cron: {
++          schedule: {
++            type: "cron",
++            label: "Check frequency",
++            help: "How often to look.",
++            default: "*/15 * * * *",
++            required: true,
++          },
++        },
++      },
++      args: {
++        repository: {
++          type: "repo-picker",
++          label: "Repository",
++          help: "Which repository to watch.",
++          provider: "github",
++          required: true,
++        },
++        widgetName: {
++          type: "text",
++          label: "Widget name",
++          help: "What to call it.",
++          required: true,
++        },
++      },
++    },
++    prompt: "Report on {{form.widgetName}} in {{form.repository}}.",
++    ...overrides,
++  };
++}
++
++/** Build a candidate that is invalid in one specific way. */
++export function createSetupEntryWith(
++  overrides: Record<string, unknown>,
++): unknown {
++  return { ...createSetupEntry(), ...overrides };
++}
+diff --git a/__tests__/manifests/manifest-validation.test.ts b/__tests__/manifests/manifest-validation.test.ts
+new file mode 100644
+index 000000000000..61ba6b9f5de7
+--- /dev/null
++++ b/__tests__/manifests/manifest-validation.test.ts
+@@ -0,0 +1,160 @@
++import { describe, expect, it } from "vitest";
++import { validateSetupEntry } from "#/manifests/manifest-validation";
++import {
++  createSetup,
++  createSetupEntry,
++  createSetupEntryWith,
++} from "./manifest-test-data";
++
++describe("validateSetupEntry", () => {
++  it("admits a well-formed manifest", () => {
++    // Arrange
++    const entry = createSetupEntry();
++
++    // Act
++    const result = validateSetupEntry(entry);
++
++    // Assert
++    expect(result).toEqual({ valid: true, errors: [] });
++  });
++
++  // Each case is a separate invariant the host enforces on data authored in
++  // another repository. A manifest that trips any of them must not render.
++  it.each([
++    [
++      "a setup version this host cannot interpret",
++      { setup: createSetup({ version: "2.0" as "1.0" }) },
++    ],
++    [
++      "markup inside user-visible copy",
++      { description: "<img src=x onerror=alert(1)>" },
++    ],
++    [
++      "a placeholder namespace the host does not expose",
++      { setup: createSetup({ prompt: "Use {{secrets.githubToken}}." }) },
++    ],
++    [
++      "an assisted message on an entry that sends a request",
++      { setup: createSetup({ message: "Finish setup with the agent." }) },
++    ],
++    [
++      // The host reads one trigger kind to build the request, so a second one
++      // would be silently dropped rather than refused.
++      "more trigger kinds than the host can send",
++      {
++        setup: createSetup({
++          form: {
++            triggers: {
++              cron: {
++                schedule: {
++                  type: "cron",
++                  label: "Frequency",
++                  help: "How often.",
++                  required: true,
++                },
++              },
++              event: {
++                on: {
++                  type: "select",
++                  label: "Respond to",
++                  help: "Which event.",
++                  required: true,
++                  options: [{ value: "push", label: "Push" }],
++                },
++              },
++            },
++            args: {
++              repository: {
++                type: "repo-picker",
++                label: "Repository",
++                help: "Which repository.",
++                provider: "github",
++                required: true,
++              },
++            },
++          },
++        }),
++      },
++    ],
++    [
++      // An event trigger's source is read off the repository field's provider.
++      "an event trigger with no repository field to take its source from",
++      {
++        setup: createSetup({
++          form: {
++            triggers: {
++              event: {
++                on: {
++                  type: "select",
++                  label: "Respond to",
++                  help: "Which event.",
++                  required: true,
++                  options: [{ value: "push", label: "Push" }],
++                },
++              },
++            },
++            args: {
++              widgetName: {
++                type: "text",
++                label: "Widget name",
++                help: "What to call it.",
++                required: true,
++              },
++            },
++          },
++          filter: "icontains(body, '{{form.widgetName}}')",
++        }),
++      },
++    ],
++    [
++      // Both halves merge into one value map, so a repeat would shadow a field
++      // and misaddress every error reported against it.
++      "a field name declared in both halves of the form",
++      {
++        setup: createSetup({
++          form: {
++            triggers: {
++              cron: {
++                repository: {
++                  type: "text",
++                  label: "Repository",
++                  help: "Shadows the argument below.",
++                  required: true,
++                },
++              },
++            },
++            args: {
++              repository: {
++                type: "repo-picker",
++                label: "Repository",
++                help: "Which repository to watch.",
++                provider: "github",
++                required: true,
++              },
++            },
++          },
++        }),
++      },
++    ],
++  ])("refuses %s", (_case, overrides) => {
++    // Arrange
++    const candidate = createSetupEntryWith(overrides);
++
++    // Act
++    const result = validateSetupEntry(candidate);
++
++    // Assert
++    expect(result.valid).toBe(false);
++  });
++
++  it("reports every problem at once so an author sees the whole picture", () => {
++    // Arrange
++    const candidate = createSetupEntryWith({ name: "", description: "" });
++
++    // Act
++    const { errors } = validateSetupEntry(candidate);
++
++    // Assert
++    expect(errors).toHaveLength(2);
++  });
++});
+diff --git a/__tests__/routes/automation-setup-route.test.ts b/__tests__/routes/automation-setup-route.test.ts
+new file mode 100644
+index 000000000000..6b255253a86a
+--- /dev/null
++++ b/__tests__/routes/automation-setup-route.test.ts
+@@ -0,0 +1,20 @@
++import { describe, expect, it } from "vitest";
++import routes from "#/routes";
++
++describe("automation setup route", () => {
++  it("claims the path an automation card links to", () => {
++    // Arrange — a card that ships a setup experience links to
++    // `/automations/new/<id>`, so a route has to serve that shape.
++    const rootLayout = routes.find(
++      (route) => route.file === "routes/root-layout.tsx",
++    );
++
++    // Act
++    const setupRoute = rootLayout?.children?.find(
++      (route) => route.file === "routes/automation-setup-route.tsx",
++    );
++
++    // Assert
++    expect(setupRoute?.path).toBe("automations/new/:automationId");
++  });
++});
+diff --git a/__tests__/utils/automation-catalog.test.ts b/__tests__/utils/automation-catalog.test.ts
+new file mode 100644
+index 000000000000..caad6862df58
+--- /dev/null
++++ b/__tests__/utils/automation-catalog.test.ts
+@@ -0,0 +1,29 @@
++import { describe, expect, it } from "vitest";
++import { AUTOMATION_CATALOG } from "@openhands/extensions/automations";
++import { getAutomationLaunchPrompt } from "#/utils/automation-catalog";
++
++const automationById = (id: string) =>
++  AUTOMATION_CATALOG.find((automation) => automation.id === id)!;
++
++describe("getAutomationLaunchPrompt", () => {
++  it("resolves the command from the skill that implements the automation", () => {
++    // Arrange / Act / Assert — an entry whose skill is its own id, and one
++    // that names a different skill, both resolve to that skill's command.
++    expect(
++      getAutomationLaunchPrompt(automationById("github-pr-reviewer")),
++    ).toBe("/pr-reviewer:setup");
++    expect(
++      getAutomationLaunchPrompt(
++        automationById("incident-retrospective-drafter"),
++      ),
++    ).toBe("/incident-retro:setup");
++  });
++
++  it("spells the request out when the skill declares no command", () => {
++    // Arrange / Act / Assert — `jira-issue-to-pr` is invoked by description,
++    // so there is no trigger to resolve.
++    expect(getAutomationLaunchPrompt(automationById("jira-issue-to-pr"))).toBe(
++      "Set up the Jira issue to GitHub PR automation",
++    );
++  });
++});
+diff --git a/__tests__/utils/responder-deployment.test.ts b/__tests__/utils/responder-deployment.test.ts
+index eea1c128f67c..ea1cb22604e8 100644
+--- a/__tests__/utils/responder-deployment.test.ts
++++ b/__tests__/utils/responder-deployment.test.ts
+@@ -30,6 +30,23 @@ describe("isResponderAutomation", () => {
+       isResponderAutomation(automationById("linear-triage-assistant")),
+     ).toBe(false);
+   });
++
++  it("ignores an integration the automation can start without", () => {
++    // Arrange — a GitHub responder that also publishes to Notion, but is
++    // willing to run before Notion is connected.
++    const automation = {
++      ...automationById("github-pr-reviewer"),
++      requires: {
++        integrations: {
++          github: { message: "Reads pull requests." },
++          notion: { message: "Publishes a summary.", required: false as const },
++        },
++      },
++    };
++
++    // Act / Assert — where it runs is decided by what it needs.
++    expect(isResponderAutomation(automation)).toBe(true);
++  });
+ });
+ 
+ describe("resolveResponderDeploymentOption", () => {
+diff --git a/package-lock.json b/package-lock.json
+index 53a0a882689b..4d1609cd8ea0 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -12,7 +12,7 @@
+         "@heroui/react": "2.8.10",
+         "@microlink/react-json-view": "1.31.20",
+         "@monaco-editor/react": "4.7.0",
+-        "@openhands/extensions": "0.11.0",
++        "@openhands/extensions": "0.12.0",
+         "@openhands/typescript-client": "1.36.1",
+         "@react-router/node": "7.17.0",
+         "@react-router/serve": "7.17.0",
+@@ -4167,9 +4167,9 @@
+       "license": "MIT"
+     },
+     "node_modules/@openhands/extensions": {
+-      "version": "0.11.0",
+-      "resolved": "https://registry.npmjs.org/@openhands/extensions/-/extensions-0.11.0.tgz",
+-      "integrity": "sha512-xAQfAROOh3XnzOKIXiJcYNypEk36kPJhs8+xs8YgzsOCg5Wg4A6CPs2pR5CsLZ0MG+cxZEf5wTWdPn4+/g0w7g==",
++      "version": "0.12.0",
++      "resolved": "https://registry.npmjs.org/@openhands/extensions/-/extensions-0.12.0.tgz",
++      "integrity": "sha512-S7s4hWcvrOfxUT4PMv/Sz5zRNh1tZEF5wQoWo/4TQKJFIgzy9trQJ0xz9UOZFgf4nh0juJEM2jwG9HMo8pmYfA==",
+       "license": "MIT",
+       "engines": {
+         "node": ">=18.20.0"
+diff --git a/package.json b/package.json
+index eb4fea44a8f0..3e1d797f11df 100644
+--- a/package.json
++++ b/package.json
+@@ -23,7 +23,7 @@
+     "@heroui/react": "2.8.10",
+     "@microlink/react-json-view": "1.31.20",
+     "@monaco-editor/react": "4.7.0",
+-    "@openhands/extensions": "0.11.0",
++    "@openhands/extensions": "0.12.0",
+     "@openhands/typescript-client": "1.36.1",
+     "@react-router/node": "7.17.0",
+     "@react-router/serve": "7.17.0",
+diff --git a/scripts/check-translation-completeness.cjs b/scripts/check-translation-completeness.cjs
+index c773d3eac720..0aa5bebf356e 100755
+--- a/scripts/check-translation-completeness.cjs
++++ b/scripts/check-translation-completeness.cjs
+@@ -53,6 +53,7 @@ const IDENTICAL_VALUE_ALLOWLIST = new Set([
+   'SETTINGS$SKILLS_VERSION',
+   'SETTINGS$SLACK',
+   'SETTINGS$TITLE_GENERATION_PROFILE_OPTION',
++  'SETUP$REPOSITORY_PLACEHOLDER',
+   'VSCODE$TITLE',
+   'WORKSPACE$JUPYTER_TAB_LABEL',
+ ]);
+diff --git a/src/api/automation-service/automation-service.api.ts b/src/api/automation-service/automation-service.api.ts
+index c58a7d8d7131..10fc5073a47b 100644
+--- a/src/api/automation-service/automation-service.api.ts
++++ b/src/api/automation-service/automation-service.api.ts
+@@ -14,6 +14,12 @@ import type {
+   AutomationsResponse,
+   AutomationRunsResponse,
+ } from "#/types/automation";
++import { AUTOMATION_CREATE_ENDPOINT } from "#/manifests/automation-setup";
++import type {
++  DeploymentCapabilities,
++  SetupRequestBody,
++  ValidateDraftResponse,
++} from "#/manifests/types";
+ import type { Backend, ResolvedActiveBackend } from "../backend-registry/types";
+ import {
+   getActiveBackend,
+@@ -483,6 +489,86 @@ class AutomationService {
+     URL.revokeObjectURL(url);
+   }
+ 
++  /**
++   * Ask what this deployment supports, before a setup form renders.
++   *
++   * The setup endpoints answer a contract authored in `OpenHands/extensions`,
++   * so their bodies are camelCase where the rest of this service is snake_case.
++   */
++  static async getCapabilities(): Promise<DeploymentCapabilities> {
++    const active = getActiveBackend().backend;
++    const path = `${AUTOMATION_BASE_PATH}/v1/capabilities`;
++
++    if (active.kind === "cloud") {
++      return callCloudProxy<DeploymentCapabilities>({
++        backend: active,
++        method: "GET",
++        path,
++        headers: await buildAutomationRequestHeaders(),
++      });
++    }
++
++    const { data } =
++      await localAutomationAxios.get<DeploymentCapabilities>(path);
++    return data;
++  }
++
++  /**
++   * Validate a draft without creating it. An invalid draft is a 200 carrying
++   * field-addressed errors; only a malformed envelope is a 4xx.
++   */
++  static async validateDraft(
++    body: SetupRequestBody,
++  ): Promise<ValidateDraftResponse> {
++    const active = getActiveBackend().backend;
++    const path = `${AUTOMATION_BASE_PATH}/v1/validate`;
++
++    if (active.kind === "cloud") {
++      return callCloudProxy<ValidateDraftResponse>({
++        backend: active,
++        method: "POST",
++        path,
++        body,
++        headers: await buildAutomationRequestHeaders(),
++      });
++    }
++
++    const { data } = await localAutomationAxios.post<ValidateDraftResponse>(
++      path,
++      body,
++    );
++    return data;
++  }
++
++  /**
++   * Create from a draft a setup form derived. Unlike {@link
++   * AutomationService.createAutomation}, which exists for import and has to
++   * park the record on a placeholder trigger, this sends the finished record in
++   * one request.
++   */
++  static async createAutomationDraft(
++    body: SetupRequestBody,
++  ): Promise<Record<string, unknown>> {
++    const active = getActiveBackend().backend;
++    const path = `${AUTOMATION_BASE_PATH}${AUTOMATION_CREATE_ENDPOINT}`;
++
++    if (active.kind === "cloud") {
++      return callCloudProxy<Record<string, unknown>>({
++        backend: active,
++        method: "POST",
++        path,
++        body,
++        headers: await buildAutomationRequestHeaders(),
++      });
++    }
++
++    const { data } = await localAutomationAxios.post<Record<string, unknown>>(
++      path,
++      body,
++    );
++    return data;
++  }
++
+   static async checkHealth(): Promise<AutomationHealthResponse> {
+     const active = getActiveBackend().backend;
+     const path = `${AUTOMATION_BASE_PATH}/health`;
+diff --git a/src/components/features/automations/recommended-automations-launcher.tsx b/src/components/features/automations/recommended-automations-launcher.tsx
+index 2489e865d707..ccfa48da4a85 100644
+--- a/src/components/features/automations/recommended-automations-launcher.tsx
++++ b/src/components/features/automations/recommended-automations-launcher.tsx
+@@ -23,6 +23,11 @@ import {
+ } from "#/utils/mcp-marketplace-utils";
+ import { InstallServerModal } from "#/components/features/mcp-page/install-server-modal";
+ import { useTracking } from "#/hooks/use-tracking";
++import { SETUP_REGISTRY } from "#/manifests/manifest-sources";
++import {
++  getAutomationLaunchPrompt,
++  getRequiredIntegrationIds,
++} from "#/utils/automation-catalog";
+ import { isResponderAutomation } from "#/utils/responder-deployment";
+ import { RecommendedAutomationsSection } from "./recommended-automations-section";
+ import { ResponderDeploymentModal } from "./responder-deployment-modal";
+@@ -34,23 +39,18 @@ interface RecommendedAutomationsLauncherProps {
+   scrollableGrid?: boolean;
+ }
+ 
++/**
++ * The marketplace entries a launch waits on. An integration the automation is
++ * willing to start without is deliberately absent, so it never queues an
++ * install modal the user has to dismiss.
++ */
+ function getRequiredEntries(automation: RecommendedAutomation) {
+   const mcpMarketplace = getMcpMarketplaceCatalog(MCP_MARKETPLACE);
+-  return automation.requiredIntegrationIds
++  return getRequiredIntegrationIds(automation)
+     .map((id) => getMarketplaceEntryById(id, mcpMarketplace))
+     .filter((entry): entry is MarketplaceEntry => !!entry);
+ }
+ 
+-/**
+- * The catalog prompt (or slash command) is passed through as-is.
+- * API routing (host, auth) is discovered by the agent at runtime from
+- * `<RUNTIME_SERVICES>` in the system prompt — the skills themselves
+- * contain the instructions for reading that block.
+- */
+-export function buildAutomationPrompt(basePrompt: string): string {
+-  return basePrompt;
+-}
+-
+ export function RecommendedAutomationsLauncher({
+   query,
+   onLaunched,
+@@ -94,7 +94,16 @@ export function RecommendedAutomationsLauncher({
+       }
+       launchInFlightRef.current = true;
+ 
+-      const prompt = buildAutomationPrompt(automation.prompt);
++      // An automation that ships a setup experience is configured from its own
++      // form, so the answers are collected before anything is created. The rest
++      // still hand a slash command to an agent to interpret.
++      if (SETUP_REGISTRY.findById(automation.id)) {
++        navigate?.(`/automations/new/${automation.id}`);
++        onLaunched?.();
++        return;
++      }
++
++      const prompt = getAutomationLaunchPrompt(automation);
+ 
+       createConversation.mutate(
+         {},
+diff --git a/src/components/features/automations/recommended-automations-section.tsx b/src/components/features/automations/recommended-automations-section.tsx
+index 1e1ceaa95a4e..b202131a2e3c 100644
+--- a/src/components/features/automations/recommended-automations-section.tsx
++++ b/src/components/features/automations/recommended-automations-section.tsx
+@@ -22,6 +22,10 @@ import {
+   getMarketplaceEntryById,
+   getMcpMarketplaceCatalog,
+ } from "#/utils/mcp-marketplace-utils";
++import {
++  getAutomationLaunchPrompt,
++  getIntegrationIds,
++} from "#/utils/automation-catalog";
+ import { cn } from "#/utils/utils";
+ import {
+   extensionModuleCardInteractiveClassName,
+@@ -70,9 +74,14 @@ function isProvenAutomation(automation: RecommendedAutomation): boolean {
+   return (PROVEN_AUTOMATION_IDS as readonly string[]).includes(automation.id);
+ }
+ 
+-function getRequiredEntries(automation: RecommendedAutomation) {
++/**
++ * Every integration the automation declares, including the ones it is willing
++ * to start without: the card describes what the automation uses, so an
++ * optional integration still belongs on it.
++ */
++function getIntegrationEntries(automation: RecommendedAutomation) {
+   const mcpMarketplace = getMcpMarketplaceCatalog(MCP_MARKETPLACE);
+-  return automation.requiredIntegrationIds
++  return getIntegrationIds(automation)
+     .map((id) => getMarketplaceEntryById(id, mcpMarketplace))
+     .filter((entry): entry is MarketplaceEntry => !!entry);
+ }
+@@ -88,7 +97,7 @@ function automationMatchesQuery(
+     automation.name,
+     automation.category,
+     automation.description,
+-    automation.prompt,
++    getAutomationLaunchPrompt(automation),
+     ...entries.map((entry) => entry.name),
+     ...entries.flatMap((entry) => entry.keywords ?? []),
+   ]
+@@ -98,24 +107,24 @@ function automationMatchesQuery(
+ }
+ 
+ /**
+- * Returns true only when at least one of the automation's required integration
+- * IDs resolves to a known marketplace entry.  An empty result means none of
+- * the required integrations are in our catalog (or the array itself is empty),
++ * Returns true only when at least one of the automation's integration IDs
++ * resolves to a known marketplace entry.  An empty result means none of the
++ * automation's integrations are in our catalog (or it declares none at all),
+  * so there is nothing for the user to set up — hide the card.
+  * NOTE: intentionally no local/cloud backend availability filter; every entry
+  * with a catalog match is shown regardless of runtimeAvailability.
+  */
+ function isAutomationAvailable(automation: RecommendedAutomation) {
+-  return getRequiredEntries(automation).length > 0;
++  return getIntegrationEntries(automation).length > 0;
+ }
+ 
+ function buildRecommendedAutomationPills(
+-  requiredEntries: MarketplaceEntry[],
++  integrationEntries: MarketplaceEntry[],
+   installedServers: MCPServerConfig[],
+   missingCount: number,
+   translate: TFunction,
+ ): SkillCardPill[] {
+-  const pills: SkillCardPill[] = requiredEntries.map((entry) => {
++  const pills: SkillCardPill[] = integrationEntries.map((entry) => {
+     const installed = !!findInstalledEntryMatch(entry, installedServers);
+ 
+     return {
+@@ -166,8 +175,8 @@ function AutomationCardGrid({
+   return (
+     <div className={cn("mt-3", extensionModuleCardGridClassName)}>
+       {automations.map((automation) => {
+-        const requiredEntries = getRequiredEntries(automation);
+-        const missingCount = requiredEntries.filter(
++        const integrationEntries = getIntegrationEntries(automation);
++        const missingCount = integrationEntries.filter(
+           (entry) => !findInstalledEntryMatch(entry, installedServers),
+         ).length;
+ 
+@@ -184,7 +193,7 @@ function AutomationCardGrid({
+           >
+             <div className="flex min-w-0 flex-1 items-start gap-3">
+               <McpLogoStackBadge
+-                entries={requiredEntries}
++                entries={integrationEntries}
+                 testId={`recommended-automation-icon-${automation.id}`}
+               />
+               <div className="flex min-w-0 flex-1 flex-col gap-3">
+@@ -207,7 +216,7 @@ function AutomationCardGrid({
+ 
+                 <SkillCardPillRow
+                   pills={buildRecommendedAutomationPills(
+-                    requiredEntries,
++                    integrationEntries,
+                     installedServers,
+                     missingCount,
+                     translate,
+@@ -233,10 +242,10 @@ export function RecommendedAutomationsSection({
+   const { t } = useTranslation("openhands");
+ 
+   const visibleAutomations = RECOMMENDED_AUTOMATIONS.filter((automation) => {
+-    const requiredEntries = getRequiredEntries(automation);
++    const integrationEntries = getIntegrationEntries(automation);
+     return (
+       isAutomationAvailable(automation) &&
+-      automationMatchesQuery(automation, requiredEntries, query)
++      automationMatchesQuery(automation, integrationEntries, query)
+     );
+   });
+ 
+diff --git a/src/components/features/manifest/manifest-form-field.tsx b/src/components/features/manifest/manifest-form-field.tsx
+new file mode 100644
+index 000000000000..14a37c04762a
+--- /dev/null
++++ b/src/components/features/manifest/manifest-form-field.tsx
+@@ -0,0 +1,205 @@
++import { useTranslation } from "react-i18next";
++import { SettingsInput } from "#/components/features/settings/settings-input";
++import { SettingsDropdownInput } from "#/components/features/settings/settings-dropdown-input";
++import { GitRepoDropdown } from "#/components/features/home/git-repo-dropdown";
++import { useActiveBackend } from "#/contexts/active-backend-context";
++import { I18nKey } from "#/i18n/declaration";
++import { formControlMultilineFieldClassName } from "#/utils/form-control-classes";
++import { cn } from "#/utils/utils";
++import type { GitRepository } from "#/types/git";
++import type {
++  SetupFieldOption,
++  SetupFormField as SetupFormFieldDefinition,
++} from "#/manifests/types";
++
++export interface SetupFormFieldProps {
++  /** The record key the field is declared under, and what `{{form.x}}` reads. */
++  name: string;
++  field: SetupFormFieldDefinition;
++  value: string;
++  /** Already-resolved copy: local checks and service errors look the same here. */
++  error?: string;
++  /** Declared options, or the ones the deployment supplied. */
++  options: SetupFieldOption[];
++  /** The picked repository, kept so the picker can show what is selected. */
++  repository: GitRepository | null;
++  disabled: boolean;
++  onChange: (value: string) => void;
++  onRepositoryChange: (repository: GitRepository | null) => void;
++  onBlur: () => void;
++}
++
++/**
++ * Render one manifest-declared field.
++ *
++ * The host knows how to render a field *type*; what any field means is the
++ * manifest's business. Every field's own copy comes from the manifest and is
++ * never translated by the host; the only host string is the format hint the
++ * repository fallback below needs, because no manifest declares it.
++ */
++export function SetupFormField({
++  name,
++  field,
++  value,
++  error,
++  options,
++  repository,
++  disabled,
++  onChange,
++  onRepositoryChange,
++  onBlur,
++}: SetupFormFieldProps) {
++  const { t } = useTranslation("openhands");
++  const { backend } = useActiveBackend();
++  const testId = `setup-field-${name}`;
++  const help = <p className="text-xs text-[var(--oh-muted)]">{field.help}</p>;
++
++  // Listing a user's repositories is a cloud-backend capability: `GitService`
++  // answers with an empty page on any other backend, so the picker would offer
++  // a source that can never respond. Recommended automations are themselves
++  // local-only, which makes that the common case rather than the edge one.
++  const canListRepositories = backend.kind === "cloud";
++
++  if (field.type === "repo-picker" && canListRepositories) {
++    return (
++      <div className="flex w-full flex-col gap-2.5">
++        <FieldLabel field={field} />
++        <GitRepoDropdown
++          provider={field.provider ?? "github"}
++          value={repository?.id ?? null}
++          repositoryName={repository?.full_name ?? value ?? null}
++          placeholder={field.placeholder}
++          disabled={disabled}
++          onChange={(selected) => {
++            onRepositoryChange(selected ?? null);
++            onChange(selected?.full_name ?? "");
++            onBlur();
++          }}
++        />
++        <FieldError testId={testId} error={error} />
++        {help}
++      </div>
++    );
++  }
++
++  // A timezone field declares no options of its own: the accepted zones are the
++  // deployment's, so it renders as a list once they are known and as a plain
++  // input when they are not.
++  if (
++    field.type === "select" ||
++    (field.type === "timezone" && options.length > 0)
++  ) {
++    return (
++      <div className="flex w-full flex-col gap-2.5">
++        <SettingsDropdownInput
++          testId={testId}
++          name={name}
++          label={<FieldLabelText field={field} />}
++          items={options.map((option) => ({
++            key: option.value,
++            label: option.label,
++          }))}
++          selectedKey={value || undefined}
++          placeholder={field.placeholder}
++          isDisabled={disabled}
++          required={field.required}
++          onSelectionChange={(key) => {
++            onChange(key === null ? "" : String(key));
++            onBlur();
++          }}
++        />
++        <FieldError testId={testId} error={error} />
++        {help}
++      </div>
++    );
++  }
++
++  if (field.type === "textarea") {
++    return (
++      <label className="flex w-full flex-col gap-2.5">
++        <FieldLabelText field={field} />
++        <textarea
++          data-testid={testId}
++          name={name}
++          rows={4}
++          value={value}
++          placeholder={field.placeholder}
++          disabled={disabled}
++          aria-invalid={!!error}
++          onChange={(event) => onChange(event.target.value)}
++          onBlur={onBlur}
++          className={cn(
++            formControlMultilineFieldClassName,
++            error && "border-red-500",
++          )}
++        />
++        <FieldError testId={testId} error={error} />
++        {help}
++      </label>
++    );
++  }
++
++  // `text`, `cron`, an unresolved `timezone` and a repository that cannot be
++  // browsed are all single-line strings to the host; only the manifest and the
++  // service know what a cron expression or a repository name means. A manifest
++  // states the format of everything it declares except the repository, whose
++  // shape the host derives, so that one hint is host copy.
++  const placeholder =
++    field.placeholder ??
++    (field.type === "repo-picker"
++      ? t(I18nKey.SETUP$REPOSITORY_PLACEHOLDER)
++      : undefined);
++
++  return (
++    <div className="flex w-full flex-col gap-2.5">
++      <SettingsInput
++        testId={testId}
++        name={name}
++        type="text"
++        label={field.label}
++        value={value}
++        placeholder={placeholder}
++        isDisabled={disabled}
++        showRequiredTag={field.required}
++        error={error}
++        onChange={onChange}
++        onBlur={onBlur}
++      />
++      {help}
++    </div>
++  );
++}
++
++function FieldLabelText({ field }: { field: SetupFormFieldDefinition }) {
++  return (
++    <span className="flex items-center gap-2 text-sm">
++      {field.label}
++      {field.required && (
++        <span className="text-sm leading-none text-red-400" aria-hidden>
++          *
++        </span>
++      )}
++    </span>
++  );
++}
++
++function FieldLabel({ field }: { field: SetupFormFieldDefinition }) {
++  return (
++    <div className="flex items-center gap-2">
++      <FieldLabelText field={field} />
++    </div>
++  );
++}
++
++function FieldError({ testId, error }: { testId: string; error?: string }) {
++  if (!error) return null;
++  return (
++    <p
++      role="alert"
++      data-testid={`${testId}-error`}
++      className="-mt-1 text-xs text-red-400"
++    >
++      {error}
++    </p>
++  );
++}
+diff --git a/src/components/features/manifest/manifest-prerequisites-step.tsx b/src/components/features/manifest/manifest-prerequisites-step.tsx
+new file mode 100644
+index 000000000000..c6f95bb02028
+--- /dev/null
++++ b/src/components/features/manifest/manifest-prerequisites-step.tsx
+@@ -0,0 +1,43 @@
++import { useTranslation } from "react-i18next";
++import { I18nKey } from "#/i18n/declaration";
++import { NavigationLink } from "#/components/shared/navigation-link";
++import type { SetupPrerequisitesResult } from "#/hooks/query/use-manifest-prerequisites";
++
++/** Where the user goes to connect an integration. */
++const INTEGRATIONS_PATH = "/mcp";
++
++export interface SetupPrerequisitesStepProps {
++  prerequisites: SetupPrerequisitesResult;
++}
++
++/**
++ * Stage 3 — what has to be connected before the form is worth filling in.
++ *
++ * Each integration is listed with the reason the manifest gives for needing it,
++ * so the user is told why rather than just what.
++ */
++export function SetupPrerequisitesStep({
++  prerequisites,
++}: SetupPrerequisitesStepProps) {
++  const { t } = useTranslation("openhands");
++  const { blockingIntegrations, warningIntegrations } = prerequisites;
++
++  return (
++    <div className="flex flex-col gap-4" data-testid="setup-prerequisites">
++      {[...blockingIntegrations, ...warningIntegrations].map(
++        ({ id, requirement, entry }) => (
++          <div key={id} className="flex flex-col gap-1">
++            <span className="text-sm">{entry?.name ?? id}</span>
++            <span className="text-xs text-[var(--oh-muted)]">
++              {requirement.message}
++            </span>
++          </div>
++        ),
++      )}
++
++      <NavigationLink to={INTEGRATIONS_PATH} className="text-sm underline">
++        {t(I18nKey.SETUP$MANAGE_INTEGRATIONS)}
++      </NavigationLink>
++    </div>
++  );
++}
+diff --git a/src/components/features/manifest/manifest-review-step.tsx b/src/components/features/manifest/manifest-review-step.tsx
+new file mode 100644
+index 000000000000..f9b7a1ba546e
+--- /dev/null
++++ b/src/components/features/manifest/manifest-review-step.tsx
+@@ -0,0 +1,36 @@
++import { useTranslation } from "react-i18next";
++import { I18nKey } from "#/i18n/declaration";
++import { collectFields } from "#/manifests/manifest-local-validation";
++import type { SetupBlock, SetupFormValues } from "#/manifests/types";
++
++export interface SetupReviewStepProps {
++  setup: SetupBlock;
++  values: SetupFormValues;
++}
++
++/**
++ * Stage 7 — the plain-language summary the user confirms.
++ *
++ * The last cheap moment to catch a wrong answer, and the last point at which
++ * nothing has been created yet. A manifest declares no summary of its own: one
++ * row per declared field, labelled the way the field was labelled, says the
++ * same thing without asking every entry to restate it.
++ */
++export function SetupReviewStep({ setup, values }: SetupReviewStepProps) {
++  const { t } = useTranslation("openhands");
++
++  return (
++    <div className="flex flex-col gap-4" data-testid="setup-review">
++      <dl className="flex flex-col gap-3">
++        {Object.entries(collectFields(setup)).map(([name, field]) => (
++          <div key={name} className="flex flex-col gap-0.5">
++            <dt className="text-xs text-[var(--oh-muted)]">{field.label}</dt>
++            <dd className="text-sm break-words">
++              {(values[name] ?? "").trim() || t(I18nKey.SETUP$EMPTY_VALUE)}
++            </dd>
++          </div>
++        ))}
++      </dl>
++    </div>
++  );
++}
+diff --git a/src/components/features/manifest/manifest-setup-dialog.tsx b/src/components/features/manifest/manifest-setup-dialog.tsx
+new file mode 100644
+index 000000000000..f300c79cbbff
+--- /dev/null
++++ b/src/components/features/manifest/manifest-setup-dialog.tsx
+@@ -0,0 +1,397 @@
++import { useEffect, useMemo, useRef, useState } from "react";
++import { useTranslation } from "react-i18next";
++import { useNavigate } from "react-router";
++import { ModalBackdrop } from "#/components/shared/modals/modal-backdrop";
++import { ModalCloseButton } from "#/components/shared/modals/modal-close-button";
++import { BrandButton } from "#/components/features/settings/brand-button";
++import { LoadingSpinner } from "#/components/shared/loading-spinner";
++import { I18nKey } from "#/i18n/declaration";
++import { cn } from "#/utils/utils";
++import { modalTitleLgClassName } from "#/utils/modal-classes";
++import { getApiErrorBody } from "#/utils/api-error-message";
++import { useTracking } from "#/hooks/use-tracking";
++import { useSetupCapabilities } from "#/hooks/query/use-manifest-capabilities";
++import { useSetupPrerequisites } from "#/hooks/query/use-manifest-prerequisites";
++import { useSetupPreflight } from "#/hooks/use-manifest-preflight";
++import { useSetupAction } from "#/manifests/manifest-actions";
++import {
++  buildCreatePayload,
++  deriveErrorMap,
++} from "#/manifests/automation-setup";
++import {
++  collectFields,
++  getFieldOptions,
++  getInitialFormValues,
++  resolveFieldOverrides,
++  validateFormValues,
++  type SetupFieldError,
++  type SetupFieldErrors,
++} from "#/manifests/manifest-local-validation";
++import {
++  mapServiceErrors,
++  normalizeServiceErrors,
++  type MappedManifestErrors,
++} from "#/manifests/manifest-error-map";
++import type { GitRepository } from "#/types/git";
++import type { SetupEntry, SetupFormValues } from "#/manifests/types";
++import { SetupFormField } from "./manifest-form-field";
++import { SetupPrerequisitesStep } from "./manifest-prerequisites-step";
++import { SetupReviewStep } from "./manifest-review-step";
++
++type SetupStep = "prerequisites" | "form" | "review";
++
++/** How long a field rests after a blur before the draft is sent for checking. */
++const PREFLIGHT_DEBOUNCE_MS = 400;
++
++const NO_SERVICE_ERRORS: MappedManifestErrors = {
++  fieldErrors: {},
++  formErrors: [],
++};
++
++function hasAnyError(errors: MappedManifestErrors): boolean {
++  return (
++    errors.formErrors.length > 0 || Object.keys(errors.fieldErrors).length > 0
++  );
++}
++
++/** Where a completed setup lands: the new automation, or the conversation. */
++function getDestination(response: Record<string, unknown>): string | null {
++  if (typeof response.conversation_id === "string") {
++    return `/conversations/${response.conversation_id}`;
++  }
++  if (typeof response.id === "string") return `/automations/${response.id}`;
++  return null;
++}
++
++export interface SetupDialogProps {
++  entry: SetupEntry;
++  onClose: () => void;
++}
++
++/**
++ * The setup host: capabilities check, prerequisites, form, review, and the
++ * action the manifest's mode selects, rendered as a dialog.
++ *
++ * The host runs the stages and owns everything the same for every entry; the
++ * manifest supplies only what varies. Any string the user reads here is either
++ * manifest-authored or host chrome.
++ */
++export function SetupDialog({ entry, onClose }: SetupDialogProps) {
++  const { t } = useTranslation("openhands");
++  const navigate = useNavigate();
++
++  const capabilities = useSetupCapabilities(entry);
++  const prerequisites = useSetupPrerequisites(entry);
++  const runPreflight = useSetupPreflight(entry);
++  const runAction = useSetupAction();
++  const {
++    trackAutomationSetupOpened,
++    trackAutomationSetupValidated,
++    trackAutomationSetupCreated,
++    trackAutomationSetupFailed,
++  } = useTracking();
++
++  const [step, setStep] = useState<SetupStep>("prerequisites");
++  const [values, setValues] = useState<SetupFormValues>(() =>
++    getInitialFormValues(entry.setup),
++  );
++  const [repositories, setRepositories] = useState<
++    Record<string, GitRepository | null>
++  >({});
++  const [localErrors, setLocalErrors] = useState<SetupFieldErrors>({});
++  const [serviceErrors, setServiceErrors] =
++    useState<MappedManifestErrors>(NO_SERVICE_ERRORS);
++  const [isSubmitting, setIsSubmitting] = useState(false);
++
++  // Blur-triggered preflight reads the values as they are when the field is
++  // left, which can be the same tick as the change that caused it.
++  const valuesRef = useRef(values);
++  const blurTimerRef = useRef<number | null>(null);
++  useEffect(
++    () => () => {
++      if (blurTimerRef.current) window.clearTimeout(blurTimerRef.current);
++    },
++    [],
++  );
++
++  const fields = useMemo(() => collectFields(entry.setup), [entry]);
++  const overrides = useMemo(
++    () => resolveFieldOverrides(entry.setup, capabilities.capabilities),
++    [entry, capabilities.capabilities],
++  );
++  const payload = useMemo(
++    () => buildCreatePayload(entry, values),
++    [entry, values],
++  );
++  const errorMap = useMemo(() => deriveErrorMap(entry), [entry]);
++
++  const emittedOpenRef = useRef(false);
++  useEffect(() => {
++    if (emittedOpenRef.current) return;
++    emittedOpenRef.current = true;
++    trackAutomationSetupOpened({ automationId: entry.id });
++  }, [entry.id, trackAutomationSetupOpened]);
++
++  const isUnsupported = capabilities.supported === false;
++  const showPrerequisites =
++    prerequisites.blockingIntegrations.length > 0 ||
++    prerequisites.warningIntegrations.length > 0;
++  // Prerequisites resolve asynchronously; deriving the step keeps an entry with
++  // nothing to check from flashing an empty first screen.
++  const currentStep: SetupStep =
++    step === "prerequisites" && !showPrerequisites ? "form" : step;
++
++  const setFieldValue = (name: string, value: string) => {
++    valuesRef.current = { ...valuesRef.current, [name]: value };
++    setValues(valuesRef.current);
++    setLocalErrors(({ [name]: _removed, ...rest }) => rest);
++    setServiceErrors((current) => {
++      if (!(name in current.fieldErrors)) return current;
++      const { [name]: _cleared, ...fieldErrors } = current.fieldErrors;
++      return { ...current, fieldErrors };
++    });
++  };
++
++  const handleFieldBlur = () => {
++    if (blurTimerRef.current) window.clearTimeout(blurTimerRef.current);
++    blurTimerRef.current = window.setTimeout(() => {
++      void runPreflight(valuesRef.current).then((result) => {
++        if (result) setServiceErrors(result);
++      });
++    }, PREFLIGHT_DEBOUNCE_MS);
++  };
++
++  const handleContinue = async () => {
++    if (currentStep === "prerequisites") {
++      setStep("form");
++      return;
++    }
++
++    const failures = validateFormValues(entry.setup, values, overrides);
++    if (Object.keys(failures).length > 0) {
++      setLocalErrors(failures);
++      return;
++    }
++    setLocalErrors({});
++
++    const result = await runPreflight(values);
++    if (result && hasAnyError(result)) {
++      setServiceErrors(result);
++      return;
++    }
++
++    setServiceErrors(NO_SERVICE_ERRORS);
++    trackAutomationSetupValidated({ automationId: entry.id });
++    setStep("review");
++  };
++
++  const handleConfirm = async () => {
++    setIsSubmitting(true);
++    try {
++      const { response } = await runAction(entry, values, payload);
++      trackAutomationSetupCreated({
++        automationId: entry.id,
++        setupMode: entry.setup.mode,
++      });
++      const destination = getDestination(response);
++      if (destination) navigate(destination, { replace: true });
++      else onClose();
++    } catch (error) {
++      trackAutomationSetupFailed({
++        automationId: entry.id,
++        setupMode: entry.setup.mode,
++      });
++      const mapped = mapServiceErrors(
++        normalizeServiceErrors(getApiErrorBody(error), payload),
++        errorMap,
++      );
++      setServiceErrors(
++        hasAnyError(mapped)
++          ? mapped
++          : {
++              fieldErrors: {},
++              formErrors: [t(I18nKey.SETUP$SUBMIT_FAILED)],
++            },
++      );
++      setStep("form");
++    } finally {
++      setIsSubmitting(false);
++    }
++  };
++
++  const resolveFieldError = (name: string): string | undefined => {
++    const local = localErrors[name];
++    return local ? formatFieldError(local, t) : serviceErrors.fieldErrors[name];
++  };
++
++  const isLoading = capabilities.isLoading || prerequisites.isLoading;
++
++  const title = (() => {
++    if (isUnsupported) return t(I18nKey.SETUP$UNAVAILABLE_TITLE);
++    if (currentStep === "prerequisites")
++      return t(I18nKey.SETUP$PREREQUISITES_TITLE);
++    if (currentStep === "review") return t(I18nKey.SETUP$REVIEW_TITLE);
++    return entry.name;
++  })();
++
++  return (
++    <ModalBackdrop onClose={onClose} aria-label={entry.name}>
++      <div
++        data-testid="setup-dialog"
++        className="relative flex max-h-[85vh] w-[92vw] max-w-lg flex-col rounded-xl border border-[var(--oh-border)] bg-base-secondary"
++      >
++        <ModalCloseButton
++          onClose={onClose}
++          testId="setup-dialog-close"
++          disabled={isSubmitting}
++        />
++        <header className="flex-shrink-0 px-6 pb-4 pt-6">
++          <h2 className={cn("pr-6", modalTitleLgClassName)}>{title}</h2>
++        </header>
++
++        <div className="min-h-0 flex-1 overflow-y-auto px-6">
++          {isLoading && (
++            <div className="flex justify-center py-6">
++              <LoadingSpinner size="small" />
++            </div>
++          )}
++
++          {!isLoading && isUnsupported && (
++            <div className="flex flex-col gap-2">
++              <p className="text-sm text-[var(--oh-muted)]">
++                {t(I18nKey.SETUP$UNSUPPORTED_MESSAGE)}
++              </p>
++              {/* The unmet requirements are the names both sides of the
++                  contract already use, so they are printed rather than
++                  translated. Without them the block is undiagnosable: the
++                  deployment answered, and the host would be discarding the
++                  one thing it learned. */}
++              {capabilities.unmet.length > 0 && (
++                <p
++                  data-testid="setup-unmet-requirements"
++                  className="text-sm text-[var(--oh-muted)]"
++                >
++                  {capabilities.unmet.join(", ")}
++                </p>
++              )}
++            </div>
++          )}
++
++          {!isLoading && !isUnsupported && currentStep === "prerequisites" && (
++            <SetupPrerequisitesStep prerequisites={prerequisites} />
++          )}
++
++          {!isLoading && !isUnsupported && currentStep === "form" && (
++            <div className="flex flex-col gap-5">
++              <p className="text-sm text-[var(--oh-muted)]">
++                {entry.description}
++              </p>
++              {entry.setup.form.note && (
++                <p className="text-sm text-[var(--oh-muted)]">
++                  {entry.setup.form.note}
++                </p>
++              )}
++              {Object.entries(fields).map(([name, field]) => (
++                <SetupFormField
++                  key={name}
++                  name={name}
++                  field={field}
++                  value={values[name] ?? ""}
++                  error={resolveFieldError(name)}
++                  options={getFieldOptions(name, field, overrides)}
++                  repository={repositories[name] ?? null}
++                  disabled={isSubmitting}
++                  onChange={(value) => setFieldValue(name, value)}
++                  onRepositoryChange={(repository) =>
++                    setRepositories((current) => ({
++                      ...current,
++                      [name]: repository,
++                    }))
++                  }
++                  onBlur={handleFieldBlur}
++                />
++              ))}
++            </div>
++          )}
++
++          {!isLoading && !isUnsupported && currentStep === "review" && (
++            <SetupReviewStep setup={entry.setup} values={values} />
++          )}
++
++          {serviceErrors.formErrors.map((message) => (
++            <p
++              key={message}
++              role="alert"
++              data-testid="setup-form-error"
++              className="pt-4 text-sm text-red-400"
++            >
++              {message}
++            </p>
++          ))}
++        </div>
++
++        <footer className="flex flex-shrink-0 justify-end gap-2 px-6 pb-6 pt-4">
++          {currentStep === "review" && (
++            <BrandButton
++              testId="setup-back-button"
++              type="button"
++              variant="secondary"
++              isDisabled={isSubmitting}
++              onClick={() => setStep("form")}
++            >
++              {t(I18nKey.BUTTON$BACK)}
++            </BrandButton>
++          )}
++
++          {isUnsupported ? (
++            <BrandButton type="button" variant="secondary" onClick={onClose}>
++              {t(I18nKey.BUTTON$CLOSE)}
++            </BrandButton>
++          ) : (
++            <BrandButton
++              testId="setup-continue-button"
++              type="button"
++              variant="primary"
++              isDisabled={
++                isLoading ||
++                isSubmitting ||
++                (currentStep === "prerequisites" && prerequisites.isBlocked)
++              }
++              onClick={
++                currentStep === "review" ? handleConfirm : handleContinue
++              }
++            >
++              {currentStep === "review"
++                ? t(I18nKey.SETUP$CONFIRM)
++                : t(I18nKey.BUTTON$CONTINUE)}
++            </BrandButton>
++          )}
++        </footer>
++      </div>
++    </ModalBackdrop>
++  );
++}
++
++function formatFieldError(
++  error: SetupFieldError,
++  t: (key: I18nKey, options?: Record<string, unknown>) => string,
++): string {
++  switch (error.code) {
++    case "required":
++      return t(I18nKey.SETUP$VALIDATION_REQUIRED);
++    case "minLength":
++      return t(I18nKey.SETUP$VALIDATION_MIN_LENGTH, { length: error.length });
++    case "maxLength":
++      return t(I18nKey.SETUP$VALIDATION_MAX_LENGTH, { length: error.length });
++    case "invalidOption":
++      return t(I18nKey.SETUP$VALIDATION_INVALID_OPTION);
++    case "unsafeExpressionLiteral":
++      return t(I18nKey.SETUP$VALIDATION_UNSAFE_VALUE);
++    default: {
++      // A code added to `SetupFieldError` without a message here is a compile
++      // error rather than a field that silently reads "this field is required".
++      const exhaustive: never = error;
++      return exhaustive;
++    }
++  }
++}
+diff --git a/src/components/features/onboarding/onboarding-modal.tsx b/src/components/features/onboarding/onboarding-modal.tsx
+index 76e303b525dd..545e1dd58311 100644
+--- a/src/components/features/onboarding/onboarding-modal.tsx
++++ b/src/components/features/onboarding/onboarding-modal.tsx
+@@ -266,9 +266,10 @@ export function OnboardingModal({
+     selectedAgentId,
+   ]);
+ 
+-  // Onboarding Completed — `onLaunched` runs only after a conversation is
+-  // successfully created (the hello message or a recommended automation), so
+-  // wrapping it captures completion exactly once before the modal closes.
++  // Onboarding Completed — `onLaunched` runs only once the user has committed
++  // to a launch: a created conversation for the hello message or a recommended
++  // automation, or the setup form for an automation that ships one. Wrapping it
++  // captures completion exactly once before the modal closes.
+   const handleCompleted = () => {
+     trackOnboardingCompleted({ agent: selectedAgentId });
+     onClose();
+diff --git a/src/hooks/query/query-keys.ts b/src/hooks/query/query-keys.ts
+index 3a1637526533..69e8bdb1757c 100644
+--- a/src/hooks/query/query-keys.ts
++++ b/src/hooks/query/query-keys.ts
+@@ -50,6 +50,11 @@ export const PLUGINS_QUERY_KEYS = {
+   local: ["plugins-local"] as const,
+ } as const;
+ 
++export const SETUP_QUERY_KEYS = {
++  /** What the deployment supports. The same answer for every setup entry. */
++  capabilities: () => ["setup-capabilities"] as const,
++} as const;
++
+ export const APP_UPDATE_QUERY_KEYS = {
+   /** Latest published @openhands/agent-canvas version (npm `latest` dist-tag). */
+   latestVersion: ["agent-canvas-latest-version"] as const,
+diff --git a/src/hooks/query/use-manifest-capabilities.ts b/src/hooks/query/use-manifest-capabilities.ts
+new file mode 100644
+index 000000000000..225cee65938c
+--- /dev/null
++++ b/src/hooks/query/use-manifest-capabilities.ts
+@@ -0,0 +1,71 @@
++import { useQuery } from "@tanstack/react-query";
++import AutomationService from "#/api/automation-service/automation-service.api";
++import { useActiveBackend } from "#/contexts/active-backend-context";
++import {
++  assessCapabilityRequirements,
++  type SetupCapabilitySupport,
++} from "#/manifests/manifest-capabilities";
++import type { DeploymentCapabilities, SetupEntry } from "#/manifests/types";
++import { SETUP_QUERY_KEYS } from "./query-keys";
++
++export interface SetupCapabilitiesResult {
++  /** The discovery response, or null when there is nothing to report. */
++  capabilities: DeploymentCapabilities | null;
++  supported: SetupCapabilitySupport;
++  /** Which requirements a `false` verdict came from; empty otherwise. */
++  unmet: string[];
++  isLoading: boolean;
++}
++
++/**
++ * Ask the deployment what it supports, then compare that against what the
++ * manifest requires.
++ *
++ * A deployment that does not answer resolves to "unknown" rather than
++ * unsupported. Discovery is not implemented on every deployment yet, and
++ * refusing to render on a failed probe would block every manifest on the ones
++ * that simply cannot be asked. Nothing is resolved into the form in that case
++ * either, so the manifest's own defaults stand.
++ */
++export function useSetupCapabilities(
++  entry: SetupEntry,
++): SetupCapabilitiesResult {
++  const { backend, orgId } = useActiveBackend();
++
++  const query = useQuery({
++    queryKey: [...SETUP_QUERY_KEYS.capabilities(), backend.id, orgId],
++    queryFn: () => AutomationService.getCapabilities(),
++    retry: false,
++    staleTime: 1000 * 60 * 5,
++    // A deployment without discovery is an expected state, not a user-facing
++    // failure.
++    meta: { disableToast: true },
++  });
++
++  if (query.isLoading) {
++    return {
++      capabilities: null,
++      supported: "unknown",
++      unmet: [],
++      isLoading: true,
++    };
++  }
++
++  if (!query.data) {
++    return {
++      capabilities: null,
++      supported: "unknown",
++      unmet: [],
++      isLoading: false,
++    };
++  }
++
++  const assessment = assessCapabilityRequirements(entry, query.data);
++
++  return {
++    capabilities: query.data,
++    supported: assessment.supported,
++    unmet: assessment.unmet,
++    isLoading: false,
++  };
++}
+diff --git a/src/hooks/query/use-manifest-prerequisites.ts b/src/hooks/query/use-manifest-prerequisites.ts
+new file mode 100644
+index 000000000000..adbe5df1d49f
+--- /dev/null
++++ b/src/hooks/query/use-manifest-prerequisites.ts
+@@ -0,0 +1,82 @@
++import { useMemo } from "react";
++import {
++  INTEGRATION_CATALOG as MCP_MARKETPLACE,
++  type IntegrationCatalogEntry as MarketplaceEntry,
++} from "@openhands/extensions/integrations";
++import {
++  findInstalledEntryMatch,
++  getMarketplaceEntryById,
++  getMcpMarketplaceCatalog,
++} from "#/utils/mcp-marketplace-utils";
++import { flattenMcpConfig } from "#/utils/mcp-installed-servers";
++import { parseMcpConfig } from "#/utils/mcp-config";
++import type {
++  SetupEntry,
++  SetupIntegrationRequirement,
++} from "#/manifests/types";
++import { useSettings } from "./use-settings";
++
++export interface MissingSetupIntegration {
++  id: string;
++  requirement: SetupIntegrationRequirement;
++  /** The catalog entry, when the id resolves to one. */
++  entry: MarketplaceEntry | null;
++}
++
++export interface SetupPrerequisitesResult {
++  /** Unconnected integrations the manifest declares as required. */
++  blockingIntegrations: MissingSetupIntegration[];
++  /** Unconnected integrations the manifest is willing to proceed without. */
++  warningIntegrations: MissingSetupIntegration[];
++  isBlocked: boolean;
++  isLoading: boolean;
++}
++
++/**
++ * Stage 3 — which of the accounts this manifest needs are already connected.
++ *
++ * A requirement is blocking unless it opts out with `required: false`, which is
++ * the manifest's way of saying the integration can be connected later, during
++ * setup itself.
++ */
++export function useSetupPrerequisites(
++  entry: SetupEntry,
++): SetupPrerequisitesResult {
++  const integrations = entry.requires.integrations;
++  const { data: settings, isLoading } = useSettings();
++
++  const installedServers = useMemo(
++    () =>
++      flattenMcpConfig(parseMcpConfig(settings?.agent_settings?.mcp_config)),
++    [settings?.agent_settings?.mcp_config],
++  );
++
++  const missingIntegrations = useMemo<MissingSetupIntegration[]>(() => {
++    const catalog = getMcpMarketplaceCatalog(MCP_MARKETPLACE);
++    return Object.entries(integrations)
++      .map(([id, requirement]) => ({
++        id,
++        requirement,
++        entry: getMarketplaceEntryById(id, catalog) ?? null,
++      }))
++      .filter(
++        ({ entry: catalogEntry }) =>
++          !catalogEntry ||
++          !findInstalledEntryMatch(catalogEntry, installedServers),
++      );
++  }, [integrations, installedServers]);
++
++  const blockingIntegrations = missingIntegrations.filter(
++    ({ requirement }) => requirement.required !== false,
++  );
++  const warningIntegrations = missingIntegrations.filter(
++    ({ requirement }) => requirement.required === false,
++  );
++
++  return {
++    blockingIntegrations,
++    warningIntegrations,
++    isBlocked: blockingIntegrations.length > 0,
++    isLoading,
++  };
++}
+diff --git a/src/hooks/use-manifest-preflight.ts b/src/hooks/use-manifest-preflight.ts
+new file mode 100644
+index 000000000000..17afabf9f07d
+--- /dev/null
++++ b/src/hooks/use-manifest-preflight.ts
+@@ -0,0 +1,88 @@
++import { useCallback, useMemo, useRef } from "react";
++import axios from "axios";
++import AutomationService from "#/api/automation-service/automation-service.api";
++import { isSdkHttpStatusError } from "#/api/agent-server-compatibility";
++import {
++  mapServiceErrors,
++  normalizeServiceErrors,
++  type MappedManifestErrors,
++} from "#/manifests/manifest-error-map";
++import {
++  buildPreflightBody,
++  deriveErrorMap,
++} from "#/manifests/automation-setup";
++import type {
++  SetupEntry,
++  SetupFormValues,
++  SetupRequestBody,
++} from "#/manifests/types";
++
++const NO_ERRORS: MappedManifestErrors = { fieldErrors: {}, formErrors: [] };
++
++/** What a deployment that does not serve the validate endpoint answers with. */
++const NOT_IMPLEMENTED_STATUSES = [404, 501];
++
++/**
++ * Whether a failed preflight means "this deployment does not implement it".
++ * Local calls throw an `AxiosError` and cloud calls throw the shared client's
++ * `HttpError`, so both shapes are read.
++ */
++function isPreflightUnimplemented(error: unknown): boolean {
++  return NOT_IMPLEMENTED_STATUSES.some(
++    (status) =>
++      isSdkHttpStatusError(error, status) ||
++      (axios.isAxiosError(error) && error.response?.status === status),
++  );
++}
++
++/**
++ * Stage 6 — ask the service whether a draft is valid before anything is created.
++ *
++ * The service is the authoritative validator, so what it receives is the derived
++ * payload rather than the raw form values: what is checked is exactly what would
++ * be sent. Errors come back addressed by payload path and are translated back to
++ * fields through the map derived from that same builder.
++ *
++ * Resolves to null when there is no verdict — the entry has no draft to check,
++ * the deployment does not implement preflight, a newer run has already
++ * superseded this one, or the request failed. A missing preflight is not a
++ * failure: local checks and the create response still stand between the user
++ * and a bad configuration. Only a deployment without the endpoint is an
++ * expected failure though, so any other one is reported.
++ */
++export function useSetupPreflight(entry: SetupEntry) {
++  const latestRequestRef = useRef(0);
++  const errorMap = useMemo(() => deriveErrorMap(entry), [entry]);
++
++  return useCallback(
++    async (
++      formValues: SetupFormValues,
++    ): Promise<MappedManifestErrors | null> => {
++      const body = buildPreflightBody(entry, formValues);
++      if (!body) return null;
++
++      latestRequestRef.current += 1;
++      const requestId = latestRequestRef.current;
++
++      try {
++        const result = await AutomationService.validateDraft(body);
++        if (requestId !== latestRequestRef.current) return null;
++        if (result?.valid) return NO_ERRORS;
++
++        return mapServiceErrors(
++          normalizeServiceErrors(result, body.draft as SetupRequestBody),
++          errorMap,
++        );
++      } catch (error) {
++        // A broken validator and an unimplemented one degrade to the same
++        // advisory "no verdict", so the only thing that separates them is this
++        // line. Without it a service returning 500 on every draft is invisible.
++        if (!isPreflightUnimplemented(error)) {
++          console.warn("Automation setup preflight failed:", error);
++        }
++        return null;
++      }
++    },
++    [entry, errorMap],
++  );
++}
+diff --git a/src/hooks/use-tracking.ts b/src/hooks/use-tracking.ts
+index a5fdf4fb8638..6d6b30d2e0eb 100644
+--- a/src/hooks/use-tracking.ts
++++ b/src/hooks/use-tracking.ts
+@@ -131,6 +131,54 @@ export const useTracking = () => {
+     });
+   };
+ 
++  /**
++   * The setup funnel: opened → validated → created, or failed.
++   *
++   * A manifest declares no analytics of its own, so the stages are the same for
++   * every entry and only the id it carries varies.
++   */
++  const trackAutomationSetupOpened = ({
++    automationId,
++  }: {
++    automationId: string;
++  }) => {
++    track("automation_setup_opened", { automation_id: automationId });
++  };
++
++  const trackAutomationSetupValidated = ({
++    automationId,
++  }: {
++    automationId: string;
++  }) => {
++    track("automation_setup_validated", { automation_id: automationId });
++  };
++
++  const trackAutomationSetupCreated = ({
++    automationId,
++    setupMode,
++  }: {
++    automationId: string;
++    setupMode: string;
++  }) => {
++    track("automation_setup_created", {
++      automation_id: automationId,
++      setup_mode: setupMode,
++    });
++  };
++
++  const trackAutomationSetupFailed = ({
++    automationId,
++    setupMode,
++  }: {
++    automationId: string;
++    setupMode: string;
++  }) => {
++    track("automation_setup_failed", {
++      automation_id: automationId,
++      setup_mode: setupMode,
++    });
++  };
++
+   const trackInitialQuerySubmitted = ({
+     entryPoint,
+     queryCharacterLength,
+@@ -342,6 +390,10 @@ export const useTracking = () => {
+     trackCreatePrButtonClick,
+     trackUserSignupCompleted,
+     trackPrebuiltAutomationEnabled,
++    trackAutomationSetupOpened,
++    trackAutomationSetupValidated,
++    trackAutomationSetupCreated,
++    trackAutomationSetupFailed,
+     trackInitialQuerySubmitted,
+     trackUserMessageSent,
+     trackDownloadVsCodeButtonClicked,
+diff --git a/src/i18n/translation.json b/src/i18n/translation.json
+index f27e27ec22eb..d81aec7a69df 100644
+--- a/src/i18n/translation.json
++++ b/src/i18n/translation.json
+@@ -35358,5 +35358,260 @@
+     "de": "Versionshinweise anzeigen",
+     "uk": "Переглянути примітки до випуску",
+     "ca": "Mostra les notes de la versió"
++  },
++  "BUTTON$CONTINUE": {
++    "en": "Continue",
++    "ja": "続ける",
++    "zh-CN": "继续",
++    "zh-TW": "繼續",
++    "ko-KR": "계속",
++    "no": "Fortsett",
++    "it": "Continua",
++    "pt": "Continuar",
++    "es": "Continuar",
++    "ar": "متابعة",
++    "fr": "Continuer",
++    "tr": "Devam et",
++    "de": "Weiter",
++    "uk": "Продовжити",
++    "ca": "Continua"
++  },
++  "SETUP$PREREQUISITES_TITLE": {
++    "en": "Before you start",
++    "ja": "開始する前に",
++    "zh-CN": "开始之前",
++    "zh-TW": "開始之前",
++    "ko-KR": "시작하기 전에",
++    "no": "Før du starter",
++    "it": "Prima di iniziare",
++    "pt": "Antes de começar",
++    "es": "Antes de empezar",
++    "ar": "قبل البدء",
++    "fr": "Avant de commencer",
++    "tr": "Başlamadan önce",
++    "de": "Bevor Sie beginnen",
++    "uk": "Перш ніж почати",
++    "ca": "Abans de començar"
++  },
++  "SETUP$MANAGE_INTEGRATIONS": {
++    "en": "Manage integrations",
++    "ja": "連携を管理",
++    "zh-CN": "管理集成",
++    "zh-TW": "管理整合",
++    "ko-KR": "연동 관리",
++    "no": "Administrer integrasjoner",
++    "it": "Gestisci integrazioni",
++    "pt": "Gerir integrações",
++    "es": "Gestionar integraciones",
++    "ar": "إدارة عمليات التكامل",
++    "fr": "Gérer les intégrations",
++    "tr": "Entegrasyonları yönet",
++    "de": "Integrationen verwalten",
++    "uk": "Керувати інтеграціями",
++    "ca": "Gestiona les integracions"
++  },
++  "SETUP$UNAVAILABLE_TITLE": {
++    "en": "Not available",
++    "ja": "利用できません",
++    "zh-CN": "不可用",
++    "zh-TW": "無法使用",
++    "ko-KR": "사용할 수 없음",
++    "no": "Ikke tilgjengelig",
++    "it": "Non disponibile",
++    "pt": "Indisponível",
++    "es": "No disponible",
++    "ar": "غير متاح",
++    "fr": "Non disponible",
++    "tr": "Kullanılamıyor",
++    "de": "Nicht verfügbar",
++    "uk": "Недоступно",
++    "ca": "No disponible"
++  },
++  "SETUP$SUBMIT_FAILED": {
++    "en": "Something went wrong. Nothing was created.",
++    "ja": "エラーが発生しました。何も作成されていません。",
++    "zh-CN": "出现问题。未创建任何内容。",
++    "zh-TW": "發生問題。未建立任何項目。",
++    "ko-KR": "문제가 발생했습니다. 아무것도 생성되지 않았습니다.",
++    "no": "Noe gikk galt. Ingenting ble opprettet.",
++    "it": "Si è verificato un problema. Non è stato creato nulla.",
++    "pt": "Algo correu mal. Nada foi criado.",
++    "es": "Algo ha fallado. No se ha creado nada.",
++    "ar": "حدث خطأ ما. لم يتم إنشاء أي شيء.",
++    "fr": "Une erreur s'est produite. Rien n'a été créé.",
++    "tr": "Bir sorun oluştu. Hiçbir şey oluşturulmadı.",
++    "de": "Etwas ist schiefgelaufen. Es wurde nichts erstellt.",
++    "uk": "Щось пішло не так. Нічого не створено.",
++    "ca": "Alguna cosa ha anat malament. No s'ha creat res."
++  },
++  "SETUP$VALIDATION_REQUIRED": {
++    "en": "This field is required.",
++    "ja": "このフィールドは必須です。",
++    "zh-CN": "此字段为必填项。",
++    "zh-TW": "此欄位為必填。",
++    "ko-KR": "필수 항목입니다.",
++    "no": "Dette feltet er påkrevd.",
++    "it": "Questo campo è obbligatorio.",
++    "pt": "Este campo é obrigatório.",
++    "es": "Este campo es obligatorio.",
++    "ar": "هذا الحقل مطلوب.",
++    "fr": "Ce champ est obligatoire.",
++    "tr": "Bu alan zorunludur.",
++    "de": "Dieses Feld ist erforderlich.",
++    "uk": "Це поле обов'язкове.",
++    "ca": "Aquest camp és obligatori."
++  },
++  "SETUP$VALIDATION_MIN_LENGTH": {
++    "en": "Must be at least {{length}} characters.",
++    "ja": "{{length}} 文字以上で入力してください。",
++    "zh-CN": "至少需要 {{length}} 个字符。",
++    "zh-TW": "至少需要 {{length}} 個字元。",
++    "ko-KR": "{{length}}자 이상이어야 합니다.",
++    "no": "Må være minst {{length}} tegn.",
++    "it": "Deve contenere almeno {{length}} caratteri.",
++    "pt": "Deve ter pelo menos {{length}} caracteres.",
++    "es": "Debe tener al menos {{length}} caracteres.",
++    "ar": "يجب ألا يقل عن {{length}} حرفًا.",
++    "fr": "Doit comporter au moins {{length}} caractères.",
++    "tr": "En az {{length}} karakter olmalıdır.",
++    "de": "Muss mindestens {{length}} Zeichen lang sein.",
++    "uk": "Має містити щонайменше {{length}} символів.",
++    "ca": "Ha de tenir com a mínim {{length}} caràcters."
++  },
++  "SETUP$VALIDATION_MAX_LENGTH": {
++    "en": "Must be at most {{length}} characters.",
++    "ja": "{{length}} 文字以内で入力してください。",
++    "zh-CN": "最多 {{length}} 个字符。",
++    "zh-TW": "最多 {{length}} 個字元。",
++    "ko-KR": "{{length}}자 이하여야 합니다.",
++    "no": "Kan være maks {{length}} tegn.",
++    "it": "Deve contenere al massimo {{length}} caratteri.",
++    "pt": "Deve ter no máximo {{length}} caracteres.",
++    "es": "Debe tener como máximo {{length}} caracteres.",
++    "ar": "يجب ألا يزيد عن {{length}} حرفًا.",
++    "fr": "Doit comporter au maximum {{length}} caractères.",
++    "tr": "En fazla {{length}} karakter olmalıdır.",
++    "de": "Darf höchstens {{length}} Zeichen lang sein.",
++    "uk": "Має містити не більше {{length}} символів.",
++    "ca": "Ha de tenir com a màxim {{length}} caràcters."
++  },
++  "SETUP$VALIDATION_INVALID_OPTION": {
++    "en": "Choose one of the available options.",
++    "ja": "利用可能な選択肢から選んでください。",
++    "zh-CN": "请从可用选项中选择。",
++    "zh-TW": "請從可用選項中選擇。",
++    "ko-KR": "사용 가능한 옵션 중에서 선택하세요.",
++    "no": "Velg ett av de tilgjengelige alternativene.",
++    "it": "Scegli una delle opzioni disponibili.",
++    "pt": "Escolha uma das opções disponíveis.",
++    "es": "Elige una de las opciones disponibles.",
++    "ar": "اختر أحد الخيارات المتاحة.",
++    "fr": "Choisissez l'une des options disponibles.",
++    "tr": "Mevcut seçeneklerden birini seçin.",
++    "de": "Wählen Sie eine der verfügbaren Optionen.",
++    "uk": "Виберіть один із доступних варіантів.",
++    "ca": "Trieu una de les opcions disponibles."
++  },
++  "SETUP$VALIDATION_UNSAFE_VALUE": {
++    "en": "Quotes and backslashes are not allowed.",
++    "ja": "引用符とバックスラッシュは使用できません。",
++    "zh-CN": "不允许使用引号和反斜杠。",
++    "zh-TW": "不允許使用引號和反斜線。",
++    "ko-KR": "따옴표와 백슬래시는 사용할 수 없습니다.",
++    "no": "Anførselstegn og omvendte skråstreker er ikke tillatt.",
++    "it": "Le virgolette e le barre rovesciate non sono consentite.",
++    "pt": "Aspas e barras invertidas não são permitidas.",
++    "es": "No se permiten comillas ni barras invertidas.",
++    "ar": "غير مسموح باستخدام علامات الاقتباس والشرطات المائلة العكسية.",
++    "fr": "Les guillemets et les barres obliques inverses ne sont pas autorisés.",
++    "tr": "Tırnak işaretleri ve ters eğik çizgiler kullanılamaz.",
++    "de": "Anführungszeichen und Backslashes sind nicht zulässig.",
++    "uk": "Лапки та зворотні скісні риски заборонені.",
++    "ca": "No es permeten cometes ni barres invertides."
++  },
++  "SETUP$REVIEW_TITLE": {
++    "en": "Review",
++    "ja": "確認"

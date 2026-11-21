@@ -1,0 +1,56 @@
+diff --git a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
+index 98b40cfb9f62..67e5b4fb7596 100644
+--- a/packages/tui/src/app.tsx
++++ b/packages/tui/src/app.tsx
+@@ -262,6 +262,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
+           (renderer) => Effect.sync(() => destroyRenderer(renderer)),
+         )
+       })
++      // Solid components own scoped renderer subscriptions, so normal app composition exceeds EventEmitter's default.
++      renderer.setMaxListeners(15)
+       const clipboard = yield* Effect.acquireRelease(
+         Effect.sync(() => createTuiClipboard(renderer)),
+         (clipboard) =>
+diff --git a/packages/tui/test/fixture/app.ts b/packages/tui/test/fixture/app.ts
+index 22f4844c840d..2d925dfb0485 100644
+--- a/packages/tui/test/fixture/app.ts
++++ b/packages/tui/test/fixture/app.ts
+@@ -11,6 +11,7 @@ export async function createAppFixture(
+     width?: number
+     height?: number
+     state?: string
++    channel?: TuiInput["app"]["channel"]
+     config?: Config.Info
+     args?: TuiInput["args"]
+     fetch?: FetchHandler
+@@ -30,7 +31,7 @@ export async function createAppFixture(
+   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+   const task = Effect.runPromise(
+     run({
+-      app: { name: "test", version: "test", channel: "test" },
++      app: { name: "test", version: "test", channel: input.channel ?? "test" },
+       server: { endpoint: { url: server.url.toString() } },
+       config: { get: async () => input.config ?? { animations: false }, update: async () => ({}) },
+       packages: { prepare: async () => ({ directory: "" }) },
+diff --git a/packages/tui/test/renderer-listener-budget.test.ts b/packages/tui/test/renderer-listener-budget.test.ts
+new file mode 100644
+index 000000000000..a0361d13c90a
+--- /dev/null
++++ b/packages/tui/test/renderer-listener-budget.test.ts
+@@ -0,0 +1,16 @@
++import { expect, test } from "bun:test"
++import { createAppFixture } from "./fixture/app"
++
++test("local app stays within the renderer listener budget", async () => {
++  await using app = await createAppFixture({
++    channel: "local",
++    fetch: (url) =>
++      url.pathname === "/api/info"
++        ? Response.json({ version: "test", pid: 0, urls: ["http://test"], paths: { tmp: "/tmp" } })
++        : undefined,
++  })
++  await app.ready
++  await Bun.sleep(100)
++
++  expect(app.renderer.listenerCount("resize")).toBeLessThanOrEqual(app.renderer.getMaxListeners())
++})

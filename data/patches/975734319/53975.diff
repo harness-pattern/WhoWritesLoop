@@ -1,0 +1,310 @@
+diff --git a/packages/core/src/aisdk-native.ts b/packages/core/src/aisdk-native.ts
+index 51d1b509c405..a6c4acc4bc97 100644
+--- a/packages/core/src/aisdk-native.ts
++++ b/packages/core/src/aisdk-native.ts
+@@ -1,5 +1,6 @@
+ export * as AISDKNative from "./aisdk-native.js"
+ 
++import { OpenResponsesOptions } from "@opencode/ai/protocols/utils/open-responses-options"
+ import { Effect, Option, Schema, Struct } from "effect"
+ import { Provider } from "./provider.js"
+ 
+@@ -42,11 +43,13 @@ export function rewrite<ID extends string>(
+             : {}),
+         }
+   target.headers = Provider.mergeHeaders(translated.headers, target.headers)
+-  target.body = Provider.mergeOverlay(translated.body, target.body)
++  // Forwarded settings were just merged into `settings`, so they are newer than any body field an earlier
++  // update forwarded; applying them last lets a later config layer override an earlier one.
++  target.body = Provider.mergeOverlay(Provider.mergeOverlay(translated.body, target.body), translated.forwarded)
+   target.variants = target.variants?.map((variant) => {
+     const overlay = options(replacement, input.modelID, decode(variant.settings ?? {}))
+     const headers = Provider.mergeHeaders(overlay.headers, variant.headers)
+-    const body = Provider.mergeOverlay(overlay.body, variant.body)
++    const body = Provider.mergeOverlay(Provider.mergeOverlay(overlay.body, variant.body), overlay.forwarded)
+     return {
+       id: variant.id,
+       ...(variant.settings === undefined ? {} : { settings: overlay.settings }),
+@@ -158,11 +161,21 @@ type Overlay = {
+   readonly settings: Provider.Settings
+   readonly headers?: Readonly<Record<string, string>>
+   readonly body?: Readonly<Record<string, unknown>>
++  /** Settings sent as request body fields; they override existing body values. */
++  readonly forwarded?: Readonly<Record<string, unknown>>
+ }
+ 
+ function options(replacement: string, modelID: string | undefined, settings: Legacy): Overlay {
+   const converse = replacement === "@opencode/ai/providers/amazon-bedrock" && modelID !== undefined
+-  const kept = Struct.omit(settings, ["headers", "extraBody", "useCompletionUrls", ...OPENROUTER_KEYS])
++  const remaining = Struct.omit(settings, ["headers", "extraBody", "useCompletionUrls", ...OPENROUTER_KEYS])
++  // The AI SDK OpenAI-compatible package this replaces sent request options it did not recognize as body
++  // fields, which proxies such as LiteLLM rely on (`allowed_openai_params`). Its provider-level options were
++  // constructor options instead, so only model and variant settings, which carry a model ID, are forwarded.
++  const forwarded =
++    replacement === "@opencode/ai/providers/openai-compatible" && modelID !== undefined
++      ? Struct.omit(Provider.nativeSettings(remaining), COMPATIBLE_KEYS)
++      : {}
++  const kept = Struct.omit(remaining, Object.keys(forwarded))
+   const thinking = converse ? bedrockThinking(modelID, settings) : undefined
+   return {
+     settings: {
+@@ -171,11 +184,24 @@ function options(replacement: string, modelID: string | undefined, settings: Leg
+     },
+     ...(settings.headers === undefined ? {} : { headers: settings.headers }),
+     ...(settings.extraBody === undefined ? {} : { body: settings.extraBody }),
++    ...(Object.keys(forwarded).length === 0 ? {} : { forwarded }),
+     ...(converse ? bedrockRequest(modelID, settings) : {}),
+     ...(replacement === "@opencode/ai/providers/openrouter" ? openRouterRequest(settings) : {}),
+   }
+ }
+ 
++// Settings the native OpenAI-compatible package reads, plus AI SDK chat options it never sent as body fields.
++const COMPATIBLE_KEYS = [
++  "apiKey",
++  "baseURL",
++  "body",
++  "provider",
++  "contextManagement",
++  ...Object.keys(OpenResponsesOptions.Options.fields),
++  "user",
++  "strictJsonSchema",
++]
++
+ // AI SDK spellings the native Bedrock packages do not read.
+ const BEDROCK_KEYS = [
+   "bearerToken",
+diff --git a/packages/core/src/v1/config/migrate.ts b/packages/core/src/v1/config/migrate.ts
+index ec62425e31e0..ee656acc6bd3 100644
+--- a/packages/core/src/v1/config/migrate.ts
++++ b/packages/core/src/v1/config/migrate.ts
+@@ -1,7 +1,7 @@
+ export * as ConfigMigrateV1 from "./migrate.js"
+ 
+ import { ConfigAgent } from "@opencode/schema/config/agent"
+-import { Schema } from "effect"
++import { Schema, Struct } from "effect"
+ import { ConfigAgentV1 } from "./agent.js"
+ import { ConfigCommandV1 } from "./command.js"
+ import { ConfigMCPV1 } from "./mcp.js"
+@@ -227,10 +227,13 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type) {
+     headers: info.headers,
+     variants:
+       info.variants &&
+-      Object.entries(info.variants).map(([id, options]) => ({
+-        id,
+-        settings: ConfigProviderOptionsV1.model(options),
+-      })),
++      // `disabled` is a v1 variant flag, not a request option.
++      Object.entries(info.variants)
++        .filter(([, options]) => options.disabled !== true)
++        .map(([id, options]) => ({
++          id,
++          settings: ConfigProviderOptionsV1.model(Struct.omit(options, ["disabled"])),
++        })),
+     cost: costs,
+     disabled: info.status === "deprecated" ? true : undefined,
+     limit: info.limit && {
+diff --git a/packages/core/test/aisdk-native.test.ts b/packages/core/test/aisdk-native.test.ts
+index 7cb78033fe59..afd212450fd8 100644
+--- a/packages/core/test/aisdk-native.test.ts
++++ b/packages/core/test/aisdk-native.test.ts
+@@ -562,6 +562,70 @@ describe("AISDKNative", () => {
+     })
+   })
+ 
++  test("forwards unrecognized OpenAI-compatible model and variant settings as body fields", () => {
++    const model: Parameters<typeof AISDKNative.rewrite>[0] = {
++      package: "aisdk:@ai-sdk/openai-compatible",
++      settings: {
++        baseURL: "https://litellm.example/v1",
++        reasoningEffort: "high",
++        user: "someone",
++        timeout: 60_000,
++        allowed_openai_params: ["reasoning_effort"],
++        extraBody: { metadata: { tag: "extra" } },
++      },
++      body: { metadata: { tag: "config" } },
++      variants: [{ id: "thinking", settings: { reasoningEffort: "max", enable_thinking: true } }],
++    }
++    AISDKNative.rewrite(model, {
++      specifier: "aisdk:@ai-sdk/openai-compatible",
++      providerID: "litellm",
++      modelID: "glm-5.3-flashx",
++    })
++    expect(model).toEqual({
++      package: "@opencode/ai/providers/openai-compatible",
++      settings: {
++        baseURL: "https://litellm.example/v1",
++        reasoningEffort: "high",
++        user: "someone",
++        timeout: 60_000,
++        provider: "litellm",
++      },
++      body: { allowed_openai_params: ["reasoning_effort"], metadata: { tag: "config" } },
++      variants: [{ id: "thinking", settings: { reasoningEffort: "max" }, body: { enable_thinking: true } }],
++    })
++
++    const provider: Parameters<typeof AISDKNative.rewrite>[0] = {
++      package: "aisdk:@ai-sdk/openai-compatible",
++      settings: { baseURL: "https://litellm.example/v1", includeUsage: true },
++    }
++    AISDKNative.rewrite(provider, { specifier: "aisdk:@ai-sdk/openai-compatible", providerID: "litellm" })
++    expect(provider).toEqual({
++      package: "@opencode/ai/providers/openai-compatible",
++      settings: { baseURL: "https://litellm.example/v1", includeUsage: true, provider: "litellm" },
++    })
++  })
++
++  test("lets a later model update override an earlier forwarded OpenAI-compatible setting", () => {
++    const model: Parameters<typeof AISDKNative.rewrite>[0] = {
++      package: "aisdk:@ai-sdk/openai-compatible",
++      settings: { baseURL: "https://litellm.example/v1", foo: "from-file" },
++    }
++    AISDKNative.rewrite(model, { specifier: "aisdk:@ai-sdk/openai-compatible", providerID: "litellm", modelID: "glm" })
++    model.settings = { ...model.settings, reasoningEffort: "medium", foo: "from-content" }
++    AISDKNative.rewrite(model, {
++      specifier: "@opencode/ai/providers/openai-compatible",
++      providerID: "litellm",
++      modelID: "glm",
++    })
++
++    expect(model.settings).toEqual({
++      baseURL: "https://litellm.example/v1",
++      provider: "litellm",
++      reasoningEffort: "medium",
++    })
++    expect(model.body).toEqual({ foo: "from-content" })
++  })
++
+   test("maps supported xAI settings", () => {
+     expect(
+       map("@ai-sdk/xai", {
+diff --git a/packages/core/test/config/config.test.ts b/packages/core/test/config/config.test.ts
+index 64baf92cc7a6..c38445145cf5 100644
+--- a/packages/core/test/config/config.test.ts
++++ b/packages/core/test/config/config.test.ts
+@@ -854,6 +854,28 @@ describe("Config", () => {
+     })
+   })
+ 
++  test("drops disabled v1 variants instead of migrating the flag as a setting", () => {
++    const migrated = migrateV1({
++      provider: {
++        litellm: {
++          npm: "@ai-sdk/openai-compatible",
++          models: {
++            glm: {
++              variants: {
++                high: { disabled: true, reasoningEffort: "high" },
++                low: { disabled: false, reasoningEffort: "low" },
++              },
++            },
++          },
++        },
++      },
++    })
++
++    expect(migrated.providers?.litellm?.models?.glm?.variants).toEqual([
++      { id: "low", settings: { reasoningEffort: "low" } },
++    ])
++  })
++
+   test("renames old provider IDs while migrating v1 configuration", () => {
+     const migrated = migrateV1({
+       model: "azure-cognitive-services/deployment",
+diff --git a/packages/core/test/model-resolver.test.ts b/packages/core/test/model-resolver.test.ts
+index 686dc4dc3344..cc47ff2f7ed8 100644
+--- a/packages/core/test/model-resolver.test.ts
++++ b/packages/core/test/model-resolver.test.ts
+@@ -606,6 +606,27 @@ describe("ModelResolver", () => {
+     }),
+   )
+ 
++  it.effect("sends unrecognized OpenAI-compatible model settings as request body fields", () =>
++    Effect.gen(function* () {
++      const resolved = yield* ModelResolver.fromCatalogModel(
++        model(Provider.aisdk("@ai-sdk/openai-compatible"), {
++          settings: {
++            apiKey: "secret",
++            baseURL: "https://litellm.example/v1",
++            reasoningEffort: "high",
++            allowed_openai_params: ["reasoning_effort"],
++          },
++          headers: {},
++          body: {},
++        }),
++      )
++      const prepared = yield* compileRequest(LLM.request({ model: resolved, prompt: "Hello" }))
++
++      expect(prepared.body).toMatchObject({ reasoning_effort: "high" })
++      expect(resolved.route.defaults.http?.body).toEqual({ allowed_openai_params: ["reasoning_effort"] })
++    }),
++  )
++
+   it.effect("overlays selected OpenAI-compatible variant bodies", () =>
+     Effect.gen(function* () {
+       const catalog = model(Provider.aisdk("@ai-sdk/openai-compatible"), {
+diff --git a/packages/core/test/plugin/models-dev.test.ts b/packages/core/test/plugin/models-dev.test.ts
+index 47056cf891d7..c2289ecac81e 100644
+--- a/packages/core/test/plugin/models-dev.test.ts
++++ b/packages/core/test/plugin/models-dev.test.ts
+@@ -202,10 +202,11 @@ describe("ModelsDevPlugin", () => {
+       })
+       expect(mutatedProvider.headers).toEqual({ "x-acme": "override" })
+       expect(mutatedProvider.body).toEqual({ service_tier: "priority", tags: ["stable", "override"] })
++      // Model edits re-run package translation, which moves settings the generic OpenAI-compatible package
++      // does not read into the request body.
+       expect(mutated.settings).toEqual({
+         baseURL: "https://models.acme.test/v1",
+         thinking: { type: "disabled", display: "summarized" },
+-        reasoning: { effort: "high" },
+       })
+       expect(mutated.headers).toEqual({ "x-acme": "override", "x-mode": "slow" })
+       expect(mutated.body).toEqual({
+@@ -213,12 +214,13 @@ describe("ModelsDevPlugin", () => {
+         tags: ["stable", "override"],
+         options: { top_k: 7 },
+         stop: ["<end>", "<stop>"],
++        reasoning: { effort: "high" },
+       })
+       expect(mutated.variants).toEqual([
+         {
+           id: Model.VariantID.make("low"),
+-          settings: { thinking: { type: "disabled", display: "summarized" }, effort: "low" },
+-          body: { max_tokens: 4096 },
++          settings: {},
++          body: { max_tokens: 4096, thinking: { type: "disabled", display: "summarized" }, effort: "low" },
+         },
+       ])
+       expect(mutated.capabilities.input).toEqual(["text", "image"])
+diff --git a/packages/core/test/plugin/provider-opencode.test.ts b/packages/core/test/plugin/provider-opencode.test.ts
+index 152099b000c0..6716ccd80ea8 100644
+--- a/packages/core/test/plugin/provider-opencode.test.ts
++++ b/packages/core/test/plugin/provider-opencode.test.ts
+@@ -522,13 +522,13 @@ describe("OpencodePlugin", () => {
+             cost: [{ input: 1, output: 2, cache: { read: 0.1, write: 0 } }],
+             limit: { context: 1000, output: 100 },
+             package: "@opencode/ai/providers/openai-compatible",
+-            settings: { baseURL: `${server.url.origin}/v1`, custom: "value", temperature: 0.5 },
++            settings: { baseURL: `${server.url.origin}/v1`, custom: "value" },
+             headers: { "x-org-id": "org" },
++            body: { temperature: 0.5 },
+           })
+           expect(model.settings).toEqual({
+             baseURL: `${server.url.origin}/v1`,
+             custom: "value",
+-            temperature: 0.5,
+             provider: "openai",
+           })
+           const override = required(yield* models.get(Provider.ID.make("remote"), Model.ID.make("override")))
+@@ -543,8 +543,9 @@ describe("OpencodePlugin", () => {
+             },
+             {
+               id: Model.VariantID.make("high"),
+-              settings: { temperature: 0.2 },
++              settings: {},
+               headers: { "x-variant": "high" },
++              body: { temperature: 0.2 },
+             },
+           ])
+           expect(required(yield* models.get(Provider.ID.make("remote"), Model.ID.make("disabled"))).enabled).toBe(false)

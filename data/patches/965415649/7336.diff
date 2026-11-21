@@ -1,0 +1,103 @@
+diff --git a/codex-rs/core/src/codex.rs b/codex-rs/core/src/codex.rs
+index e3c5de57620f..4b4daf8f1988 100644
+--- a/codex-rs/core/src/codex.rs
++++ b/codex-rs/core/src/codex.rs
+@@ -102,6 +102,7 @@ use crate::protocol::TurnDiffEvent;
+ use crate::protocol::WarningEvent;
+ use crate::rollout::RolloutRecorder;
+ use crate::rollout::RolloutRecorderParams;
++use crate::rollout::map_session_init_error;
+ use crate::shell;
+ use crate::state::ActiveTurn;
+ use crate::state::SessionServices;
+@@ -206,7 +207,7 @@ impl Codex {
+         .await
+         .map_err(|e| {
+             error!("Failed to create session: {e:#}");
+-            CodexErr::InternalAgentDied
++            map_session_init_error(&e, &config.codex_home)
+         })?;
+         let conversation_id = session.conversation_id;
+ 
+@@ -508,7 +509,7 @@ impl Session {
+ 
+         let rollout_recorder = rollout_recorder.map_err(|e| {
+             error!("failed to initialize rollout recorder: {e:#}");
+-            anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
++            anyhow::Error::from(e)
+         })?;
+         let rollout_path = rollout_recorder.rollout_path.clone();
+ 
+diff --git a/codex-rs/core/src/rollout/error.rs b/codex-rs/core/src/rollout/error.rs
+new file mode 100644
+index 000000000000..e924dd2d28b2
+--- /dev/null
++++ b/codex-rs/core/src/rollout/error.rs
+@@ -0,0 +1,49 @@
++use std::io::ErrorKind;
++use std::path::Path;
++
++use crate::error::CodexErr;
++use crate::rollout::SESSIONS_SUBDIR;
++
++pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> CodexErr {
++    if let Some(mapped) = err
++        .chain()
++        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
++        .find_map(|io_err| map_rollout_io_error(io_err, codex_home))
++    {
++        return mapped;
++    }
++
++    CodexErr::Fatal(format!("Failed to initialize session: {err:#}"))
++}
++
++fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<CodexErr> {
++    let sessions_dir = codex_home.join(SESSIONS_SUBDIR);
++    let hint = match io_err.kind() {
++        ErrorKind::PermissionDenied => format!(
++            "Codex cannot access session files at {} (permission denied). If sessions were created using sudo, fix ownership: sudo chown -R $(whoami) {}",
++            sessions_dir.display(),
++            codex_home.display()
++        ),
++        ErrorKind::NotFound => format!(
++            "Session storage missing at {}. Create the directory or choose a different Codex home.",
++            sessions_dir.display()
++        ),
++        ErrorKind::AlreadyExists => format!(
++            "Session storage path {} is blocked by an existing file. Remove or rename it so Codex can create sessions.",
++            sessions_dir.display()
++        ),
++        ErrorKind::InvalidData | ErrorKind::InvalidInput => format!(
++            "Session data under {} looks corrupt or unreadable. Clearing the sessions directory may help (this will remove saved conversations).",
++            sessions_dir.display()
++        ),
++        ErrorKind::IsADirectory | ErrorKind::NotADirectory => format!(
++            "Session storage path {} has an unexpected type. Ensure it is a directory Codex can use for session files.",
++            sessions_dir.display()
++        ),
++        _ => return None,
++    };
++
++    Some(CodexErr::Fatal(format!(
++        "{hint} (underlying error: {io_err})"
++    )))
++}
+diff --git a/codex-rs/core/src/rollout/mod.rs b/codex-rs/core/src/rollout/mod.rs
+index 23410bd4d085..540d204be3e2 100644
+--- a/codex-rs/core/src/rollout/mod.rs
++++ b/codex-rs/core/src/rollout/mod.rs
+@@ -7,11 +7,13 @@ pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
+ pub const INTERACTIVE_SESSION_SOURCES: &[SessionSource] =
+     &[SessionSource::Cli, SessionSource::VSCode];
+ 
++pub(crate) mod error;
+ pub mod list;
+ pub(crate) mod policy;
+ pub mod recorder;
+ 
+ pub use codex_protocol::protocol::SessionMeta;
++pub(crate) use error::map_session_init_error;
+ pub use list::find_conversation_path_by_id_str;
+ pub use recorder::RolloutRecorder;
+ pub use recorder::RolloutRecorderParams;

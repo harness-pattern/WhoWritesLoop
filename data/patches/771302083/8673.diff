@@ -1,0 +1,44 @@
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index eb674efd37f1..7b36e3a63a00 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "openhands-frontend",
+-  "version": "0.39.1",
++  "version": "0.39.2",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "openhands-frontend",
+-      "version": "0.39.1",
++      "version": "0.39.2",
+       "dependencies": {
+         "@heroui/react": "2.7.8",
+         "@microlink/react-json-view": "^1.26.2",
+diff --git a/frontend/package.json b/frontend/package.json
+index daf86d787041..824cae2b53eb 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "openhands-frontend",
+-  "version": "0.39.1",
++  "version": "0.39.2",
+   "private": true,
+   "type": "module",
+   "engines": {
+diff --git a/pyproject.toml b/pyproject.toml
+index b354029de1a5..6b5f68b84238 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -6,7 +6,7 @@ requires = [
+ 
+ [tool.poetry]
+ name = "openhands-ai"
+-version = "0.39.1"
++version = "0.39.2"
+ description = "OpenHands: Code Less, Make More"
+ authors = [ "OpenHands" ]
+ license = "MIT"

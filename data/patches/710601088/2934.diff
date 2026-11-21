@@ -1,0 +1,245 @@
+diff --git a/docs/tools/ai-ml/codeinterpretertool.mdx b/docs/tools/ai-ml/codeinterpretertool.mdx
+index 24db603d66..af486f9637 100644
+--- a/docs/tools/ai-ml/codeinterpretertool.mdx
++++ b/docs/tools/ai-ml/codeinterpretertool.mdx
+@@ -92,6 +92,46 @@ programmer_agent = Agent(
+ )
+ ```
+ 
++You can also specify a custom Docker image for code execution:
++
++```python Code
++from crewai import Agent
++
++# Create an agent with code execution enabled and custom Docker image
++programmer_agent = Agent(
++    role="Python Programmer",
++    goal="Write and execute Python code to solve problems",
++    backstory="An expert Python programmer who can write efficient code to solve complex problems.",
++    allow_code_execution=True,  # This automatically adds the CodeInterpreterTool
++    execution_image="python:3.11-slim",  # Custom Docker image with specific Python version
++    verbose=True,
++)
++```
++
++### Best Practices for Custom Docker Images
++
++When using custom Docker images for code execution, consider the following best practices:
++
++- **Use specific version tags**: Instead of `latest`, use specific version tags like `python:3.11-slim` for reproducible builds
++- **Security scanning**: Ensure your custom images are regularly scanned for security vulnerabilities
++- **Image size optimization**: Consider using slim or alpine variants to reduce image size and improve performance
++- **Pre-installed dependencies**: Include commonly used libraries in your custom image to avoid repeated installations
++- **Registry accessibility**: Ensure the Docker registry hosting your custom image is accessible from your execution environment
++
++Example with a custom image containing data science libraries:
++
++```python Code
++# Custom image with pre-installed data science packages
++data_scientist_agent = Agent(
++    role="Data Scientist",
++    goal="Analyze datasets and create visualizations",
++    backstory="Expert in data analysis with access to specialized tools",
++    allow_code_execution=True,
++    execution_image="my-registry.com/datascience:python3.11-pandas-numpy",
++    verbose=True,
++)
++```
++
+ ### Enabling `unsafe_mode`
+ 
+ ```python Code
+diff --git a/src/crewai/agent.py b/src/crewai/agent.py
+index 9a73733364..4adc0ed578 100644
+--- a/src/crewai/agent.py
++++ b/src/crewai/agent.py
+@@ -127,6 +127,11 @@ class Agent(BaseAgent):
+         default="safe",
+         description="Mode for code execution: 'safe' (using Docker) or 'unsafe' (direct execution).",
+     )
++    execution_image: Optional[str] = Field(
++        default=None,
++        description="Custom Docker image to use for code execution. If not specified, uses the default image.",
++        pattern=r"^[a-zA-Z0-9._/-]+(?:\:[0-9]+)?(?:/[a-zA-Z0-9._/-]+)*(?:\:[a-zA-Z0-9._-]+)?$",
++    )
+     reasoning: bool = Field(
+         default=False,
+         description="Whether the agent should reflect and create a plan before executing a task.",
+@@ -564,7 +569,11 @@ def get_code_execution_tools(self):
+ 
+             # Set the unsafe_mode based on the code_execution_mode attribute
+             unsafe_mode = self.code_execution_mode == "unsafe"
+-            return [CodeInterpreterTool(unsafe_mode=unsafe_mode)]
++            
++            tool_kwargs = {"unsafe_mode": unsafe_mode}
++            if self.execution_image:
++                tool_kwargs["default_image_tag"] = self.execution_image
++            return [CodeInterpreterTool(**tool_kwargs)]
+         except ModuleNotFoundError:
+             self._logger.log(
+                 "info", "Coding tools not available. Install crewai_tools. "
+diff --git a/tests/test_agent_custom_execution_image.py b/tests/test_agent_custom_execution_image.py
+new file mode 100644
+index 0000000000..ccc5ae591e
+--- /dev/null
++++ b/tests/test_agent_custom_execution_image.py
+@@ -0,0 +1,118 @@
++import pytest
++from unittest.mock import patch
++from crewai import Agent
++from pydantic import ValidationError
++
++
++def test_agent_with_custom_execution_image():
++    """Test that Agent can be created with custom execution image."""
++    agent = Agent(
++        role="Test Agent",
++        goal="Test goal",
++        backstory="Test backstory",
++        allow_code_execution=True,
++        execution_image="my-custom-image:latest"
++    )
++    
++    assert agent.execution_image == "my-custom-image:latest"
++
++
++def test_agent_without_custom_execution_image():
++    """Test that Agent works without custom execution image (default behavior)."""
++    agent = Agent(
++        role="Test Agent", 
++        goal="Test goal",
++        backstory="Test backstory",
++        allow_code_execution=True
++    )
++    
++    assert agent.execution_image is None
++
++
++@patch('crewai_tools.CodeInterpreterTool')
++def test_get_code_execution_tools_with_custom_image(mock_code_interpreter):
++    """Test that get_code_execution_tools passes custom image to CodeInterpreterTool."""
++    agent = Agent(
++        role="Test Agent",
++        goal="Test goal", 
++        backstory="Test backstory",
++        allow_code_execution=True,
++        execution_image="my-custom-image:latest"
++    )
++    
++    agent.get_code_execution_tools()
++    
++    mock_code_interpreter.assert_called_once_with(
++        unsafe_mode=False,
++        default_image_tag="my-custom-image:latest"
++    )
++
++
++@patch('crewai_tools.CodeInterpreterTool')
++def test_get_code_execution_tools_without_custom_image(mock_code_interpreter):
++    """Test that get_code_execution_tools works without custom image."""
++    agent = Agent(
++        role="Test Agent",
++        goal="Test goal",
++        backstory="Test backstory", 
++        allow_code_execution=True
++    )
++    
++    agent.get_code_execution_tools()
++    
++    mock_code_interpreter.assert_called_once_with(unsafe_mode=False)
++
++
++@patch('crewai_tools.CodeInterpreterTool')
++def test_get_code_execution_tools_with_unsafe_mode_and_custom_image(mock_code_interpreter):
++    """Test that both unsafe_mode and custom image work together."""
++    agent = Agent(
++        role="Test Agent",
++        goal="Test goal",
++        backstory="Test backstory",
++        allow_code_execution=True,
++        code_execution_mode="unsafe",
++        execution_image="my-custom-image:latest"
++    )
++    
++    agent.get_code_execution_tools()
++    
++    mock_code_interpreter.assert_called_once_with(
++        unsafe_mode=True,
++        default_image_tag="my-custom-image:latest"
++    )
++
++
++def test_agent_with_invalid_execution_image():
++    """Test that Agent validates execution image format."""
++    with pytest.raises(ValidationError, match="String should match pattern"):
++        Agent(
++            role="Test Agent",
++            goal="Test goal",
++            backstory="Test backstory",
++            allow_code_execution=True,
++            execution_image="invalid@@image"
++        )
++
++
++def test_agent_with_valid_execution_image_formats():
++    """Test that Agent accepts various valid Docker image formats."""
++    valid_images = [
++        "python:3.11",
++        "python:3.11-slim",
++        "registry.example.com/python:3.11",
++        "my-registry.com:5000/python:latest",
++        "python",
++        "ubuntu:20.04",
++        "gcr.io/project/image:tag"
++    ]
++    
++    for image in valid_images:
++        agent = Agent(
++            role="Test Agent",
++            goal="Test goal",
++            backstory="Test backstory",
++            allow_code_execution=True,
++            execution_image=image
++        )
++        assert agent.execution_image == image
+diff --git a/tests/test_custom_execution_image_integration.py b/tests/test_custom_execution_image_integration.py
+new file mode 100644
+index 0000000000..4024fd2bc4
+--- /dev/null
++++ b/tests/test_custom_execution_image_integration.py
+@@ -0,0 +1,35 @@
++from unittest.mock import patch, MagicMock
++from crewai import Agent, Task, Crew
++
++
++@patch('crewai_tools.CodeInterpreterTool')
++def test_crew_with_custom_execution_image_integration(mock_code_interpreter_class):
++    """Integration test for custom execution image in a Crew workflow."""
++    mock_tool_instance = MagicMock()
++    mock_code_interpreter_class.return_value = mock_tool_instance
++    
++    agent = Agent(
++        role="Python Developer",
++        goal="Execute Python code",
++        backstory="Expert in Python programming",
++        allow_code_execution=True,
++        execution_image="python:3.11-slim"
++    )
++    
++    task = Task(
++        description="Calculate 2 + 2",
++        expected_output="The result of 2 + 2",
++        agent=agent
++    )
++    
++    crew = Crew(
++        agents=[agent],
++        tasks=[task]
++    )
++    
++    crew._prepare_tools(agent, task, [])
++    
++    mock_code_interpreter_class.assert_called_with(
++        unsafe_mode=False,
++        default_image_tag="python:3.11-slim"
++    )

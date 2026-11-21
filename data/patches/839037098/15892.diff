@@ -1,0 +1,143 @@
+diff --git a/.changeset/red-boxes-write.md b/.changeset/red-boxes-write.md
+new file mode 100644
+index 000000000000..6a43474177f9
+--- /dev/null
++++ b/.changeset/red-boxes-write.md
+@@ -0,0 +1,5 @@
++---
++'@mastra/pg': patch
++---
++
++Fixed auto-migration for the `mastra_observational_memory` table to include the `reflectedObservationLineCount` column. Previously, upgrading from older versions would crash on `Memory.cloneThread()` because this column was missing from the `ifNotExists` migration list.
+diff --git a/stores/pg/src/storage/domains/memory/index.ts b/stores/pg/src/storage/domains/memory/index.ts
+index 1c4fe726f1f0..619023c62ba0 100644
+--- a/stores/pg/src/storage/domains/memory/index.ts
++++ b/stores/pg/src/storage/domains/memory/index.ts
+@@ -22,6 +22,33 @@ import {
+  */
+ const OM_TABLE = 'mastra_observational_memory' as const;
+ 
++/**
++ * Columns added to the OM table after its initial release.
++ * Used in `alterTable({ ifNotExists })` so that databases created on older
++ * versions get the new columns automatically.
++ *
++ * When you add a column to OBSERVATIONAL_MEMORY_SCHEMA in @mastra/core,
++ * you MUST also add it here — the unit test `om-migration-columns.test.ts`
++ * will fail otherwise.
++ */
++export const OM_MIGRATION_COLUMNS: string[] = [
++  'observedMessageIds',
++  'observedTimezone',
++  'bufferedObservations',
++  'bufferedObservationTokens',
++  'bufferedMessageIds',
++  'bufferedReflection',
++  'bufferedReflectionTokens',
++  'bufferedReflectionInputTokens',
++  'reflectedObservationLineCount',
++  'bufferedObservationChunks',
++  'isBufferingObservation',
++  'isBufferingReflection',
++  'lastBufferedAtTokens',
++  'lastBufferedAtTime',
++  'metadata',
++];
++
+ /**
+  * Try to import the OM schema statically. On older @mastra/core versions that
+  * don't export OBSERVATIONAL_MEMORY_TABLE_SCHEMA this will be undefined,
+@@ -145,22 +172,7 @@ export class MemoryPG extends MemoryStorage {
+       await this.#db.alterTable({
+         tableName: OM_TABLE as any,
+         schema: omSchema,
+-        ifNotExists: [
+-          'observedMessageIds',
+-          'observedTimezone',
+-          'bufferedObservations',
+-          'bufferedObservationTokens',
+-          'bufferedMessageIds',
+-          'bufferedReflection',
+-          'bufferedReflectionTokens',
+-          'bufferedReflectionInputTokens',
+-          'bufferedObservationChunks',
+-          'isBufferingObservation',
+-          'isBufferingReflection',
+-          'lastBufferedAtTokens',
+-          'lastBufferedAtTime',
+-          'metadata',
+-        ],
++        ifNotExists: OM_MIGRATION_COLUMNS,
+       });
+     }
+     await this.#db.alterTable({
+diff --git a/stores/pg/src/storage/domains/memory/om-migration-columns.test.ts b/stores/pg/src/storage/domains/memory/om-migration-columns.test.ts
+new file mode 100644
+index 000000000000..f73c7f70bb04
+--- /dev/null
++++ b/stores/pg/src/storage/domains/memory/om-migration-columns.test.ts
+@@ -0,0 +1,64 @@
++import { OBSERVATIONAL_MEMORY_SCHEMA } from '@mastra/core/storage';
++import { describe, expect, it } from 'vitest';
++import { OM_MIGRATION_COLUMNS } from './index';
++
++/**
++ * Columns that existed in the original OM table creation.
++ * Any column in OBSERVATIONAL_MEMORY_SCHEMA that is NOT listed here
++ * must appear in OM_MIGRATION_COLUMNS — otherwise databases created
++ * before that column was added will crash on missing columns.
++ */
++const OM_ORIGINAL_COLUMNS = [
++  'id',
++  'lookupKey',
++  'scope',
++  'resourceId',
++  'threadId',
++  'activeObservations',
++  'activeObservationsPendingUpdate',
++  'originType',
++  'config',
++  'generationCount',
++  'lastObservedAt',
++  'lastReflectionAt',
++  'pendingMessageTokens',
++  'totalTokensObserved',
++  'observationTokenCount',
++  'isObserving',
++  'isReflecting',
++  'createdAt',
++  'updatedAt',
++];
++
++describe('OM auto-migration column coverage', () => {
++  it('every schema column must be either an original column or in the migration list', () => {
++    const allSchemaColumns = Object.keys(OBSERVATIONAL_MEMORY_SCHEMA);
++    const covered = new Set([...OM_ORIGINAL_COLUMNS, ...OM_MIGRATION_COLUMNS]);
++
++    const missing = allSchemaColumns.filter(col => !covered.has(col));
++    expect(
++      missing,
++      `Schema columns missing from both OM_ORIGINAL_COLUMNS and OM_MIGRATION_COLUMNS: ${missing.join(', ')}`,
++    ).toEqual([]);
++  });
++
++  it('migration list should not contain columns that are not in the schema', () => {
++    const allSchemaColumns = new Set(Object.keys(OBSERVATIONAL_MEMORY_SCHEMA));
++
++    const extra = OM_MIGRATION_COLUMNS.filter(col => !allSchemaColumns.has(col));
++    expect(
++      extra,
++      `OM_MIGRATION_COLUMNS references columns not in OBSERVATIONAL_MEMORY_SCHEMA: ${extra.join(', ')}`,
++    ).toEqual([]);
++  });
++
++  it('migration list should not have duplicates', () => {
++    const seen = new Set<string>();
++    const dupes: string[] = [];
++    for (const col of OM_MIGRATION_COLUMNS) {
++      if (seen.has(col)) dupes.push(col);
++      seen.add(col);
++    }
++    expect(dupes, `Duplicate entries in OM_MIGRATION_COLUMNS: ${dupes.join(', ')}`).toEqual([]);
++  });
++});

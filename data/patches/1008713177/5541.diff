@@ -1,0 +1,93 @@
+diff --git a/packages/cli/src/serve/server.test.ts b/packages/cli/src/serve/server.test.ts
+index e6a427a94df..0cb75ee805f 100644
+--- a/packages/cli/src/serve/server.test.ts
++++ b/packages/cli/src/serve/server.test.ts
+@@ -1799,6 +1799,32 @@ describe('createServeApp', () => {
+       expect(res.status).toBe(500);
+     });
+ 
++    it('serves the shell when webShellDir is under a dotfile path (e.g. ~/.nvm)', async () => {
++      // Regression: the send library defaults to dotfiles:'ignore', which
++      // returns 404 for any path containing a segment starting with '.'.
++      // Users who installed qwen via nvm have the package under
++      // ~/.nvm/.../web-shell/index.html.
++      const dotParent = await fsp.mkdtemp(path.join(os.tmpdir(), '.fake-nvm-'));
++      const nestedShellDir = path.join(dotParent, 'web-shell');
++      await fsp.mkdir(nestedShellDir, { recursive: true });
++      await fsp.writeFile(path.join(nestedShellDir, 'index.html'), INDEX_HTML);
++      await fsp.mkdir(path.join(nestedShellDir, 'assets'));
++      await fsp.writeFile(
++        path.join(nestedShellDir, 'assets', 'app.js'),
++        'export const x = 1;\n',
++      );
++      try {
++        const app = createServeApp(baseOpts, undefined, {
++          webShellDir: nestedShellDir,
++        });
++        const res = await request(app).get('/').set('Host', host);
++        expect(res.status).toBe(200);
++        expect(res.text).toContain('<div id="root">');
++      } finally {
++        await fsp.rm(dotParent, { recursive: true, force: true });
++      }
++    });
++
+     it('isDocumentNavigation recognizes each navigation signal', () => {
+       const nav = (headers: Record<string, string>) =>
+         isDocumentNavigation({ headers } as never);
+diff --git a/packages/cli/src/serve/webShellStatic.ts b/packages/cli/src/serve/webShellStatic.ts
+index 6e48fa54a8f..16ef5bd5fb5 100644
+--- a/packages/cli/src/serve/webShellStatic.ts
++++ b/packages/cli/src/serve/webShellStatic.ts
+@@ -120,24 +120,33 @@ function createSendIndex(webShellDir: string): (res: Response) => void {
+         'camera=(), microphone=(), geolocation=(), payment=()',
+       )
+       .set('Cache-Control', 'no-cache');
+-    res.sendFile(indexPath, { cacheControl: false }, (err) => {
+-      if (!err) return;
+-      // Only 5xx path in the serve app that would otherwise emit nothing —
+-      // log it like the sibling /demo handler so an operator can see why the
+-      // shell stopped loading (EACCES/ESTALE on a network mount, a perms
+-      // change, a partial deploy).
+-      writeStderrLine(
+-        `qwen serve: Web Shell index send failed: ${err instanceof Error ? err.message : String(err)}`,
+-      );
+-      if (!res.headersSent) {
+-        res.status(500).type('text/plain').send('Failed to load Web Shell');
+-      } else {
+-        // Failed mid-stream (truncated/corrupt index.html): end the
+-        // half-written response instead of leaving the client on a 200 with a
+-        // partial body.
+-        res.end();
+-      }
+-    });
++    // `dotfiles: 'allow'` is required because the resolved path may pass
++    // through a dotfile directory (e.g. ~/.nvm/.../web-shell/index.html).
++    // The `send` library defaults to 'ignore' which returns a 404 for any
++    // path containing a segment starting with '.', breaking users who
++    // installed qwen via nvm.
++    res.sendFile(
++      indexPath,
++      { cacheControl: false, dotfiles: 'allow' },
++      (err) => {
++        if (!err) return;
++        // Only 5xx path in the serve app that would otherwise emit nothing —
++        // log it like the sibling /demo handler so an operator can see why the
++        // shell stopped loading (EACCES/ESTALE on a network mount, a perms
++        // change, a partial deploy).
++        writeStderrLine(
++          `qwen serve: Web Shell index send failed: ${err instanceof Error ? err.message : String(err)}`,
++        );
++        if (!res.headersSent) {
++          res.status(500).type('text/plain').send('Failed to load Web Shell');
++        } else {
++          // Failed mid-stream (truncated/corrupt index.html): end the
++          // half-written response instead of leaving the client on a 200 with a
++          // partial body.
++          res.end();
++        }
++      },
++    );
+   };
+ }
+ 

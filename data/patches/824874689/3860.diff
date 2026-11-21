@@ -1,0 +1,76 @@
+diff --git a/.changeset/rare-students-appear.md b/.changeset/rare-students-appear.md
+new file mode 100644
+index 00000000000..5b9b9b08f40
+--- /dev/null
++++ b/.changeset/rare-students-appear.md
+@@ -0,0 +1,5 @@
++---
++"claude-dev": patch
++---
++
++optionsResponse protobus migration
+diff --git a/src/core/controller/index.ts b/src/core/controller/index.ts
+index e4d611aa846..cd738427884 100644
+--- a/src/core/controller/index.ts
++++ b/src/core/controller/index.ts
+@@ -290,11 +290,6 @@ export class Controller {
+ 				}
+ 				await this.postStateToWebview()
+ 				break
+-			case "optionsResponse":
+-				if (this.task) {
+-					await this.task.handleWebviewAskResponse("messageResponse", message.text || "", [])
+-				}
+-				break
+ 			case "fetchUserCreditsData": {
+ 				await this.fetchUserCreditsData()
+ 				break
+diff --git a/src/shared/WebviewMessage.ts b/src/shared/WebviewMessage.ts
+index 8b5fa6512b3..83a0a8fb3c2 100644
+--- a/src/shared/WebviewMessage.ts
++++ b/src/shared/WebviewMessage.ts
+@@ -23,7 +23,6 @@ export interface WebviewMessage {
+ 		| "updateSettings"
+ 		| "clearAllTaskHistory"
+ 		| "fetchUserCreditsData"
+-		| "optionsResponse"
+ 		| "searchFiles"
+ 		| "grpc_request"
+ 		| "grpc_request_cancel"
+diff --git a/webview-ui/src/components/chat/OptionsButtons.tsx b/webview-ui/src/components/chat/OptionsButtons.tsx
+index 511ca41ca9c..5ff54e89500 100644
+--- a/webview-ui/src/components/chat/OptionsButtons.tsx
++++ b/webview-ui/src/components/chat/OptionsButtons.tsx
+@@ -1,6 +1,6 @@
+ import styled from "styled-components"
+ import { CODE_BLOCK_BG_COLOR } from "@/components/common/CodeBlock"
+-import { vscode } from "@/utils/vscode"
++import { TaskServiceClient } from "@/services/grpc-client"
+ 
+ const OptionButton = styled.button<{ isSelected?: boolean; isNotSelectable?: boolean }>`
+ 	padding: 8px 12px;
+@@ -56,14 +56,19 @@ export const OptionsButtons = ({
+ 					key={index}
+ 					isSelected={option === selected}
+ 					isNotSelectable={hasSelected || !isActive}
+-					onClick={() => {
++					onClick={async () => {
+ 						if (hasSelected || !isActive) {
+ 							return
+ 						}
+-						vscode.postMessage({
+-							type: "optionsResponse",
+-							text: option + (inputValue ? `: ${inputValue?.trim()}` : ""),
+-						})
++						try {
++							await TaskServiceClient.askResponse({
++								responseType: "messageResponse",
++								text: option + (inputValue ? `: ${inputValue?.trim()}` : ""),
++								images: [],
++							})
++						} catch (error) {
++							console.error("Error sending option response:", error)
++						}
+ 					}}>
+ 					<span className="ph-no-capture">{option}</span>
+ 				</OptionButton>

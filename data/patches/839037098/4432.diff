@@ -1,0 +1,2836 @@
+diff --git a/.changeset/evil-cats-sing.md b/.changeset/evil-cats-sing.md
+new file mode 100644
+index 000000000000..876b1b79acf8
+--- /dev/null
++++ b/.changeset/evil-cats-sing.md
+@@ -0,0 +1,7 @@
++---
++'@mastra/core': patch
++'@mastra/inngest': patch
++---
++
++Return payload data, start time, end time, resume time and suspend time for each step in workflow state
++Return error stack for failed workflow runs
+diff --git a/examples/weather-agent/src/mastra/agents/index.ts b/examples/weather-agent/src/mastra/agents/index.ts
+index 325771429a8c..6b5de645510e 100644
+--- a/examples/weather-agent/src/mastra/agents/index.ts
++++ b/examples/weather-agent/src/mastra/agents/index.ts
+@@ -18,3 +18,12 @@ Use the weatherTool to fetch current weather data.`,
+   model: openai('gpt-4o'),
+   tools: { weatherTool },
+ });
++
++export const weatherReporterAgent = new Agent({
++  name: 'weatherExplainerAgent',
++  model: openai('gpt-4o'),
++  instructions: `
++  You are a weather explainer. You have access to input that will help you get weather-specific activities for any city. 
++  The tool uses agents to plan the activities, you just need to provide the city. Explain the weather report like a weather reporter.
++  `,
++});
+diff --git a/examples/weather-agent/src/mastra/index.ts b/examples/weather-agent/src/mastra/index.ts
+index a2879eba7f2f..dc029aea7a12 100644
+--- a/examples/weather-agent/src/mastra/index.ts
++++ b/examples/weather-agent/src/mastra/index.ts
+@@ -2,10 +2,10 @@ import { Mastra } from '@mastra/core';
+ 
+ import { weatherAgent } from './agents';
+ import { weatherWorkflow as legacyWeatherWorkflow } from './workflows';
+-import { weatherWorkflow } from './workflows/new-workflow';
++import { weatherWorkflow, weatherWorkflow2 } from './workflows/new-workflow';
+ 
+ export const mastra = new Mastra({
+   agents: { weatherAgent },
+   legacy_workflows: { legacyWeatherWorkflow },
+-  workflows: { weatherWorkflow },
++  workflows: { weatherWorkflow, weatherWorkflow2 },
+ });
+diff --git a/examples/weather-agent/src/mastra/workflows/new-workflow.ts b/examples/weather-agent/src/mastra/workflows/new-workflow.ts
+index 4b7b860d372b..8acce84a7e05 100644
+--- a/examples/weather-agent/src/mastra/workflows/new-workflow.ts
++++ b/examples/weather-agent/src/mastra/workflows/new-workflow.ts
+@@ -2,6 +2,8 @@ import { Agent } from '@mastra/core/agent';
+ import { createStep, createWorkflow } from '@mastra/core/workflows';
+ import { z } from 'zod';
+ import { openai } from '@ai-sdk/openai';
++import { weatherTool } from '../tools';
++import { weatherReporterAgent } from '../agents';
+ 
+ const agent = new Agent({
+   name: 'Weather Agent',
+@@ -185,4 +187,29 @@ const weatherWorkflow = createWorkflow({
+ 
+ weatherWorkflow.commit();
+ 
+-export { weatherWorkflow };
++const weatherStepFromTool = createStep(weatherTool);
++const weatherStepFromAgent = createStep(weatherReporterAgent);
++
++const weatherWorkflow2 = createWorkflow({
++  id: 'weather-workflow-with-tool-and-agent',
++  inputSchema: z.object({
++    location: z.string().describe('The city to get the weather for'),
++  }),
++  outputSchema: z.object({
++    text: z.string(),
++  }),
++})
++  .then(weatherStepFromTool)
++  .map({
++    prompt: {
++      schema: z.string(),
++      fn: async ({ inputData }) => {
++        return 'Forecast data: ' + JSON.stringify(inputData);
++      },
++    },
++  })
++  .then(weatherStepFromAgent);
++
++weatherWorkflow2.commit();
++
++export { weatherWorkflow, weatherWorkflow2 };
+diff --git a/packages/core/src/workflows/default.ts b/packages/core/src/workflows/default.ts
+index 6eee97222c26..2f21189c78c0 100644
+--- a/packages/core/src/workflows/default.ts
++++ b/packages/core/src/workflows/default.ts
+@@ -5,7 +5,7 @@ import { EMITTER_SYMBOL } from './constants';
+ import type { ExecutionGraph } from './execution-engine';
+ import { ExecutionEngine } from './execution-engine';
+ import type { ExecuteFunction, Step } from './step';
+-import type { StepResult } from './types';
++import type { StepResult, StepSuccess } from './types';
+ import type { StepFlowEntry } from './workflow';
+ 
+ export type ExecutionContext = {
+@@ -27,8 +27,8 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+   protected async fmtReturnValue<TOutput>(
+     executionSpan: Span | undefined,
+     emitter: { emit: (event: string, data: any) => Promise<void> },
+-    stepResults: Record<string, StepResult<any>>,
+-    lastOutput: StepResult<any>,
++    stepResults: Record<string, StepResult<any, any, any, any>>,
++    lastOutput: StepResult<any, any, any, any>,
+     error?: Error | string,
+   ): Promise<TOutput> {
+     const base: any = {
+@@ -63,11 +63,17 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+         eventTimestamp: Date.now(),
+       });
+ 
+-      base.error = error instanceof Error ? error : (lastOutput.error ?? new Error('Unknown error: ' + error));
++      base.error =
++        error instanceof Error
++          ? (error?.stack ?? error)
++          : (lastOutput.error ??
++            (typeof error === 'string'
++              ? error
++              : (new Error('Unknown error: ' + error)?.stack ?? new Error('Unknown error: ' + error))));
+     } else if (lastOutput.status === 'suspended') {
+       const suspendedStepIds = Object.entries(stepResults).flatMap(([stepId, stepResult]) => {
+         if (stepResult?.status === 'suspended') {
+-          const nestedPath = stepResult?.payload?.__workflow_meta?.path;
++          const nestedPath = stepResult?.suspendPayload?.__workflow_meta?.path;
+           return nestedPath ? [[stepId, ...nestedPath]] : [[stepId]];
+         }
+ 
+@@ -107,7 +113,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     resume?: {
+       // TODO: add execute path
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+@@ -216,7 +222,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     workflowId: string;
+     runId: string;
+     step: Step<string, any, any>;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     executionContext: ExecutionContext;
+     resume?: {
+       steps: string[];
+@@ -225,13 +231,25 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     prevOutput: any;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
++    const startTime = resume?.steps[0] === step.id ? undefined : Date.now();
++    const resumeTime = resume?.steps[0] === step.id ? Date.now() : undefined;
++
++    const stepInfo = {
++      ...stepResults[step.id],
++      payload: prevOutput,
++      ...(resume?.steps[0] === step.id ? { resumePayload: resume?.resumePayload } : {}),
++      ...(startTime ? { startedAt: startTime } : {}),
++      ...(resumeTime ? { resumedAt: resumeTime } : {}),
++    };
++
+     await emitter.emit('watch', {
+       type: 'watch',
+       payload: {
+         currentStep: {
+           id: step.id,
+           status: 'running',
++          ...stepInfo,
+         },
+         workflowState: {
+           status: 'running',
+@@ -239,6 +257,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+             ...stepResults,
+             [step.id]: {
+               status: 'running',
++              ...stepInfo,
+             },
+           },
+           result: null,
+@@ -310,21 +329,30 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+             steps: resume?.steps?.slice(1) || [],
+             resumePayload: resume?.resumePayload,
+             // @ts-ignore
+-            runId: stepResults[step.id]?.payload?.__workflow_meta?.runId,
++            runId: stepResults[step.id]?.suspendPayload?.__workflow_meta?.runId,
+           },
+           [EMITTER_SYMBOL]: emitter,
+         });
+ 
+         if (suspended) {
+-          execResults = { status: 'suspended', payload: suspended.payload };
++          execResults = { status: 'suspended', suspendPayload: suspended.payload, suspendedAt: Date.now() };
+         } else {
+-          execResults = { status: 'success', output: result };
++          execResults = { status: 'success', output: result, endedAt: Date.now() };
+         }
+ 
+         break;
+       } catch (e) {
+         this.logger.error('Error executing step: ' + ((e as Error)?.stack ?? e));
+-        execResults = { status: 'failed', error: e instanceof Error ? e : new Error('Unknown error: ' + e) };
++        execResults = {
++          status: 'failed',
++          error:
++            e instanceof Error
++              ? (e?.stack ?? e)
++              : typeof e === 'string'
++                ? e
++                : (new Error('Unknown error: ' + e)?.stack ?? new Error('Unknown error: ' + e)),
++          endedAt: Date.now(),
++        };
+       }
+     }
+ 
+@@ -333,18 +361,16 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+       payload: {
+         currentStep: {
+           id: step.id,
+-          status: execResults.status,
+-          output: execResults.output,
++          ...stepInfo,
++          ...execResults,
+         },
+         workflowState: {
+           status: 'running',
+           steps: {
+             ...stepResults,
+             [step.id]: {
+-              status: execResults.status,
+-              output: execResults.output,
+-              error: execResults.error,
+-              payload: execResults.payload,
++              ...stepInfo,
++              ...execResults,
+             },
+           },
+ 
+@@ -382,7 +408,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+       });
+     }
+ 
+-    return execResults;
++    return { ...stepInfo, ...execResults };
+   }
+ 
+   async executeParallel({
+@@ -400,19 +426,19 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     runId: string;
+     entry: { type: 'parallel'; steps: StepFlowEntry[] };
+     prevStep: StepFlowEntry;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     resume?: {
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+     executionContext: ExecutionContext;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     let execResults: any;
+-    const results: StepResult<any>[] = await Promise.all(
++    const results: StepResult<any, any, any, any>[] = await Promise.all(
+       entry.steps.map((step, i) =>
+         this.executeEntry({
+           workflowId,
+@@ -439,7 +465,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     if (hasFailed) {
+       execResults = { status: 'failed', error: hasFailed.error };
+     } else if (hasSuspended) {
+-      execResults = { status: 'suspended', payload: hasSuspended.payload };
++      execResults = { status: 'suspended', payload: hasSuspended.suspendPayload };
+     } else {
+       execResults = {
+         status: 'success',
+@@ -474,17 +500,17 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     entry: { type: 'conditional'; steps: StepFlowEntry[]; conditions: ExecuteFunction<any, any, any, any>[] };
+     prevStep: StepFlowEntry;
+     prevOutput: any;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     resume?: {
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+     executionContext: ExecutionContext;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     let execResults: any;
+     const truthyIndexes = (
+       await Promise.all(
+@@ -522,7 +548,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     ).filter((index): index is number => index !== null);
+ 
+     const stepsToRun = entry.steps.filter((_, index) => truthyIndexes.includes(index));
+-    const results: StepResult<any>[] = await Promise.all(
++    const results: StepResult<any, any, any, any>[] = await Promise.all(
+       stepsToRun.map((step, index) =>
+         this.executeEntry({
+           workflowId,
+@@ -549,7 +575,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     if (hasFailed) {
+       execResults = { status: 'failed', error: hasFailed.error };
+     } else if (hasSuspended) {
+-      execResults = { status: 'suspended', payload: hasSuspended.payload };
++      execResults = { status: 'suspended', payload: hasSuspended.suspendPayload };
+     } else {
+       execResults = {
+         status: 'success',
+@@ -588,20 +614,20 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     };
+     prevStep: StepFlowEntry;
+     prevOutput: any;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     resume?: {
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+     executionContext: ExecutionContext;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     const { step, condition } = entry;
+     let isTrue = true;
+-    let result: StepResult<any> = { status: 'success', output: prevOutput };
++    let result = { status: 'success', output: prevOutput } as unknown as StepResult<any, any, any, any>;
+ 
+     do {
+       result = await this.executeStep({
+@@ -611,7 +637,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+         stepResults,
+         executionContext,
+         resume,
+-        prevOutput: result.output,
++        prevOutput: (result as { output: any }).output,
+         emitter,
+         runtimeContext,
+       });
+@@ -663,20 +689,22 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     };
+     prevStep: StepFlowEntry;
+     prevOutput: any;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     resume?: {
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+     executionContext: ExecutionContext;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     const { step, opts } = entry;
+-    const results: StepResult<any>[] = [];
++    const results: StepResult<any, any, any, any>[] = [];
+     const concurrency = opts.concurrency;
++    const startTime = resume?.steps[0] === step.id ? undefined : Date.now();
++    const resumeTime = resume?.steps[0] === step.id ? Date.now() : undefined;
+ 
+     for (let i = 0; i < prevOutput.length; i += concurrency) {
+       const items = prevOutput.slice(i, i + concurrency);
+@@ -705,7 +733,17 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+       }
+     }
+ 
+-    return { status: 'success', output: results };
++    return {
++      ...stepResults[step.id],
++      status: 'success',
++      payload: prevOutput,
++      ...(resume?.steps[0] === step.id ? { resumePayload: resume?.resumePayload } : {}),
++      output: results,
++      //@ts-ignore
++      endedAt: Date.now(),
++      ...(startTime ? { startedAt: startTime } : {}),
++      ...(resumeTime ? { resumedAt: resumeTime } : {}),
++    } as StepSuccess<any, any, any, any>;
+   }
+ 
+   protected async persistStepUpdate({
+@@ -716,7 +754,7 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+   }: {
+     workflowId: string;
+     runId: string;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     executionContext: ExecutionContext;
+   }) {
+     await this.mastra?.getStorage()?.persistWorkflowSnapshot({
+@@ -749,17 +787,17 @@ export class DefaultExecutionEngine extends ExecutionEngine {
+     runId: string;
+     entry: StepFlowEntry;
+     prevStep: StepFlowEntry;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     resume?: {
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+     executionContext: ExecutionContext;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     const prevOutput = this.getStepOutput(stepResults, prevStep);
+     let execResults: any;
+ 
+diff --git a/packages/core/src/workflows/execution-engine.ts b/packages/core/src/workflows/execution-engine.ts
+index 5306267cc30b..36317cf1a825 100644
+--- a/packages/core/src/workflows/execution-engine.ts
++++ b/packages/core/src/workflows/execution-engine.ts
+@@ -41,7 +41,7 @@ export abstract class ExecutionEngine extends MastraBase {
+     input?: TInput;
+     resume?: {
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+diff --git a/packages/core/src/workflows/types.ts b/packages/core/src/workflows/types.ts
+index 8bdc3d1bcb98..ccd528631329 100644
+--- a/packages/core/src/workflows/types.ts
++++ b/packages/core/src/workflows/types.ts
+@@ -1,22 +1,53 @@
+ import type { z } from 'zod';
+ import type { ExecuteFunction, Step } from './step';
+ 
+-export type StepSuccess<T> = {
++export type StepSuccess<P, R, S, T> = {
+   status: 'success';
+   output: T;
++  payload: P;
++  resumePayload?: R;
++  suspendPayload?: S;
++  startedAt: number;
++  endedAt: number;
++  suspendedAt?: number;
++  resumedAt?: number;
+ };
+ 
+-export type StepFailure = {
++export type StepFailure<P, R, S> = {
+   status: 'failed';
+   error: string | Error;
++  payload: P;
++  resumePayload?: R;
++  suspendPayload?: S;
++  startedAt: number;
++  endedAt: number;
++  suspendedAt?: number;
++  resumedAt?: number;
+ };
+ 
+-export type StepSuspended<T> = {
++export type StepSuspended<P, S> = {
+   status: 'suspended';
+-  payload: T;
++  payload: P;
++  suspendPayload?: S;
++  startedAt: number;
++  suspendedAt: number;
+ };
+ 
+-export type StepResult<T> = StepSuccess<T> | StepFailure | StepSuspended<T>;
++export type StepRunning<P, R, S> = {
++  status: 'running';
++  payload: P;
++  resumePayload?: R;
++  suspendPayload?: S;
++  startedAt: number;
++  suspendedAt?: number;
++  resumedAt?: number;
++};
++
++export type StepResult<P, R, S, T> =
++  | StepSuccess<P, R, S, T>
++  | StepFailure<P, R, S>
++  | StepSuspended<P, S>
++  | StepRunning<P, R, S>;
+ 
+ export type StepsRecord<T extends readonly Step<any, any, any>[]> = {
+   [K in T[number]['id']]: Extract<T[number], { id: K }>;
+@@ -66,7 +97,9 @@ export type WatchEvent = {
+       id: string;
+       status: 'running' | 'success' | 'failed' | 'suspended';
+       output?: Record<string, any>;
++      resumePayload?: Record<string, any>;
+       payload?: Record<string, any>;
++      error?: string | Error;
+     };
+     workflowState: {
+       status: 'running' | 'success' | 'failed' | 'suspended';
+@@ -76,10 +109,17 @@ export type WatchEvent = {
+           status: 'running' | 'success' | 'failed' | 'suspended';
+           output?: Record<string, any>;
+           payload?: Record<string, any>;
++          resumePayload?: Record<string, any>;
++          error?: string | Error;
++          startedAt: number;
++          endedAt: number;
++          suspendedAt?: number;
++          resumedAt?: number;
+         }
+       >;
+       output?: Record<string, any>;
+       payload?: Record<string, any>;
++      error?: string | Error;
+     };
+   };
+   eventTimestamp: Date;
+@@ -103,7 +143,7 @@ export interface WorkflowRunState {
+   // Core state info
+   runId: string;
+   value: Record<string, string>;
+-  context: { input?: Record<string, any> } & Record<string, StepResult<any>>;
++  context: { input?: Record<string, any> } & Record<string, StepResult<any, any, any, any>>;
+   activePaths: Array<unknown>;
+   suspendedPaths: Record<string, number[]>;
+   timestamp: number;
+diff --git a/packages/core/src/workflows/workflow.test.ts b/packages/core/src/workflows/workflow.test.ts
+index 5c0e49f71123..0916c49e85cb 100644
+--- a/packages/core/src/workflows/workflow.test.ts
++++ b/packages/core/src/workflows/workflow.test.ts
+@@ -140,10 +140,18 @@ describe('Workflow', () => {
+       expect(executionResult.steps.step1).toEqual({
+         status: 'success',
+         output: { result: 'success1' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+       expect(executionResult.steps.step2).toEqual({
+         status: 'success',
+         output: { result: 'success2' },
++        payload: {
++          result: 'success1',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -247,16 +255,43 @@ describe('Workflow', () => {
+ 
+       expect(resumeResult.steps).toEqual({
+         input: { input: 'test' },
+-        getUserInput: { status: 'success', output: { userInput: 'test input' } },
+-        promptAgent: { status: 'success', output: { modelOutput: 'test output' } },
++        getUserInput: {
++          status: 'success',
++          output: { userInput: 'test input' },
++          payload: { input: 'test' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        promptAgent: {
++          status: 'success',
++          output: { modelOutput: 'test output' },
++          payload: { userInput: 'test input' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++          resumePayload: { stepId: 'promptAgent', context: { userInput: 'test input for resumption' } },
++          resumedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
++        },
+         evaluateToneConsistency: {
+           status: 'success',
+           output: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          payload: { modelOutput: 'test output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        improveResponse: {
++          status: 'success',
++          output: { improvedOutput: 'improved output' },
++          payload: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+-        improveResponse: { status: 'success', output: { improvedOutput: 'improved output' } },
+         evaluateImprovedResponse: {
+           status: 'success',
+           output: { toneScore: { score: 0.9 }, completenessScore: { score: 0.8 } },
++          payload: { improvedOutput: 'improved output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+       });
+     });
+@@ -610,6 +645,9 @@ describe('Workflow', () => {
+       expect(result.steps['step1']).toEqual({
+         status: 'success',
+         output: { result: 'success' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -642,6 +680,9 @@ describe('Workflow', () => {
+       expect(result.steps['step1']).toEqual({
+         status: 'success',
+         output: { result: 'success' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -662,7 +703,7 @@ describe('Workflow', () => {
+       const step2 = createStep({
+         id: 'step2',
+         execute: step2Action,
+-        inputSchema: z.object({ value: z.string() }),
++        inputSchema: z.object({}),
+         outputSchema: z.object({ value: z.string() }),
+       });
+ 
+@@ -673,7 +714,7 @@ describe('Workflow', () => {
+         steps: [step1, step2],
+       });
+ 
+-      workflow.then(step1).then(step2).commit();
++      workflow.parallel([step1, step2]).commit();
+ 
+       const run = workflow.createRun();
+       const result = await run.start({ inputData: {} });
+@@ -682,8 +723,22 @@ describe('Workflow', () => {
+       expect(step2Action).toHaveBeenCalled();
+       expect(result.steps).toEqual({
+         input: {},
+-        step1: { status: 'success', output: { value: 'step1' } },
+-        step2: { status: 'success', output: { value: 'step2' } },
++        step1: {
++          status: 'success',
++          output: { value: 'step1' },
++          payload: {},
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        step2: {
++          status: 'success',
++          output: { value: 'step2' },
++          payload: {},
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
+       });
+     });
+ 
+@@ -727,8 +782,24 @@ describe('Workflow', () => {
+       expect(executionOrder).toEqual(['step1', 'step2']);
+       expect(result.steps).toEqual({
+         input: {},
+-        step1: { status: 'success', output: { value: 'step1' } },
+-        step2: { status: 'success', output: { value: 'step2' } },
++        step1: {
++          status: 'success',
++          output: { value: 'step1' },
++          payload: {},
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        step2: {
++          status: 'success',
++          output: { value: 'step2' },
++          payload: {
++            value: 'step1',
++          },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
+       });
+     });
+ 
+@@ -760,8 +831,24 @@ describe('Workflow', () => {
+         const run = workflow.createRun();
+         const result = await run.start({ inputData: { inputData: 'test-input' } });
+ 
+-        expect(result.steps.step1).toEqual({ status: 'success', output: { result: 'success' } });
+-        expect(result.steps.step2).toEqual({ status: 'success', output: { result: 'success' } });
++        expect(result.steps.step1).toEqual({
++          status: 'success',
++          output: { result: 'success' },
++          payload: {
++            inputData: 'test-input',
++          },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        });
++        expect(result.steps.step2).toEqual({
++          status: 'success',
++          output: { result: 'success' },
++          payload: { result: 'success' },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        });
+       });
+ 
+       it('should provide access to step results and trigger data via getStepResult helper', async () => {
+@@ -817,8 +904,26 @@ describe('Workflow', () => {
+         expect(step2Action).toHaveBeenCalled();
+         expect(result.steps).toEqual({
+           input: { inputValue: 'test-input' },
+-          step1: { status: 'success', output: { value: 'step1-result' } },
+-          step2: { status: 'success', output: { value: 'step2-result' } },
++          step1: {
++            status: 'success',
++            output: { value: 'step1-result' },
++            payload: {
++              inputValue: 'test-input',
++            },
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
++          step2: {
++            status: 'success',
++            output: { value: 'step2-result' },
++            payload: {
++              value: 'step1-result',
++            },
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
+         });
+       });
+ 
+@@ -894,7 +999,16 @@ describe('Workflow', () => {
+           }),
+         );
+ 
+-        expect(result.steps.step2).toEqual({ status: 'success', output: { result: { cool: 'test-input' } } });
++        expect(result.steps.step2).toEqual({
++          status: 'success',
++          output: { result: { cool: 'test-input' } },
++          payload: {
++            result: 'success',
++          },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        });
+       });
+ 
+       it('should resolve trigger data from getInitData with workflow schema', async () => {
+@@ -937,7 +1051,14 @@ describe('Workflow', () => {
+           }),
+         );
+ 
+-        expect(result.steps.step2).toEqual({ status: 'success', output: { result: { cool: 'test-input' } } });
++        expect(result.steps.step2).toEqual({
++          status: 'success',
++          output: { result: { cool: 'test-input' } },
++          payload: { result: 'success' },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        });
+       });
+ 
+       it('should resolve trigger data and DI runtimeContext values via .map()', async () => {
+@@ -995,7 +1116,14 @@ describe('Workflow', () => {
+           }),
+         );
+ 
+-        expect(result.steps.step2).toEqual({ status: 'success', output: { result: 'test-input', second: 42 } });
++        expect(result.steps.step2).toEqual({
++          status: 'success',
++          output: { result: 'test-input', second: 42 },
++          payload: { test: 'test-input', test2: 42 },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        });
+       });
+ 
+       it('should resolve dynamic mappings via .map()', async () => {
+@@ -1071,6 +1199,9 @@ describe('Workflow', () => {
+         expect(result.steps.step2).toEqual({
+           status: 'success',
+           output: { result: 'test-input', second: 'Hello success' },
++          payload: { test: 'test-input', test2: 'Hello success' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+ 
+         expect(result.result).toEqual({
+@@ -1158,8 +1289,22 @@ describe('Workflow', () => {
+ 
+         expect(result.steps).toEqual({
+           input: {},
+-          step1: { status: 'success', output: 'step1-data' },
+-          step2: { status: 'success', output: { result: 'success', input: 'step1-data' } },
++          step1: {
++            status: 'success',
++            output: 'step1-data',
++            payload: {},
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
++          step2: {
++            status: 'success',
++            output: { result: 'success', input: 'step1-data' },
++            payload: 'step1-data',
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
+         });
+       });
+ 
+@@ -1194,8 +1339,22 @@ describe('Workflow', () => {
+ 
+         expect(result.steps).toEqual({
+           input: {},
+-          step1: { status: 'success', output: [{ str: 'step1-data' }] },
+-          step2: { status: 'success', output: { result: 'success', input: [{ str: 'step1-data' }] } },
++          step1: {
++            status: 'success',
++            output: [{ str: 'step1-data' }],
++            payload: {},
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
++          step2: {
++            status: 'success',
++            output: { result: 'success', input: [{ str: 'step1-data' }] },
++            payload: [{ str: 'step1-data' }],
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
+         });
+       });
+ 
+@@ -1239,8 +1398,22 @@ describe('Workflow', () => {
+ 
+         expect(result.steps).toMatchObject({
+           input: {},
+-          step1: { status: 'success', output: [{ str: 'step1-data' }] },
+-          step2: { status: 'success', output: { result: 'success', input: [{ str: 'step1-data' }] } },
++          step1: {
++            status: 'success',
++            output: [{ str: 'step1-data' }],
++            payload: {},
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
++          step2: {
++            status: 'success',
++            output: { result: 'success', input: [{ str: 'step1-data' }] },
++            payload: { ary: [{ str: 'step1-data' }] },
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
+         });
+       });
+ 
+@@ -1296,7 +1469,14 @@ describe('Workflow', () => {
+           }),
+         );
+ 
+-        expect(result.steps.step2).toEqual({ status: 'success', output: { result: 'none', second: 0 } });
++        expect(result.steps.step2).toEqual({
++          status: 'success',
++          output: { result: 'none', second: 0 },
++          payload: { candidates: [], iteration: 0 },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        });
+       });
+ 
+       it('should resolve fully dynamic input via .map()', async () => {
+@@ -1347,7 +1527,14 @@ describe('Workflow', () => {
+           }),
+         );
+ 
+-        expect(result.steps.step2).toEqual({ status: 'success', output: { result: 'success, hello', second: 0 } });
++        expect(result.steps.step2).toEqual({
++          status: 'success',
++          output: { result: 'success, hello', second: 0 },
++          payload: { candidates: [{ name: 'success' }, { name: 'hello' }], iteration: 0 },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        });
+       });
+     });
+ 
+@@ -1478,7 +1665,14 @@ describe('Workflow', () => {
+         expect(step2Action).not.toHaveBeenCalled();
+         expect(result?.steps).toEqual({
+           input: {},
+-          step1: { status: 'failed', error: err },
++          step1: {
++            status: 'failed',
++            error: err?.stack ?? err,
++            payload: {},
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
+         });
+       });
+ 
+@@ -1545,8 +1739,22 @@ describe('Workflow', () => {
+         expect(step3Action).not.toHaveBeenCalled();
+         expect(result.steps).toMatchObject({
+           input: { status: 'success' },
+-          step1: { status: 'success', output: { status: 'success' } },
+-          step2: { status: 'success', output: { result: 'step2' } },
++          step1: {
++            status: 'success',
++            output: { status: 'success' },
++            payload: {},
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
++          step2: {
++            status: 'success',
++            output: { result: 'step2' },
++            payload: { status: 'success' },
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
++          },
+         });
+       });
+ 
+@@ -1594,10 +1802,18 @@ describe('Workflow', () => {
+         expect(result.steps.step1).toEqual({
+           status: 'success',
+           output: { count: 5 },
++          payload: { count: 5 },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+         expect(result.steps.step2).toEqual({
+           status: 'success',
+           output: undefined,
++          payload: { count: 5 },
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+       });
+     });
+@@ -1629,12 +1845,16 @@ describe('Workflow', () => {
+ 
+       await expect(run.start({ inputData: {} })).resolves.toEqual({
+         status: 'failed',
+-        error,
++        error: error?.stack ?? error,
+         steps: {
+           input: {},
+           step1: {
+-            error,
++            error: error?.stack ?? error,
+             status: 'failed',
++            payload: {},
++
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
+           },
+         },
+       });
+@@ -1676,10 +1896,18 @@ describe('Workflow', () => {
+             output: {
+               data: 'success',
+             },
++            payload: {},
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
+           },
+           step2: {
+             output: undefined,
+             status: 'success',
++            payload: {
++              data: 'success',
++            },
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
+           },
+         },
+       });
+@@ -1729,10 +1957,16 @@ describe('Workflow', () => {
+       expect(result.steps).toMatchObject({
+         step1: {
+           status: 'success',
++          payload: {},
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+         step2: {
+           status: 'failed',
+-          error,
++          error: error?.stack ?? error,
++          payload: {},
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+       });
+     });
+@@ -1791,7 +2025,10 @@ describe('Workflow', () => {
+       expect(result.steps).toMatchObject({
+         'test-workflow': {
+           status: 'failed',
+-          error,
++          error: error?.stack ?? error,
++          payload: {},
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+       });
+     });
+@@ -1883,7 +2120,18 @@ describe('Workflow', () => {
+ 
+       expect(step2Action).toHaveBeenCalled();
+       expect(step3Action).not.toHaveBeenCalled();
+-      expect(result.steps.step2).toEqual({ status: 'success', output: { result: 'step2' } });
++      expect(result.steps.step2).toEqual({
++        status: 'success',
++        output: { result: 'step2' },
++        payload: {
++          status: 'partial',
++          score: 75,
++          flags: { isValid: true },
++        },
++
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
+     });
+   });
+ 
+@@ -2077,8 +2325,20 @@ describe('Workflow', () => {
+       expect(map).toHaveBeenCalledTimes(3);
+       expect(result.steps).toEqual({
+         input: [{ value: 1 }, { value: 22 }, { value: 333 }],
+-        map: { status: 'success', output: [{ value: 12 }, { value: 33 }, { value: 344 }] },
+-        final: { status: 'success', output: { finalValue: 1 + 11 + (22 + 11) + (333 + 11) } },
++        map: {
++          status: 'success',
++          output: [{ value: 12 }, { value: 33 }, { value: 344 }],
++          payload: [{ value: 1 }, { value: 22 }, { value: 333 }],
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        final: {
++          status: 'success',
++          output: { finalValue: 1 + 11 + (22 + 11) + (333 + 11) },
++          payload: [{ value: 12 }, { value: 33 }, { value: 344 }],
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
+       });
+     });
+ 
+@@ -2133,8 +2393,22 @@ describe('Workflow', () => {
+       expect(map).toHaveBeenCalledTimes(3);
+       expect(result.steps).toEqual({
+         input: [{ value: 1 }, { value: 22 }, { value: 333 }],
+-        map: { status: 'success', output: [{ value: 12 }, { value: 33 }, { value: 344 }] },
+-        final: { status: 'success', output: { finalValue: 1 + 11 + (22 + 11) + (333 + 11) } },
++        map: {
++          status: 'success',
++          output: [{ value: 12 }, { value: 33 }, { value: 344 }],
++          payload: [{ value: 1 }, { value: 22 }, { value: 333 }],
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        final: {
++          status: 'success',
++          output: { finalValue: 1 + 11 + (22 + 11) + (333 + 11) },
++          payload: [{ value: 12 }, { value: 33 }, { value: 344 }],
++
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
+       });
+     });
+ 
+@@ -2190,8 +2464,20 @@ describe('Workflow', () => {
+       expect(map).toHaveBeenCalledTimes(3);
+       expect(result.steps).toEqual({
+         input: [{ value: 1 }, { value: 22 }, { value: 333 }],
+-        map: { status: 'success', output: [{ value: 12 }, { value: 33 }, { value: 344 }] },
+-        final: { status: 'success', output: { finalValue: 1 + 11 + (22 + 11) + (333 + 11) } },
++        map: {
++          status: 'success',
++          output: [{ value: 12 }, { value: 33 }, { value: 344 }],
++          payload: [{ value: 1 }, { value: 22 }, { value: 333 }],
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        final: {
++          status: 'success',
++          output: { finalValue: 1 + 11 + (22 + 11) + (333 + 11) },
++          payload: [{ value: 12 }, { value: 33 }, { value: 344 }],
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
+       });
+     });
+   });
+@@ -2545,8 +2831,20 @@ describe('Workflow', () => {
+       const run = workflow.createRun();
+       const result = await run.start({ inputData: {} });
+ 
+-      expect(result.steps['nested-a']).toEqual({ status: 'success', output: { result: 'success3' } });
+-      expect(result.steps['nested-b']).toEqual({ status: 'success', output: { result: 'success5' } });
++      expect(result.steps['nested-a']).toEqual({
++        status: 'success',
++        output: { result: 'success3' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
++      expect(result.steps['nested-b']).toEqual({
++        status: 'success',
++        output: { result: 'success5' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
+     });
+   });
+ 
+@@ -2588,8 +2886,20 @@ describe('Workflow', () => {
+       const run = workflow.createRun();
+       const result = await run.start({ inputData: {} });
+ 
+-      expect(result.steps.step1).toEqual({ status: 'success', output: { result: 'success' } });
+-      expect(result.steps.step2).toEqual({ status: 'failed', error: err });
++      expect(result.steps.step1).toEqual({
++        status: 'success',
++        output: { result: 'success' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
++      expect(result.steps.step2).toEqual({
++        status: 'failed',
++        error: err?.stack ?? err,
++        payload: { result: 'success' },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
+       expect(step1.execute).toHaveBeenCalledTimes(1);
+       expect(step2.execute).toHaveBeenCalledTimes(1); // 0 retries + 1 initial call
+     });
+@@ -2632,8 +2942,20 @@ describe('Workflow', () => {
+       const run = workflow.createRun();
+       const result = await run.start({ inputData: {} });
+ 
+-      expect(result.steps.step1).toEqual({ status: 'success', output: { result: 'success' } });
+-      expect(result.steps.step2).toEqual({ status: 'failed', error: err });
++      expect(result.steps.step1).toEqual({
++        status: 'success',
++        output: { result: 'success' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
++      expect(result.steps.step2).toEqual({
++        status: 'failed',
++        error: err?.stack ?? err,
++        payload: { result: 'success' },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
+       expect(step1.execute).toHaveBeenCalledTimes(1);
+       expect(step2.execute).toHaveBeenCalledTimes(6); // 5 retries + 1 initial call
+     });
+@@ -2652,7 +2974,6 @@ describe('Workflow', () => {
+ 
+       // @ts-ignore
+       const toolAction = vi.fn<any>().mockImplementation(async ({ context }) => {
+-        console.log('tool call context', context);
+         return { name: context.name };
+       });
+ 
+@@ -2676,8 +2997,20 @@ describe('Workflow', () => {
+ 
+       expect(step1Action).toHaveBeenCalled();
+       expect(toolAction).toHaveBeenCalled();
+-      expect(result.steps.step1).toEqual({ status: 'success', output: { name: 'step1' } });
+-      expect(result.steps['random-tool']).toEqual({ status: 'success', output: { name: 'step1' } });
++      expect(result.steps.step1).toEqual({
++        status: 'success',
++        output: { name: 'step1' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
++      expect(result.steps['random-tool']).toEqual({
++        status: 'success',
++        output: { name: 'step1' },
++        payload: { name: 'step1' },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
+     });
+   });
+ 
+@@ -2727,6 +3060,9 @@ describe('Workflow', () => {
+             id: 'step1',
+             status: 'success',
+             output: { result: 'success1' },
++            payload: {},
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
+           },
+           workflowState: {
+             status: 'running',
+@@ -2735,6 +3071,9 @@ describe('Workflow', () => {
+               step1: {
+                 status: 'success',
+                 output: { result: 'success1' },
++                payload: {},
++                startedAt: expect.any(Number),
++                endedAt: expect.any(Number),
+               },
+             },
+             result: null,
+@@ -2752,8 +3091,20 @@ describe('Workflow', () => {
+             status: 'success',
+             steps: {
+               input: {},
+-              step1: { status: 'success', output: { result: 'success1' } },
+-              step2: { status: 'success', output: { result: 'success2' } },
++              step1: {
++                status: 'success',
++                output: { result: 'success1' },
++                payload: {},
++                startedAt: expect.any(Number),
++                endedAt: expect.any(Number),
++              },
++              step2: {
++                status: 'success',
++                output: { result: 'success2' },
++                payload: { result: 'success1' },
++                startedAt: expect.any(Number),
++                endedAt: expect.any(Number),
++              },
+             },
+             result: { result: 'success2' },
+             error: null,
+@@ -2766,10 +3117,16 @@ describe('Workflow', () => {
+       expect(executionResult.steps.step1).toEqual({
+         status: 'success',
+         output: { result: 'success1' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+       expect(executionResult.steps.step2).toEqual({
+         status: 'success',
+         output: { result: 'success2' },
++        payload: { result: 'success1' },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -2819,6 +3176,9 @@ describe('Workflow', () => {
+             id: 'step1',
+             status: 'success',
+             output: { result: 'success1' },
++            payload: {},
++            startedAt: expect.any(Number),
++            endedAt: expect.any(Number),
+           },
+           workflowState: {
+             status: 'running',
+@@ -2827,6 +3187,9 @@ describe('Workflow', () => {
+               step1: {
+                 status: 'success',
+                 output: { result: 'success1' },
++                payload: {},
++                startedAt: expect.any(Number),
++                endedAt: expect.any(Number),
+               },
+             },
+             result: null,
+@@ -2843,8 +3206,20 @@ describe('Workflow', () => {
+             status: 'success',
+             steps: {
+               input: {},
+-              step1: { status: 'success', output: { result: 'success1' } },
+-              step2: { status: 'success', output: { result: 'success2' } },
++              step1: {
++                status: 'success',
++                output: { result: 'success1' },
++                payload: {},
++                startedAt: expect.any(Number),
++                endedAt: expect.any(Number),
++              },
++              step2: {
++                status: 'success',
++                output: { result: 'success2' },
++                payload: { result: 'success1' },
++                startedAt: expect.any(Number),
++                endedAt: expect.any(Number),
++              },
+             },
+             result: { result: 'success2' },
+             error: null,
+@@ -2857,10 +3232,16 @@ describe('Workflow', () => {
+       expect(executionResult.steps.step1).toEqual({
+         status: 'success',
+         output: { result: 'success1' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+       expect(executionResult.steps.step2).toEqual({
+         status: 'success',
+         output: { result: 'success2' },
++        payload: { result: 'success1' },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -3027,8 +3408,20 @@ describe('Workflow', () => {
+ 
+       expect(step1Action).toHaveBeenCalled();
+       expect(toolAction).toHaveBeenCalled();
+-      expect(result.steps.step1).toEqual({ status: 'success', output: { name: 'step1' } });
+-      expect(result.steps['random-tool']).toEqual({ status: 'success', output: { name: 'step1' } });
++      expect(result.steps.step1).toEqual({
++        status: 'success',
++        output: { name: 'step1' },
++        payload: {},
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
++      expect(result.steps['random-tool']).toEqual({
++        status: 'success',
++        output: { name: 'step1' },
++        payload: { name: 'step1' },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
++      });
+     });
+   });
+ 
+@@ -3175,16 +3568,43 @@ describe('Workflow', () => {
+ 
+       expect(resumeResult.steps).toEqual({
+         input: { input: 'test' },
+-        getUserInput: { status: 'success', output: { userInput: 'test input' } },
+-        promptAgent: { status: 'success', output: { modelOutput: 'test output' } },
++        getUserInput: {
++          status: 'success',
++          output: { userInput: 'test input' },
++          payload: { input: 'test' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        promptAgent: {
++          status: 'success',
++          output: { modelOutput: 'test output' },
++          payload: { userInput: 'test input' },
++          resumePayload: { context: { userInput: 'test input for resumption' }, stepId: 'promptAgent' },
++          resumedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
+         evaluateToneConsistency: {
+           status: 'success',
+           output: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          payload: { modelOutput: 'test output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        improveResponse: {
++          status: 'success',
++          output: { improvedOutput: 'improved output' },
++          payload: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+-        improveResponse: { status: 'success', output: { improvedOutput: 'improved output' } },
+         evaluateImprovedResponse: {
+           status: 'success',
+           output: { toneScore: { score: 0.9 }, completenessScore: { score: 0.8 } },
++          payload: { improvedOutput: 'improved output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+       });
+     });
+@@ -3267,54 +3687,70 @@ describe('Workflow', () => {
+ 
+       const run = workflow.createRun();
+ 
+-      const started = run.start({ inputData: { input: 'test' } });
+-
+-      const result = await new Promise<any>((resolve, reject) => {
+-        let hasResumed = false;
+-        run.watch(async data => {
+-          const suspended =
+-            data.payload?.currentStep?.id === 'humanIntervention' && data.payload?.currentStep?.status === 'suspended';
+-          if (suspended) {
+-            if (!hasResumed) {
+-              hasResumed = true;
+-
+-              try {
+-                const resumed = await run.resume({
+-                  step: humanIntervention,
+-                  resumeData: {
+-                    humanPrompt: 'What improvements would you suggest?',
+-                  },
+-                });
++      // Create a promise to track when the workflow is ready to resume
++      let resolveWorkflowSuspended: (value: unknown) => void;
++      const workflowSuspended = new Promise(resolve => {
++        resolveWorkflowSuspended = resolve;
++      });
+ 
+-                resolve(resumed as any);
+-              } catch (error) {
+-                reject(error);
+-              }
+-            }
+-          }
+-        });
++      run.watch(async data => {
++        const suspended =
++          data.payload?.currentStep?.id === 'humanIntervention' && data.payload?.currentStep?.status === 'suspended';
++        if (suspended) {
++          resolveWorkflowSuspended({
++            humanPrompt: 'What improvements would you suggest?',
++          });
++        }
+       });
+ 
+-      const initialResult = await started;
++      const initialResult = await run.start({ inputData: { input: 'test' } });
+ 
+       expect(initialResult.steps.humanIntervention.status).toBe('suspended');
+       expect(initialResult.steps.explainResponse).toBeUndefined();
+-      expect(humanInterventionAction).toHaveBeenCalledTimes(2);
++      expect(humanInterventionAction).toHaveBeenCalledTimes(1);
+       expect(explainResponseAction).not.toHaveBeenCalled();
+ 
+-      if (!result) {
++      // Wait for the workflow to be ready to resume
++      const resumeData = await workflowSuspended;
++      const resumeResult = await run.resume({ resumeData: resumeData as any, step: humanIntervention });
++
++      if (!resumeResult) {
+         throw new Error('Resume failed to return a result');
+       }
+ 
+-      expect(result.steps).toEqual({
++      expect(resumeResult.steps).toEqual({
+         input: { input: 'test' },
+-        getUserInput: { status: 'success', output: { userInput: 'test input' } },
+-        promptAgent: { status: 'success', output: { modelOutput: 'test output' } },
++        getUserInput: {
++          status: 'success',
++          output: { userInput: 'test input' },
++          payload: { input: 'test' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        promptAgent: {
++          status: 'success',
++          output: { modelOutput: 'test output' },
++          payload: { userInput: 'test input' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
+         evaluateToneConsistency: {
+           status: 'success',
+           output: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          payload: { modelOutput: 'test output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        humanIntervention: {
++          status: 'success',
++          output: { improvedOutput: 'human intervention output' },
++          payload: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          resumePayload: { humanPrompt: 'What improvements would you suggest?' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++          resumedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
+         },
+-        humanIntervention: { status: 'success', output: { improvedOutput: 'human intervention output' } },
+       });
+     });
+ 
+@@ -3618,8 +4054,20 @@ describe('Workflow', () => {
+       // expect(initialResult.activePaths.get('promptAgent')?.suspendPayload).toEqual({ testPayload: 'hello' });
+       expect(initialResult.steps).toEqual({
+         input: { input: 'test' },
+-        getUserInput: { status: 'success', output: { userInput: 'test input' } },
+-        promptAgent: { status: 'suspended', payload: { testPayload: 'hello' } },
++        getUserInput: {
++          status: 'success',
++          output: { userInput: 'test input' },
++          payload: { input: 'test' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        promptAgent: {
++          status: 'suspended',
++          payload: { userInput: 'test input' },
++          suspendPayload: { testPayload: 'hello' },
++          startedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
++        },
+       });
+ 
+       const newCtx = {
+@@ -3638,16 +4086,40 @@ describe('Workflow', () => {
+       // expect(firstResumeResult.activePaths.get('improveResponse')?.status).toBe('suspended');
+       expect(firstResumeResult.steps).toEqual({
+         input: { input: 'test' },
+-        getUserInput: { status: 'success', output: { userInput: 'test input' } },
+-        promptAgent: { status: 'success', output: { modelOutput: 'test output' } },
++        getUserInput: {
++          status: 'success',
++          output: { userInput: 'test input' },
++          payload: { input: 'test' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        promptAgent: {
++          status: 'success',
++          output: { modelOutput: 'test output' },
++          payload: { userInput: 'test input' },
++          suspendPayload: { testPayload: 'hello' },
++          resumePayload: { userInput: 'test input for resumption' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
++          resumedAt: expect.any(Number),
++        },
+         evaluateToneConsistency: {
+           status: 'success',
+           output: {
+             toneScore: { score: 0.8 },
+             completenessScore: { score: 0.7 },
+           },
++          payload: { modelOutput: 'test output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        improveResponse: {
++          status: 'suspended',
++          payload: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          startedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
+         },
+-        improveResponse: { status: 'suspended' },
+       });
+ 
+       const secondResumeResult = await run.resume({
+@@ -3665,16 +4137,53 @@ describe('Workflow', () => {
+ 
+       expect(secondResumeResult.steps).toEqual({
+         input: { input: 'test' },
+-        getUserInput: { status: 'success', output: { userInput: 'test input' } },
+-        promptAgent: { status: 'success', output: { modelOutput: 'test output' } },
++        getUserInput: {
++          status: 'success',
++          output: { userInput: 'test input' },
++          payload: { input: 'test' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        promptAgent: {
++          status: 'success',
++          output: { modelOutput: 'test output' },
++          payload: { userInput: 'test input' },
++          suspendPayload: { testPayload: 'hello' },
++          resumePayload: { userInput: 'test input for resumption' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
++          resumedAt: expect.any(Number),
++        },
+         evaluateToneConsistency: {
+           status: 'success',
+-          output: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          output: {
++            toneScore: { score: 0.8 },
++            completenessScore: { score: 0.7 },
++          },
++          payload: { modelOutput: 'test output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++        },
++        improveResponse: {
++          status: 'success',
++          output: { improvedOutput: 'improved output' },
++          payload: { toneScore: { score: 0.8 }, completenessScore: { score: 0.7 } },
++          resumePayload: {
++            toneScore: { score: 0.8 },
++            completenessScore: { score: 0.7 },
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
++          suspendedAt: expect.any(Number),
++          resumedAt: expect.any(Number),
+         },
+-        improveResponse: { status: 'success', output: { improvedOutput: 'improved output' } },
+         evaluateImprovedResponse: {
+           status: 'success',
+           output: { toneScore: { score: 0.9 }, completenessScore: { score: 0.8 } },
++          payload: { improvedOutput: 'improved output' },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         },
+       });
+ 
+@@ -3919,11 +4428,21 @@ describe('Workflow', () => {
+       expect(result.steps['test-agent-1']).toEqual({
+         status: 'success',
+         output: { text: 'Paris' },
++        payload: {
++          prompt: 'Capital of France, just the name',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+ 
+       expect(result.steps['test-agent-2']).toEqual({
+         status: 'success',
+         output: { text: 'London' },
++        payload: {
++          prompt: 'Capital of UK, just the name',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -4058,16 +4577,38 @@ describe('Workflow', () => {
+       expect(result.steps['finalStep']).toEqual({
+         status: 'success',
+         output: { result: 'success' },
++        payload: {
++          'nested-workflow': {
++            text: 'Paris',
++          },
++          'nested-workflow-2': {
++            text: 'London',
++          },
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+ 
+       expect(result.steps['nested-workflow']).toEqual({
+         status: 'success',
+         output: { text: 'Paris' },
++        payload: {
++          prompt1: 'Capital of France, just the name',
++          prompt2: 'Capital of UK, just the name',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+ 
+       expect(result.steps['nested-workflow-2']).toEqual({
+         status: 'success',
+         output: { text: 'London' },
++        payload: {
++          prompt1: 'Capital of France, just the name',
++          prompt2: 'Capital of UK, just the name',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -4177,11 +4718,21 @@ describe('Workflow', () => {
+       expect(result.steps['agent-step-1']).toEqual({
+         status: 'success',
+         output: { text: 'Paris' },
++        payload: {
++          prompt: 'Capital of France, just the name',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+ 
+       expect(result.steps['agent-step-2']).toEqual({
+         status: 'success',
+         output: { text: 'London' },
++        payload: {
++          prompt: 'Capital of UK, just the name',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -4290,6 +4841,12 @@ describe('Workflow', () => {
+       expect(result.steps['nested-workflow']).toEqual({
+         status: 'success',
+         output: { text: 'Paris London' },
++        payload: {
++          prompt1: 'Capital of France, just the name',
++          prompt2: 'Capital of UK, just the name',
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+   });
+@@ -4399,6 +4956,16 @@ describe('Workflow', () => {
+       expect(result.steps['last-step']).toEqual({
+         output: { success: true },
+         status: 'success',
++        payload: {
++          'nested-workflow-a': {
++            finalValue: 27,
++          },
++          'nested-workflow-b': {
++            finalValue: 1,
++          },
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -4510,6 +5077,16 @@ describe('Workflow', () => {
+       expect(result.steps['last-step']).toEqual({
+         output: { success: true },
+         status: 'success',
++        payload: {
++          'nested-workflow-a-clone': {
++            finalValue: 27,
++          },
++          'nested-workflow-b': {
++            finalValue: 1,
++          },
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -4627,6 +5204,16 @@ describe('Workflow', () => {
+       expect(result.steps['last-step']).toEqual({
+         output: { success: true },
+         status: 'success',
++        payload: {
++          'nested-workflow-a': {
++            finalValue: 27,
++          },
++          'nested-workflow-b': {
++            finalValue: 1,
++          },
++        },
++        startedAt: expect.any(Number),
++        endedAt: expect.any(Number),
+       });
+     });
+ 
+@@ -4745,11 +5332,24 @@ describe('Workflow', () => {
+         expect(result.steps['first-step']).toEqual({
+           output: { success: true },
+           status: 'success',
++          payload: {
++            startValue: 0,
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+ 
+         expect(result.steps['last-step']).toEqual({
+           output: { success: true },
+           status: 'success',
++          payload: {
++            'nested-workflow-a': {
++              finalValue: 27,
++            },
++            'nested-workflow-b': undefined,
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+       });
+ 
+@@ -4868,11 +5468,24 @@ describe('Workflow', () => {
+         expect(result.steps['first-step']).toEqual({
+           output: { success: true },
+           status: 'success',
++          payload: {
++            startValue: 0,
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+ 
+         expect(result.steps['last-step']).toEqual({
+           output: { success: true },
+           status: 'success',
++          payload: {
++            'nested-workflow-b': {
++              finalValue: 1,
++            },
++            'nested-workflow-a': undefined,
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+       });
+ 
+@@ -5028,11 +5641,24 @@ describe('Workflow', () => {
+         expect(result.steps['first-step']).toEqual({
+           output: { success: true },
+           status: 'success',
++          payload: {
++            startValue: 1,
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+ 
+         expect(result.steps['last-step']).toEqual({
+           output: { success: true },
+           status: 'success',
++          payload: {
++            'nested-workflow-a': undefined,
++            'nested-workflow-b': {
++              finalValue: 1,
++            },
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+       });
+     });
+@@ -5268,6 +5894,11 @@ describe('Workflow', () => {
+         expect(result.steps['last-step']).toEqual({
+           status: 'success',
+           output: { success: true },
++          payload: {
++            finalValue: 26 + 1,
++          },
++          startedAt: expect.any(Number),
++          endedAt: expect.any(Number),
+         });
+       });
+     });
+@@ -5407,7 +6038,7 @@ describe('Workflow', () => {
+       expect(passthroughStep.execute).toHaveBeenCalledTimes(2);
+       expect(result.steps['nested-workflow-c']).toMatchObject({
+         status: 'suspended',
+-        payload: {
++        suspendPayload: {
+           __workflow_meta: {
+             path: ['nested-workflow-b', 'nested-workflow-a', 'other'],
+           },
+diff --git a/packages/core/src/workflows/workflow.ts b/packages/core/src/workflows/workflow.ts
+index cb886f2bc886..ee3e09bb632d 100644
+--- a/packages/core/src/workflows/workflow.ts
++++ b/packages/core/src/workflows/workflow.ts
+@@ -54,6 +54,7 @@ export type StepFlowEntry =
+ export type SerializedStep = Pick<Step, 'id' | 'description'> & {
+   component?: string;
+   serializedStepFlow?: SerializedStepFlowEntry[];
++  mapConfig?: string;
+ };
+ 
+ export type SerializedStepFlowEntry =
+@@ -314,16 +315,26 @@ export type WorkflowResult<TOutput extends z.ZodType<any>, TSteps extends Step<s
+       result: z.infer<TOutput>;
+       steps: {
+         [K in keyof StepsRecord<TSteps>]: StepsRecord<TSteps>[K]['outputSchema'] extends undefined
+-          ? StepResult<unknown>
+-          : StepResult<z.infer<NonNullable<StepsRecord<TSteps>[K]['outputSchema']>>>;
++          ? StepResult<unknown, unknown, unknown, unknown>
++          : StepResult<
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['inputSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['resumeSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['suspendSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['outputSchema']>>
++            >;
+       };
+     }
+   | {
+       status: 'failed';
+       steps: {
+         [K in keyof StepsRecord<TSteps>]: StepsRecord<TSteps>[K]['outputSchema'] extends undefined
+-          ? StepResult<unknown>
+-          : StepResult<z.infer<NonNullable<StepsRecord<TSteps>[K]['outputSchema']>>>;
++          ? StepResult<unknown, unknown, unknown, unknown>
++          : StepResult<
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['inputSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['resumeSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['suspendSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['outputSchema']>>
++            >;
+       };
+       error: Error;
+     }
+@@ -331,8 +342,13 @@ export type WorkflowResult<TOutput extends z.ZodType<any>, TSteps extends Step<s
+       status: 'suspended';
+       steps: {
+         [K in keyof StepsRecord<TSteps>]: StepsRecord<TSteps>[K]['outputSchema'] extends undefined
+-          ? StepResult<unknown>
+-          : StepResult<z.infer<NonNullable<StepsRecord<TSteps>[K]['outputSchema']>>>;
++          ? StepResult<unknown, unknown, unknown, unknown>
++          : StepResult<
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['inputSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['resumeSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['suspendSchema']>>,
++              z.infer<NonNullable<StepsRecord<TSteps>[K]['outputSchema']>>
++            >;
+       };
+       suspended: [string[], ...string[][]];
+     };
+@@ -502,14 +518,35 @@ export class Workflow<
+         type: 'step',
+         step: {
+           id: mappingStep.id,
+-          description: mappingStep.description,
+-          component: (mappingStep as SerializedStep).component,
+-          serializedStepFlow: (mappingStep as SerializedStep).serializedStepFlow,
++          mapConfig: mappingConfig.toString(),
+         },
+       });
+       return this as unknown as Workflow<TSteps, TWorkflowId, TInput, TOutput, any>;
+     }
+ 
++    const newMappingConfig: Record<string, any> = Object.entries(mappingConfig).reduce(
++      (a, [key, mapping]) => {
++        const m: any = mapping;
++        if (m.value !== undefined) {
++          a[key] = m;
++        } else if (m.fn !== undefined) {
++          a[key] = {
++            fn: m.fn.toString(),
++            schema: m.schema,
++          };
++        } else if (m.runtimeContextPath) {
++          a[key] = {
++            runtimeContextPath: m.runtimeContextPath,
++            schema: m.schema,
++          };
++        } else {
++          a[key] = m;
++        }
++        return a;
++      },
++      {} as Record<string, any>,
++    );
++
+     const mappingStep: any = createStep({
+       id: `mapping_${randomUUID()}`,
+       inputSchema: z.object({}),
+@@ -592,9 +629,7 @@ export class Workflow<
+       type: 'step',
+       step: {
+         id: mappingStep.id,
+-        description: mappingStep.description,
+-        component: (mappingStep as SerializedStep).component,
+-        serializedStepFlow: (mappingStep as SerializedStep).serializedStepFlow,
++        mapConfig: JSON.stringify(newMappingConfig, null, 2),
+       },
+     });
+     return this as unknown as Workflow<TSteps, TWorkflowId, TInput, TOutput, MappedOutputSchema>;
+@@ -862,16 +897,16 @@ export class Workflow<
+       : await run.start({ inputData, runtimeContext });
+     unwatch();
+     const suspendedSteps = Object.entries(res.steps).filter(([_stepName, stepResult]) => {
+-      const stepRes: StepResult<any> = stepResult as StepResult<any>;
++      const stepRes: StepResult<any, any, any, any> = stepResult as StepResult<any, any, any, any>;
+       return stepRes?.status === 'suspended';
+     });
+ 
+     if (suspendedSteps?.length) {
+       for (const [stepName, stepResult] of suspendedSteps) {
+         // @ts-ignore
+-        const suspendPath: string[] = [stepName, ...(stepResult?.payload?.__workflow_meta?.path ?? [])];
++        const suspendPath: string[] = [stepName, ...(stepResult?.suspendPayload?.__workflow_meta?.path ?? [])];
+         await suspend({
+-          ...(stepResult as any)?.payload,
++          ...(stepResult as any)?.suspendPayload,
+           __workflow_meta: { runId: run.runId, path: suspendPath },
+         });
+       }
+@@ -893,7 +928,7 @@ export class Workflow<
+   }) {
+     const storage = this.#mastra?.getStorage();
+     if (!storage) {
+-      this.logger.debug('Cannot get workflow runs. Mastra engine is not initialized');
++      this.logger.debug('Cannot get workflow runs. Mastra storage is not initialized');
+       return { runs: [], total: 0 };
+     }
+ 
+@@ -903,8 +938,11 @@ export class Workflow<
+   async getWorkflowRunById(runId: string) {
+     const storage = this.#mastra?.getStorage();
+     if (!storage) {
+-      this.logger.debug('Cannot get workflow runs. Mastra engine is not initialized');
+-      return null;
++      this.logger.debug('Cannot get workflow runs from storage. Mastra storage is not initialized');
++      //returning in memory run if no storage is initialized
++      return this.#runs.get(runId)
++        ? ({ ...this.#runs.get(runId), workflowName: this.id } as unknown as WorkflowRun)
++        : null;
+     }
+     const run = await storage.getWorkflowRunById({ runId, workflowName: this.id });
+ 
+diff --git a/stores/_test-utils/src/default-tests.ts b/stores/_test-utils/src/default-tests.ts
+index 6e356a60f650..04bb5e14004c 100644
+--- a/stores/_test-utils/src/default-tests.ts
++++ b/stores/_test-utils/src/default-tests.ts
+@@ -44,15 +44,14 @@ export function createTestSuite(storage: MastraStorage) {
+         result: { success: true },
+         value: {},
+         context: {
+-          steps: {
+-            [stepId]: {
+-              status,
+-              payload: {},
+-              error: undefined,
+-            },
++          [stepId]: {
++            status,
++            payload: {},
++            error: undefined,
++            startedAt: timestamp.getTime(),
++            endedAt: new Date(timestamp.getTime() + 15000).getTime(),
+           },
+-          triggerData: {},
+-          attempts: {},
++          input: {},
+         },
+         activePaths: [],
+         suspendedPaths: {},
+@@ -66,7 +65,7 @@ export function createTestSuite(storage: MastraStorage) {
+       if (typeof snapshot === 'string') {
+         throw new Error('Expected WorkflowRunState, got string');
+       }
+-      expect(snapshot.context?.steps[stepId]?.status).toBe(status);
++      expect(snapshot.context?.[stepId]?.status).toBe(status);
+     };
+ 
+     beforeAll(async () => {
+@@ -471,8 +470,8 @@ export function createTestSuite(storage: MastraStorage) {
+         expect(runs[1]!.workflowName).toBe(workflowName1);
+         const firstSnapshot = runs[0]!.snapshot as WorkflowRunState;
+         const secondSnapshot = runs[1]!.snapshot as WorkflowRunState;
+-        expect(firstSnapshot.context?.steps[stepId2]?.status).toBe('running');
+-        expect(secondSnapshot.context?.steps[stepId1]?.status).toBe('completed');
++        expect(firstSnapshot.context?.[stepId2]?.status).toBe('running');
++        expect(secondSnapshot.context?.[stepId1]?.status).toBe('completed');
+       });
+ 
+       it('filters by workflow name', async () => {
+@@ -491,7 +490,7 @@ export function createTestSuite(storage: MastraStorage) {
+         expect(total).toBe(1);
+         expect(runs[0]!.workflowName).toBe(workflowName1);
+         const snapshot = runs[0]!.snapshot as WorkflowRunState;
+-        expect(snapshot.context?.steps[stepId1]?.status).toBe('completed');
++        expect(snapshot.context?.[stepId1]?.status).toBe('completed');
+       });
+ 
+       it('filters by date range', async () => {
+@@ -547,8 +546,8 @@ export function createTestSuite(storage: MastraStorage) {
+         expect(runs[1]!.workflowName).toBe(workflowName2);
+         const firstSnapshot = runs[0]!.snapshot as WorkflowRunState;
+         const secondSnapshot = runs[1]!.snapshot as WorkflowRunState;
+-        expect(firstSnapshot.context?.steps[stepId3]?.status).toBe('waiting');
+-        expect(secondSnapshot.context?.steps[stepId2]?.status).toBe('running');
++        expect(firstSnapshot.context?.[stepId3]?.status).toBe('waiting');
++        expect(secondSnapshot.context?.[stepId2]?.status).toBe('running');
+       });
+ 
+       it('handles pagination', async () => {
+@@ -574,8 +573,8 @@ export function createTestSuite(storage: MastraStorage) {
+         expect(page1.runs[1]!.workflowName).toBe(workflowName2);
+         const firstSnapshot = page1.runs[0]!.snapshot as WorkflowRunState;
+         const secondSnapshot = page1.runs[1]!.snapshot as WorkflowRunState;
+-        expect(firstSnapshot.context?.steps[stepId3]?.status).toBe('waiting');
+-        expect(secondSnapshot.context?.steps[stepId2]?.status).toBe('running');
++        expect(firstSnapshot.context?.[stepId3]?.status).toBe('waiting');
++        expect(secondSnapshot.context?.[stepId2]?.status).toBe('running');
+ 
+         // Get second page
+         const page2 = await storage.getWorkflowRuns({ limit: 2, offset: 2 });
+@@ -583,7 +582,7 @@ export function createTestSuite(storage: MastraStorage) {
+         expect(page2.total).toBe(3);
+         expect(page2.runs[0]!.workflowName).toBe(workflowName1);
+         const snapshot = page2.runs[0]!.snapshot as WorkflowRunState;
+-        expect(snapshot.context?.steps[stepId1]?.status).toBe('completed');
++        expect(snapshot.context?.[stepId1]?.status).toBe('completed');
+       });
+     });
+     describe('getWorkflowRunById', () => {
+@@ -636,7 +635,7 @@ export function createTestSuite(storage: MastraStorage) {
+         // Insert multiple workflow runs for the same resourceId
+         resourceId = 'resource-shared';
+         for (const status of ['success', 'failed']) {
+-          const sample = createSampleWorkflowSnapshot(status as WorkflowRunState['context']['steps'][string]['status']);
++          const sample = createSampleWorkflowSnapshot(status as WorkflowRunState['context'][string]['status']);
+           runIds.push(sample.runId);
+           await storage.insert({
+             tableName: TABLE_WORKFLOW_SNAPSHOT,
+diff --git a/stores/clickhouse/src/storage/index.test.ts b/stores/clickhouse/src/storage/index.test.ts
+index 089b632c5eb2..37b79a990dfd 100644
+--- a/stores/clickhouse/src/storage/index.test.ts
++++ b/stores/clickhouse/src/storage/index.test.ts
+@@ -72,6 +72,8 @@ const createSampleWorkflowSnapshot = (status: WorkflowRunState['context']['steps
+         status,
+         payload: {},
+         error: undefined,
++        startedAt: timestamp.getTime(),
++        endedAt: new Date(timestamp.getTime() + 15000).getTime(),
+       },
+       input: {},
+     },
+diff --git a/stores/cloudflare-d1/src/storage/test-utils.ts b/stores/cloudflare-d1/src/storage/test-utils.ts
+index dde148e08eef..d3779c8a4591 100644
+--- a/stores/cloudflare-d1/src/storage/test-utils.ts
++++ b/stores/cloudflare-d1/src/storage/test-utils.ts
+@@ -50,6 +50,8 @@ export const createSampleWorkflowSnapshot = (threadId: string, status: string, c
+         status: status as WorkflowRunState['context'][string]['status'],
+         payload: {},
+         error: undefined,
++        startedAt: timestamp.getTime(),
++        endedAt: new Date(timestamp.getTime() + 15000).getTime(),
+       },
+       input: {},
+     },
+diff --git a/stores/cloudflare/src/storage/test-utils.ts b/stores/cloudflare/src/storage/test-utils.ts
+index 6ca56d6f445a..f024e6bbdbf3 100644
+--- a/stores/cloudflare/src/storage/test-utils.ts
++++ b/stores/cloudflare/src/storage/test-utils.ts
+@@ -50,6 +50,8 @@ export const createSampleWorkflowSnapshot = (threadId: string, status: string, c
+         status: status as WorkflowRunState['context'][string]['status'],
+         payload: {},
+         error: undefined,
++        startedAt: timestamp.getTime(),
++        endedAt: new Date(timestamp.getTime() + 15000).getTime(),
+       },
+       input: {},
+     } as WorkflowRunState['context'],
+diff --git a/stores/mongodb/src/storage/index.test.ts b/stores/mongodb/src/storage/index.test.ts
+index dafe4874f7c4..34462c4fa8d4 100644
+--- a/stores/mongodb/src/storage/index.test.ts
++++ b/stores/mongodb/src/storage/index.test.ts
+@@ -79,15 +79,14 @@ class Test {
+       result: { success: true },
+       value: {},
+       context: {
+-        steps: {
+-          [stepId]: {
+-            status: options.status,
+-            payload: {},
+-            error: undefined,
+-          },
++        [stepId]: {
++          status: options.status,
++          payload: {},
++          error: undefined,
++          startedAt: timestamp.getTime(),
++          endedAt: new Date(timestamp.getTime() + 15000).getTime(),
+         },
+-        triggerData: {},
+-        attempts: {},
++        input: {},
+       },
+       activePaths: [],
+       suspendedPaths: {},
+@@ -538,8 +537,8 @@ describe('MongoDBStore', () => {
+       expect(runs[1]!.workflowName).toBe(workflowName1);
+       const firstSnapshot = runs[0]!.snapshot as WorkflowRunState;
+       const secondSnapshot = runs[1]!.snapshot as WorkflowRunState;
+-      expect(firstSnapshot.context?.steps[stepId2]?.status).toBe('running');
+-      expect(secondSnapshot.context?.steps[stepId1]?.status).toBe('completed');
++      expect(firstSnapshot.context?.[stepId2]?.status).toBe('running');
++      expect(secondSnapshot.context?.[stepId1]?.status).toBe('completed');
+     });
+ 
+     it('filters by workflow name', async () => {
+@@ -564,7 +563,7 @@ describe('MongoDBStore', () => {
+       expect(total).toBe(1);
+       expect(runs[0]!.workflowName).toBe(workflowName1);
+       const snapshot = runs[0]!.snapshot as WorkflowRunState;
+-      expect(snapshot.context?.steps[stepId1]?.status).toBe('completed');
++      expect(snapshot.context?.[stepId1]?.status).toBe('completed');
+     });
+ 
+     it('filters by date range', async () => {
+@@ -630,8 +629,8 @@ describe('MongoDBStore', () => {
+       expect(runs[1]!.workflowName).toBe(workflowName2);
+       const firstSnapshot = runs[0]!.snapshot as WorkflowRunState;
+       const secondSnapshot = runs[1]!.snapshot as WorkflowRunState;
+-      expect(firstSnapshot.context?.steps[stepId3]?.status).toBe('waiting');
+-      expect(secondSnapshot.context?.steps[stepId2]?.status).toBe('running');
++      expect(firstSnapshot.context?.[stepId3]?.status).toBe('waiting');
++      expect(secondSnapshot.context?.[stepId2]?.status).toBe('running');
+     });
+ 
+     it('handles pagination', async () => {
+@@ -671,8 +670,8 @@ describe('MongoDBStore', () => {
+       expect(page1.runs[1]!.workflowName).toBe(workflowName2);
+       const firstSnapshot = page1.runs[0]!.snapshot as WorkflowRunState;
+       const secondSnapshot = page1.runs[1]!.snapshot as WorkflowRunState;
+-      expect(firstSnapshot.context?.steps[stepId3]?.status).toBe('waiting');
+-      expect(secondSnapshot.context?.steps[stepId2]?.status).toBe('running');
++      expect(firstSnapshot.context?.[stepId3]?.status).toBe('waiting');
++      expect(secondSnapshot.context?.[stepId2]?.status).toBe('running');
+ 
+       // Get second page
+       const page2 = await store.getWorkflowRuns({ limit: 2, offset: 2 });
+@@ -680,7 +679,7 @@ describe('MongoDBStore', () => {
+       expect(page2.total).toBe(3);
+       expect(page2.runs[0]!.workflowName).toBe(workflowName1);
+       const snapshot = page2.runs[0]!.snapshot as WorkflowRunState;
+-      expect(snapshot.context?.steps[stepId1]?.status).toBe('completed');
++      expect(snapshot.context?.[stepId1]?.status).toBe('completed');
+     });
+   });
+ 
+diff --git a/stores/pg/src/storage/index.test.ts b/stores/pg/src/storage/index.test.ts
+index 705c233ea300..9b750fb0b12f 100644
+--- a/stores/pg/src/storage/index.test.ts
++++ b/stores/pg/src/storage/index.test.ts
+@@ -53,6 +53,8 @@ const createSampleWorkflowSnapshot = (status: WorkflowRunState['context'][string
+         status,
+         payload: {},
+         error: undefined,
++        startedAt: timestamp.getTime(),
++        endedAt: new Date(timestamp.getTime() + 15000).getTime(),
+       },
+       input: {},
+     },
+diff --git a/stores/upstash/src/storage/upstash.test.ts b/stores/upstash/src/storage/upstash.test.ts
+index 527d2bcc02bf..deb1f9efea35 100644
+--- a/stores/upstash/src/storage/upstash.test.ts
++++ b/stores/upstash/src/storage/upstash.test.ts
+@@ -46,6 +46,8 @@ const createSampleWorkflowSnapshot = (status: string, createdAt?: Date) => {
+         status: status,
+         payload: {},
+         error: undefined,
++        startedAt: timestamp.getTime(),
++        endedAt: new Date(timestamp.getTime() + 15000).getTime(),
+       },
+       input: {},
+     } as WorkflowRunState['context'],
+@@ -462,7 +464,13 @@ describe('UpstashStore', () => {
+       const mockSnapshot = {
+         value: { step1: 'completed' },
+         context: {
+-          step1: { status: 'success', output: { result: 'done' } },
++          step1: {
++            status: 'success',
++            output: { result: 'done' },
++            payload: {},
++            startedAt: new Date().getTime(),
++            endedAt: new Date(Date.now() + 15000).getTime(),
++          },
+         } as WorkflowRunState['context'],
+         runId: testRunId,
+         activePaths: [],
+diff --git a/workflows/inngest/src/index.test.ts b/workflows/inngest/src/index.test.ts
+index 2de2f5646890..cc91202cffc3 100644
+--- a/workflows/inngest/src/index.test.ts
++++ b/workflows/inngest/src/index.test.ts
+@@ -71,7 +71,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -148,7 +148,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -231,7 +231,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -305,7 +305,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -394,7 +394,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -463,7 +463,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -540,7 +540,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -624,7 +624,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -729,7 +729,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -807,7 +807,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -914,7 +914,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -999,7 +999,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -1069,7 +1069,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -1155,7 +1155,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -1251,7 +1251,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'main-workflow': mainWorkflow,
+         },
+         server: {
+@@ -1381,7 +1381,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -1485,7 +1485,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -1590,7 +1590,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -1681,7 +1681,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -1836,7 +1836,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -1987,7 +1987,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -2161,7 +2161,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -2229,7 +2229,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -2292,7 +2292,7 @@ describe('MastraInngestWorkflow', () => {
+       });
+ 
+       new Mastra({
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -2363,7 +2363,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -2436,7 +2436,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -2624,7 +2624,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -2804,7 +2804,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': promptEvalWorkflow,
+         },
+         server: {
+@@ -2956,7 +2956,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -3160,7 +3160,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -3356,7 +3356,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': promptEvalWorkflow,
+         },
+         server: {
+@@ -3482,7 +3482,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -3587,7 +3587,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -3725,7 +3725,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -3870,7 +3870,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -4024,7 +4024,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -4183,7 +4183,7 @@ describe('MastraInngestWorkflow', () => {
+               url: ':memory:',
+             },
+           }),
+-          vnext_workflows: {
++          workflows: {
+             'test-workflow': counterWorkflow,
+           },
+           server: {
+@@ -4344,7 +4344,7 @@ describe('MastraInngestWorkflow', () => {
+               url: ':memory:',
+             },
+           }),
+-          vnext_workflows: {
++          workflows: {
+             'test-workflow': counterWorkflow,
+           },
+           server: {
+@@ -4543,7 +4543,7 @@ describe('MastraInngestWorkflow', () => {
+               url: ':memory:',
+             },
+           }),
+-          vnext_workflows: {
++          workflows: {
+             'test-workflow': counterWorkflow,
+           },
+           server: {
+@@ -4701,7 +4701,7 @@ describe('MastraInngestWorkflow', () => {
+               url: ':memory:',
+             },
+           }),
+-          vnext_workflows: {
++          workflows: {
+             'test-workflow': counterWorkflow,
+           },
+           server: {
+@@ -4851,7 +4851,7 @@ describe('MastraInngestWorkflow', () => {
+               url: ':memory:',
+             },
+           }),
+-          vnext_workflows: {
++          workflows: {
+             'test-workflow': counterWorkflow,
+           },
+           server: {
+@@ -5038,7 +5038,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -5197,7 +5197,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': counterWorkflow,
+         },
+         server: {
+@@ -5274,7 +5274,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+@@ -5339,7 +5339,7 @@ describe('MastraInngestWorkflow', () => {
+             url: ':memory:',
+           },
+         }),
+-        vnext_workflows: {
++        workflows: {
+           'test-workflow': workflow,
+         },
+         server: {
+diff --git a/workflows/inngest/src/index.ts b/workflows/inngest/src/index.ts
+index 135a38a0a23c..76add9a96069 100644
+--- a/workflows/inngest/src/index.ts
++++ b/workflows/inngest/src/index.ts
+@@ -416,8 +416,8 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+   protected async fmtReturnValue<TOutput>(
+     executionSpan: Span | undefined,
+     emitter: { emit: (event: string, data: any) => Promise<void> },
+-    stepResults: Record<string, StepResult<any>>,
+-    lastOutput: StepResult<any>,
++    stepResults: Record<string, StepResult<any, any, any, any>>,
++    lastOutput: StepResult<any, any, any, any>,
+     error?: Error | string,
+   ): Promise<TOutput> {
+     const base: any = {
+@@ -501,7 +501,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+     workflowId: string;
+     runId: string;
+     step: Step<string, any, any>;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     executionContext: ExecutionContext;
+     resume?: {
+       steps: string[];
+@@ -510,7 +510,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+     prevOutput: any;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     return super.executeStep({
+       workflowId,
+       runId,
+@@ -534,7 +534,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+     runtimeContext,
+   }: {
+     step: Step<string, any, any>;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     executionContext: {
+       workflowId: string;
+       runId: string;
+@@ -550,7 +550,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+     prevOutput: any;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     await this.inngestStep.run(
+       `workflow.${executionContext.workflowId}.run.${executionContext.runId}.step.${step.id}.running_ev`,
+       async () => {
+@@ -644,7 +644,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+             return { executionContext, result: { status: 'failed', error: result?.error } };
+           } else if (result.status === 'suspended') {
+             const suspendedSteps = Object.entries(result.steps).filter(([_stepName, stepResult]) => {
+-              const stepRes: StepResult<any> = stepResult as StepResult<any>;
++              const stepRes: StepResult<any, any, any, any> = stepResult as StepResult<any, any, any, any>;
+               return stepRes?.status === 'suspended';
+             });
+ 
+@@ -732,7 +732,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+       );
+ 
+       Object.assign(executionContext, res.executionContext);
+-      return res.result as StepResult<any>;
++      return res.result as StepResult<any, any, any, any>;
+     }
+ 
+     const stepRes = await this.inngestStep.run(`workflow.${executionContext.workflowId}.step.${step.id}`, async () => {
+@@ -819,7 +819,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+   }: {
+     workflowId: string;
+     runId: string;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     executionContext: ExecutionContext;
+   }) {
+     await this.inngestStep.run(
+@@ -859,17 +859,17 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+     entry: { type: 'conditional'; steps: StepFlowEntry[]; conditions: ExecuteFunction<any, any, any, any>[] };
+     prevStep: StepFlowEntry;
+     prevOutput: any;
+-    stepResults: Record<string, StepResult<any>>;
++    stepResults: Record<string, StepResult<any, any, any, any>>;
+     resume?: {
+       steps: string[];
+-      stepResults: Record<string, StepResult<any>>;
++      stepResults: Record<string, StepResult<any, any, any, any>>;
+       resumePayload: any;
+       resumePath: number[];
+     };
+     executionContext: ExecutionContext;
+     emitter: { emit: (event: string, data: any) => Promise<void> };
+     runtimeContext: RuntimeContext;
+-  }): Promise<StepResult<any>> {
++  }): Promise<StepResult<any, any, any, any>> {
+     let execResults: any;
+     const truthyIndexes = (
+       await Promise.all(
+@@ -909,7 +909,7 @@ export class InngestExecutionEngine extends DefaultExecutionEngine {
+     ).filter((index: any): index is number => index !== null);
+ 
+     const stepsToRun = entry.steps.filter((_, index) => truthyIndexes.includes(index));
+-    const results: StepResult<any>[] = await Promise.all(
++    const results: StepResult<any, any, any, any>[] = await Promise.all(
+       stepsToRun.map((step, index) =>
+         this.executeEntry({
+           workflowId,

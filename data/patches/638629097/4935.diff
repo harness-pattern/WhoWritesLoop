@@ -1,0 +1,36 @@
+diff --git a/tests/basic/test_commands.py b/tests/basic/test_commands.py
+index 47b8832dc42..406e928ebf2 100644
+--- a/tests/basic/test_commands.py
++++ b/tests/basic/test_commands.py
+@@ -536,7 +536,7 @@ def test_cmd_tokens_output(self):
+             io = InputOutput(pretty=False, fancy_input=False, yes=False)
+             from aider.coders import Coder
+ 
+-            coder = Coder.create(Model("claude-3-5-sonnet-20240620"), None, io)
++            coder = Coder.create(Model("claude-sonnet-4-6"), None, io)
+             print(coder.get_announcements())
+             commands = Commands(io, coder)
+ 
+@@ -924,7 +924,7 @@ def test_cmd_read_only_with_image_file(self):
+             self.assertEqual(len(coder.abs_read_only_fnames), 0)
+ 
+             # Test with vision model
+-            vision_model = Model("gpt-4-vision-preview")
++            vision_model = Model("gpt-4o")
+             vision_coder = Coder.create(vision_model, None, io)
+             vision_commands = Commands(io, vision_coder)
+ 
+diff --git a/tests/basic/test_models.py b/tests/basic/test_models.py
+index 025f93fca2a..aaa5f5c86df 100644
+--- a/tests/basic/test_models.py
++++ b/tests/basic/test_models.py
+@@ -43,9 +43,6 @@ def test_max_context_tokens(self):
+         model = Model("gpt-4")
+         self.assertEqual(model.info["max_input_tokens"], 8 * 1024)
+ 
+-        model = Model("gpt-4-32k")
+-        self.assertEqual(model.info["max_input_tokens"], 32 * 1024)
+-
+         model = Model("gpt-4-0613")
+         self.assertEqual(model.info["max_input_tokens"], 8 * 1024)
+ 

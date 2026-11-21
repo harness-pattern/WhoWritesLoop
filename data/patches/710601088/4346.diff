@@ -1,0 +1,233 @@
+diff --git a/lib/crewai/src/crewai/cli/create_crew.py b/lib/crewai/src/crewai/cli/create_crew.py
+index e4d84e8bc9..3a8ba9991a 100644
+--- a/lib/crewai/src/crewai/cli/create_crew.py
++++ b/lib/crewai/src/crewai/cli/create_crew.py
+@@ -13,6 +13,9 @@
+ from crewai.cli.utils import copy_template, load_env_vars, write_env_file
+ 
+ 
++RESERVED_CREW_NAMES = frozenset({"run_crew", "train", "replay", "test", "run_with_trigger"})
++
++
+ def create_folder_structure(name, parent_folder=None):
+     import keyword
+     import re
+@@ -46,6 +49,11 @@ def create_folder_structure(name, parent_folder=None):
+             f"Project name '{name}' would generate folder name '{folder_name}' which is a reserved Python keyword"
+         )
+ 
++    if folder_name in RESERVED_CREW_NAMES:
++        raise ValueError(
++            f"Project name '{name}' would generate folder name '{folder_name}' which conflicts with a reserved script name in pyproject.toml. Please choose a different name."
++        )
++
+     if not folder_name.isidentifier():
+         raise ValueError(
+             f"Project name '{name}' would generate invalid Python module name '{folder_name}'"
+diff --git a/lib/crewai/src/crewai/cli/create_flow.py b/lib/crewai/src/crewai/cli/create_flow.py
+index ec68611b5d..9fb7146e39 100644
+--- a/lib/crewai/src/crewai/cli/create_flow.py
++++ b/lib/crewai/src/crewai/cli/create_flow.py
+@@ -1,15 +1,27 @@
+ from pathlib import Path
++import re
+ 
+ import click
+ 
+ from crewai.telemetry import Telemetry
+ 
+ 
++RESERVED_FLOW_NAMES = frozenset({"kickoff", "run_crew", "plot", "run_with_trigger"})
++
++
+ def create_flow(name):
+     """Create a new flow."""
+     folder_name = name.replace(" ", "_").replace("-", "_").lower()
++    folder_name = re.sub(r"[^a-zA-Z0-9_]", "", folder_name)
+     class_name = name.replace("_", " ").replace("-", " ").title().replace(" ", "")
+ 
++    if folder_name in RESERVED_FLOW_NAMES:
++        click.secho(
++            f"Error: Project name '{name}' would generate folder name '{folder_name}' which conflicts with a reserved script name in pyproject.toml. Please choose a different name.",
++            fg="red",
++        )
++        return
++
+     click.secho(f"Creating flow {folder_name}...", fg="green", bold=True)
+ 
+     project_root = Path(folder_name)
+diff --git a/lib/crewai/tests/cli/test_create_crew.py b/lib/crewai/tests/cli/test_create_crew.py
+index 638be9b5d4..345e05cebf 100644
+--- a/lib/crewai/tests/cli/test_create_crew.py
++++ b/lib/crewai/tests/cli/test_create_crew.py
+@@ -6,7 +6,11 @@
+ 
+ import pytest
+ from click.testing import CliRunner
+-from crewai.cli.create_crew import create_crew, create_folder_structure
++from crewai.cli.create_crew import (
++    RESERVED_CREW_NAMES,
++    create_crew,
++    create_folder_structure,
++)
+ 
+ 
+ @pytest.fixture
+@@ -280,7 +284,7 @@ def test_create_folder_structure_folder_name_validation():
+         valid_cases = [
+             ("hello-world/", "hello_world"),
+             ("my.project/", "myproject"),
+-            ("test@123/", "test123"),
++            ("check@123/", "check123"),
+             ("valid_name/", "valid_name"),
+         ]
+ 
+@@ -328,3 +332,33 @@ def test_env_vars_are_uppercased_in_env_file(
+     env_file_path = crew_path / ".env"
+     content = env_file_path.read_text()
+     assert "MODEL=" in content
++
++
++def test_create_folder_structure_rejects_reserved_crew_names():
++    """Test that reserved script names from pyproject.toml are rejected."""
++    with tempfile.TemporaryDirectory() as temp_dir:
++        for reserved_name in RESERVED_CREW_NAMES:
++            with pytest.raises(
++                ValueError, match="conflicts with a reserved script name"
++            ):
++                create_folder_structure(reserved_name, parent_folder=temp_dir)
++
++            with pytest.raises(
++                ValueError, match="conflicts with a reserved script name"
++            ):
++                create_folder_structure(
++                    reserved_name.replace("_", "-"), parent_folder=temp_dir
++                )
++
++
++def test_create_folder_structure_rejects_test_name():
++    """Test that 'test' name is rejected as it conflicts with pyproject.toml scripts."""
++    with tempfile.TemporaryDirectory() as temp_dir:
++        with pytest.raises(ValueError, match="conflicts with a reserved script name"):
++            create_folder_structure("test", parent_folder=temp_dir)
++
++        with pytest.raises(ValueError, match="conflicts with a reserved script name"):
++            create_folder_structure("Test", parent_folder=temp_dir)
++
++        with pytest.raises(ValueError, match="conflicts with a reserved script name"):
++            create_folder_structure("TEST", parent_folder=temp_dir)
+diff --git a/lib/crewai/tests/cli/test_create_flow.py b/lib/crewai/tests/cli/test_create_flow.py
+new file mode 100644
+index 0000000000..fb4e2b26b2
+--- /dev/null
++++ b/lib/crewai/tests/cli/test_create_flow.py
+@@ -0,0 +1,109 @@
++import shutil
++import tempfile
++from pathlib import Path
++from unittest import mock
++
++import pytest
++from click.testing import CliRunner
++
++from crewai.cli.create_flow import RESERVED_FLOW_NAMES, create_flow
++
++
++@pytest.fixture
++def runner():
++    return CliRunner()
++
++
++def test_create_flow_rejects_reserved_flow_names(runner):
++    """Test that reserved script names from pyproject.toml are rejected."""
++    with tempfile.TemporaryDirectory() as temp_dir:
++        original_cwd = Path.cwd()
++        try:
++            import os
++
++            os.chdir(temp_dir)
++
++            for reserved_name in RESERVED_FLOW_NAMES:
++                result = runner.invoke(
++                    mock.MagicMock(), [], catch_exceptions=False, obj=None
++                )
++
++                create_flow(reserved_name)
++
++                folder_path = Path(temp_dir) / reserved_name
++                assert not folder_path.exists(), (
++                    f"Folder should not be created for reserved name: {reserved_name}"
++                )
++
++        finally:
++            import os
++
++            os.chdir(original_cwd)
++
++
++def test_create_flow_rejects_kickoff_name():
++    """Test that 'kickoff' name is rejected as it conflicts with pyproject.toml scripts."""
++    with tempfile.TemporaryDirectory() as temp_dir:
++        original_cwd = Path.cwd()
++        try:
++            import os
++
++            os.chdir(temp_dir)
++
++            create_flow("kickoff")
++
++            folder_path = Path(temp_dir) / "kickoff"
++            assert not folder_path.exists(), (
++                "Folder should not be created for reserved name: kickoff"
++            )
++
++        finally:
++            import os
++
++            os.chdir(original_cwd)
++
++
++def test_create_flow_rejects_plot_name():
++    """Test that 'plot' name is rejected as it conflicts with pyproject.toml scripts."""
++    with tempfile.TemporaryDirectory() as temp_dir:
++        original_cwd = Path.cwd()
++        try:
++            import os
++
++            os.chdir(temp_dir)
++
++            create_flow("plot")
++
++            folder_path = Path(temp_dir) / "plot"
++            assert not folder_path.exists(), (
++                "Folder should not be created for reserved name: plot"
++            )
++
++        finally:
++            import os
++
++            os.chdir(original_cwd)
++
++
++def test_create_flow_allows_valid_names():
++    """Test that valid names are allowed."""
++    with tempfile.TemporaryDirectory() as temp_dir:
++        original_cwd = Path.cwd()
++        try:
++            import os
++
++            os.chdir(temp_dir)
++
++            with mock.patch("crewai.cli.create_flow.Telemetry"):
++                create_flow("my_valid_flow")
++
++                folder_path = Path(temp_dir) / "my_valid_flow"
++                assert folder_path.exists(), "Folder should be created for valid name"
++
++                if folder_path.exists():
++                    shutil.rmtree(folder_path)
++
++        finally:
++            import os
++
++            os.chdir(original_cwd)

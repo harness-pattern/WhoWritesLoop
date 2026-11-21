@@ -1,0 +1,2110 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 0f01fcde5530..86959e7ba527 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,6 +1,6 @@
+ # AGENTS Instructions
+ 
+-goose is an AI agent framework in Rust with CLI and Electron desktop interfaces.
++goose is an AI agent framework in Rust with a CLI, a desktop (Electron) GUI, and a terminal (Ink) TUI. The Rust core exposes itself over the **Agent Client Protocol (ACP)**; every frontend is an ACP client talking to the same `goose` binary.
+ 
+ ## Setup
+ ```bash
+@@ -12,106 +12,160 @@ cargo build
+ 
+ ### Build
+ ```bash
+-cargo build                   # debug
+-cargo build --release         # release  
+-just release-binary           # release binary
++cargo build                          # debug
++cargo build --release                # release
++just release-binary                  # release binary, copied to ui/desktop/src/bin
++just copy-binary [BUILD_MODE]        # copy target/<mode>/goose into the desktop app
+ ```
+ 
+ ### Test
+ ```bash
+-cargo test                   # all tests
+-cargo test -p goose          # specific crate
+-cargo test --package goose --test mcp_integration_test
+-just record-mcp-tests        # record MCP
++cargo test                                                  # workspace
++cargo test -p goose                                         # one crate
++cargo test --package goose --test mcp_integration_test      # one test
++just record-mcp-tests                                       # record MCP fixtures
+ ```
+ 
+-### Lint/Format
++### Lint / format
+ ```bash
+ cargo fmt
+ cargo clippy --all-targets -- -D warnings
++just check-everything                # fmt + clippy + UI lint
+ ```
+ 
+ ### UI
+ ```bash
+-just run-ui                  # start desktop
++just run-ui              # builds release binary, launches Electron desktop
++just run-ui-only         # skip Rust build; use whatever binary is already staged
++just run-server          # run `goose serve` (ACP over HTTP/WS) on :3000
+ cd ui/desktop && pnpm run typecheck
+-cd ui/desktop && pnpm test   # test UI
++cd ui/desktop && pnpm test
++cd ui/text && pnpm start # Ink terminal UI against released binary
+ ```
+ 
+-## Structure
++## Repository map
++
+ ```
+ crates/
+-├── goose              # core logic
+-├── goose-acp-macros   # ACP proc macros
+-├── goose-cli          # CLI entry
+-├── goose-mcp          # MCP extensions
+-├── goose-test         # test utilities
+-└── goose-test-support # test helpers
+-
+-ui/desktop/            # Electron app
++├── goose                    # core: agent loop, ACP server, sessions, providers glue,
++│                              recipes, scheduler, security, context mgmt
++├── goose-acp-macros         # proc macros for ACP request/notification wiring
++├── goose-cli                # `goose` binary: subcommands, TUI session, ACP serve
++├── goose-download-manager   # background downloads (models, extensions)
++├── goose-local-inference    # llama.cpp / MLX local model backends
++├── goose-mcp                # bundled MCP servers: developer, memory, tutorial,
++│                              computercontroller, autovisualiser, peekaboo
++├── goose-provider-types     # provider trait + shared types (messages, tools, usage)
++├── goose-providers          # concrete providers: anthropic, openai, google,
++│                              ollama, databricks, snowflake, openai_compatible…
++├── goose-sdk                # embeddable SDK + optional uniffi bindings (py/kotlin)
++├── goose-sdk-types          # shared types for the SDK surface
++├── goose-test / -support    # integration test harness and fixtures
++
++ui/
++├── desktop                  # Electron + React GUI (the "Goose Desktop" app)
++├── text                     # Ink React TUI (goose-tui, ACP client)
++├── sdk                      # TypeScript SDK, generated from ACP schema
++├── goose-binary             # per-platform prebuilt binary packages
++└── install-link-generator   # deeplink installer helper
++
++documentation/               # docusaurus site (goose-docs.ai)
++examples/                    # runnable demos
++evals/                       # eval harness
++scripts/, services/, workflow_recipes/, recipe-scanner/
+ ```
+ 
+-## Development Loop
++### Entry points
++- **CLI binary** — `crates/goose-cli/src/main.rs` → `cli.rs` (clap subcommands)
++- **Agent loop** — `crates/goose/src/agents/agent.rs` (`Agent`, `AgentEvent`)
++- **ACP server** — `crates/goose/src/acp/` (`server/`, `server_factory.rs`, `transport/`)
++- **Bundled MCP servers** — `crates/goose-mcp/src/*/` behind `mcp_server_runner`
++- **Desktop main process** — `ui/desktop/src/main.ts` (Electron; spawns `goose serve`)
++- **Desktop renderer** — `ui/desktop/src/App.tsx` and `ui/desktop/src/acp/`
++- **Terminal UI** — `ui/text/src/tui.tsx` (spawns `goose acp` over stdio)
++
++## Key CLI subcommands
++
++`goose <cmd>` — see `crates/goose-cli/src/cli.rs`:
++- `session` (alias `s`) — interactive TUI chat, resume, export/import, diagnostics
++- `run` — non-interactive: execute an instruction file, stdin, or recipe
++- `acp` — run as an ACP agent over **stdio** (used by the Ink TUI and editors)
++- `serve` — run ACP over **HTTP + WebSocket** (used by the desktop app)
++- `mcp <server>` — expose one of the bundled MCP servers on stdio
++- `configure` / `info` / `doctor` — setup, config dump, health check
++- `recipe` — validate / open / deeplink / list recipes
++- `schedule` — cron jobs (add/list/remove/run-now/sessions)
++- `gateway` — pairing + remote gateway (telegram bridge, etc.)
++- `plugin`, `skills`, `project`, `term`, `update` — auxiliary tooling
++
++## Core concepts
++
++- **Agent** — orchestrates one turn: send messages to a `Provider`, receive tool calls, run them through `ExtensionManager`, stream `AgentEvent`s back. Handles retries, permission prompts, compaction, subagents.
++- **Provider** — pluggable LLM backend implementing the trait in `goose-provider-types/src/base.rs`. All concrete providers live in `crates/goose-providers/src/`.
++- **Extension / MCP** — capabilities are exposed as MCP servers. Built-ins live in `crates/goose-mcp`; external ones are spawned as subprocesses or connected over stdio/http via `mcp_client.rs`. `ExtensionManager` (in `crates/goose/src/agents/extension_manager.rs`) is the registry.
++- **ACP (Agent Client Protocol)** — the wire protocol every frontend uses. Two transports:
++  - **stdio** (`goose acp`) — for the Ink TUI, editors, tests
++  - **HTTP+WebSocket** (`goose serve`) — for the desktop app; auth via `GOOSE_SERVER__SECRET_KEY`
++- **Session** — persisted conversation state; managed by `SessionManager` (`crates/goose/src/session/session_manager.rs`). Types include chat, run, subagent.
++- **Recipe** — a declarative agent config (prompt, tools, settings). Loaded via `crates/goose/src/recipe/` and CLI helpers in `crates/goose-cli/src/recipes/`.
++- **Scheduler** — cron-driven recipe runs. `SchedulerTrait` in `crates/goose/src/scheduler_trait.rs`.
++- **Security / permissions** — `crates/goose/src/security/` (adversary + egress inspectors) and `crates/goose/src/permission/` (permission judge for tool calls).
++- **Context management** — automatic compaction and token budgeting in `crates/goose/src/context_mgmt/`.
++- **Skills / hints / hooks** — user-authored guidance loaded from `.goosehints`, skill dirs, and lifecycle hooks (`crates/goose/src/hooks/`, `skills/`, `hints/`).
++- **Subagents** — nested agent runs (`agents/subagent_handler.rs`, `subagent_execution_tool/`).
++
++## Frontends in one paragraph each
++
++**Desktop (`ui/desktop`)** — Electron main process (`main.ts`) spawns `goose serve` on a random loopback port with a generated secret key, tracks it via `GooseServeLeaseRegistry`, and the React renderer (`App.tsx` + `src/acp/*`) connects over WebSocket. Uses `@aaif/goose-sdk` (`ui/sdk`) for the typed ACP client. Routes are hash-based; the main views are Hub, Pair, Sessions, Schedules, Settings. Built-in extension defaults live in `ui/desktop/src/built-in-extensions.json`.
++
++**Terminal UI (`ui/text`)** — Ink + React. `tui.tsx` spawns `goose acp` over stdio (binary resolved from `GOOSE_BINARY` or the pinned `@aaif/goose-binary-*` package) and renders a chat UI. Constraints: Ink cannot clip — see `AGENTS.md` in `ui/text/` (and the Ink notes in this file's history) for layout rules.
++
++**CLI TUI (`crates/goose-cli/src/session/`)** — the classic `goose session` interactive prompt. Uses cliclack for prompts, ratatui/console for rendering; not the same code as `ui/text`.
++
++## Development loop
+ ```bash
+ # 1. source bin/activate-hermit
+ # 2. Make changes
+ # 3. cargo fmt
+ ```
+ 
+-### Run these only if the user has asked you to build/test your changes:
+-```
+-# 1. cargo build
+-# 2. cargo test -p <crate>
+-# 3. cargo clippy --all-targets -- -D warnings
++Run these only when the user asks you to build/test:
++```bash
++cargo build
++cargo test -p <crate>
++cargo clippy --all-targets -- -D warnings
+ ```
+ 
+ ## Rules
+ 
+-- Test: Prefer tests/ folder, e.g. crates/goose/tests/
+-- Test: When adding features, update goose-self-test.yaml, rebuild, then run `goose run --recipe goose-self-test.yaml` to validate
+-- Error: Use anyhow::Result
+-- Provider: Implement Provider trait see providers/base.rs
+-- MCP: Extensions in crates/goose-mcp/
+-- UI Desktop: Use ACP SDK types or local `src/types/*` types. Do not import generated OpenAPI types/client code from `ui/desktop/src/api`
+-
+-## Code Quality
+-
+-- Comments: Write self-documenting code - prefer clear names over comments
+-- Comments: Never add comments that restate what code does
+-- Comments: Only comment for complex algorithms, non-obvious business logic, or "why" not "what"
+-- Simplicity: Don't make things optional that don't need to be - the compiler will enforce
+-- Simplicity: Booleans should default to false, not be optional
+-- Errors: Don't add error context that doesn't add useful information (e.g., `.context("Failed to X")` when error already says it failed)
+-- Simplicity: Avoid overly defensive code - trust Rust's type system
+-- Logging: Clean up existing logs, don't add more unless for errors or security events
+-
+-## Ink / Terminal UI (ui/text)
+-
+-- Ink renders React to a fixed character grid — not a browser. Content that exceeds a Box's dimensions is NOT clipped; it visually overflows into neighboring cells and breaks the layout.
+-
+-- Ink-Text: Never use `wrap="wrap"` inside a fixed-height Box — wrapped text can exceed the Box height and bleed into adjacent components. Use `wrap="truncate"` and pre-truncate the string to fit the available character budget (lines × width).
+-  
+-- Ink-Layout: When changing card/cell dimensions, always recalculate how much content fits. Account for borders (2 chars), padding, margins, and sibling elements when computing the
+-remaining space for dynamic text.
+-  
+-- Ink-Overflow: Ink has no `overflow: hidden`. The only way to prevent overflow is to ensure content never exceeds the container size — truncate text, limit list items, or cap height.
+-  
+-- Ink-FlexGrow: Avoid `flexGrow={1}` on text containers inside fixed-height cards — the text will try to fill available space but Ink won't clip it if it exceeds the boundary.
+-  
+-- Ink-HeightBudget: When computing how many rows/items fit vertically, count EVERY line used by headers, footers, margins, borders, and scroll indicators. Under-reserving vertical space (e.g., `height - 8` when chrome actually uses 16 lines) causes Ink to squeeze out margins between items, making borders collapse. Always audit the actual line count.
+-  
+-- Ink-TrailingMargin: Don't apply `marginBottom` to the last item in a list — it wastes a line and can push content out of the container. Use conditional margins or container `gap`.
++- Tests: prefer `crates/<crate>/tests/` over inline `#[cfg(test)]` when the surface is public
++- Tests: when adding features, update `goose-self-test.yaml`, rebuild, then `goose run --recipe goose-self-test.yaml` to validate
++- Errors: `anyhow::Result` at boundaries, `thiserror` for typed errors
++- Providers: implement the `Provider` trait in `goose-provider-types/src/base.rs`
++- MCP: new extensions go in `crates/goose-mcp/`
++- UI Desktop: use ACP SDK types (`@aaif/goose-sdk`) or local `src/types/*`. Do **not** import generated OpenAPI code from `ui/desktop/src/api`.
++
++## Code quality
++
++- Self-documenting names beat comments; comment only "why", never "what"
++- Don't make things optional when the compiler can enforce them; booleans default to `false`, not `Option<bool>`
++- Skip decorative error context (`.context("Failed to X")` when the underlying error already says so)
++- Trust the type system — avoid defensive branches
++- Prune logs; only add for real errors or security events
++
++## Ink / terminal UI rules (`ui/text`)
++
++- Ink does not clip. Overflowing text bleeds into neighbouring cells.
++- Never `wrap="wrap"` inside a fixed-height Box; use `wrap="truncate"` and pre-truncate to `lines × width`.
++- Account for borders (2), padding, margins, and siblings when computing available space.
++- Avoid `flexGrow={1}` on text containers inside fixed-height cards.
++- Audit every line of chrome when computing the height budget.
++- Don't apply `marginBottom` to the last item; use `gap` on the container.
+ 
+ ## Never
+ 
+-- Never: Recreate `ui/desktop/src/api` or add `@hey-api/openapi-ts` to `ui/desktop`
+-- Cargo.toml: For human-authored dependency changes, use `cargo add` instead of manually editing dependency entries unless there is a specific reason not to.
+-- Cargo.toml: Automated dependency bump PRs are exempt; when manual edits are necessary, keep `Cargo.lock` consistent.
+-- Never: Skip cargo fmt
+-- Never: Merge without running clippy
+-- Never: Comment self-evident operations (`// Initialize`, `// Return result`), getters/setters, constructors, or standard Rust idioms
+-
+-## Entry Points
+-- CLI: crates/goose-cli/src/main.rs
+-- UI: ui/desktop/src/main.ts
+-- Agent: crates/goose/src/agents/agent.rs
++- Recreate `ui/desktop/src/api` or add `@hey-api/openapi-ts` to `ui/desktop`
++- Manually edit `Cargo.toml` dependency entries for human-authored changes — use `cargo add` (automated bump PRs exempt; keep `Cargo.lock` consistent)
++- Skip `cargo fmt`
++- Merge without clippy
++- Comment self-evident operations, getters/setters, constructors, or standard Rust idioms
+diff --git a/Cargo.lock b/Cargo.lock
+index f138041ecf35..950f50b763ad 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -681,6 +681,31 @@ dependencies = [
+  "uuid",
+ ]
+ 
++[[package]]
++name = "aws-sdk-bedrock"
++version = "1.147.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "75d3c618102c25c68449a15a696420c26728c4bc67294ab7ea62e5b9898e277d"
++dependencies = [
++ "arc-swap",
++ "aws-credential-types",
++ "aws-runtime",
++ "aws-smithy-async",
++ "aws-smithy-http 0.63.6",
++ "aws-smithy-json",
++ "aws-smithy-observability 0.2.6",
++ "aws-smithy-runtime",
++ "aws-smithy-runtime-api",
++ "aws-smithy-types",
++ "aws-types",
++ "bytes",
++ "fastrand",
++ "http 0.2.12",
++ "http 1.4.2",
++ "regex-lite",
++ "tracing",
++]
++
+ [[package]]
+ name = "aws-sdk-bedrockruntime"
+ version = "1.135.0"
+@@ -4919,6 +4944,7 @@ dependencies = [
+  "async-trait",
+  "aws-config",
+  "aws-lc-rs",
++ "aws-sdk-bedrock",
+  "aws-sdk-bedrockruntime",
+  "aws-sdk-sagemakerruntime",
+  "aws-smithy-types",
+@@ -4996,6 +5022,7 @@ dependencies = [
+  "serde_urlencoded",
+  "serde_yaml",
+  "serial_test",
++ "sha1",
+  "sha2 0.11.0",
+  "shell-words",
+  "shellexpand",
+diff --git a/crates/goose-cli/src/cli.rs b/crates/goose-cli/src/cli.rs
+index 427dd8035171..3f66ea7feff7 100644
+--- a/crates/goose-cli/src/cli.rs
++++ b/crates/goose-cli/src/cli.rs
+@@ -704,6 +704,61 @@ enum GatewayCommand {
+     },
+ }
+ 
++#[derive(Subcommand, Debug, Clone)]
++enum AuthCommand {
++    /// Configure AWS SSO (IAM Identity Center) and switch Goose to Amazon Bedrock.
++    #[command(
++        name = "aws-sso",
++        about = "Sign in to AWS SSO (Identity Center) and configure Bedrock"
++    )]
++    AwsSso {
++        /// AWS SSO start URL, e.g. https://<your-org>.awsapps.com/start.
++        /// Falls back to GOOSE_AWS_SSO_START_URL.
++        #[arg(long)]
++        start_url: Option<String>,
++
++        /// Region hosting your AWS Identity Center instance. Defaults to us-east-1.
++        /// Falls back to GOOSE_AWS_SSO_REGION.
++        #[arg(long)]
++        sso_region: Option<String>,
++
++        /// Region to use when calling Bedrock at inference time. Defaults to sso-region.
++        /// Falls back to GOOSE_AWS_BEDROCK_REGION.
++        #[arg(long)]
++        bedrock_region: Option<String>,
++
++        /// Default model to set for the Bedrock provider.
++        #[arg(long)]
++        model: Option<String>,
++
++        /// Emit newline-delimited JSON events on stdout instead of pretty output.
++        /// Used by the desktop app to drive the sign-in modal.
++        #[arg(long)]
++        json: bool,
++    },
++}
++
++async fn handle_auth_subcommand(cmd: AuthCommand) -> Result<()> {
++    match cmd {
++        AuthCommand::AwsSso {
++            start_url,
++            sso_region,
++            bedrock_region,
++            model,
++            json,
++        } => {
++            crate::commands::auth::handle_aws_sso(
++                start_url,
++                sso_region,
++                bedrock_region,
++                model,
++                json,
++            )
++            .await
++        }
++    }
++}
++
+ #[derive(Subcommand)]
+ enum PluginCommand {
+     /// Install a plugin from a git repository URL
+@@ -819,6 +874,9 @@ enum Command {
+     #[command(about = "Check that your Goose setup is working")]
+     Doctor {},
+ 
++    #[command(about = "Authenticate goose against a cloud provider", subcommand)]
++    Auth(AuthCommand),
++
+     /// Manage system prompts and behaviors
+     #[command(about = "Run one of the mcp servers bundled with goose")]
+     Mcp {
+@@ -1338,6 +1396,7 @@ fn get_command_name(command: &Option<Command>) -> &'static str {
+     match command {
+         Some(Command::Configure {}) => "configure",
+         Some(Command::Doctor {}) => "doctor",
++        Some(Command::Auth(_)) => "auth",
+         Some(Command::Info { .. }) => "info",
+         Some(Command::Mcp { .. }) => "mcp",
+         Some(Command::Acp { .. }) => "acp",
+@@ -2226,6 +2285,7 @@ pub async fn cli() -> anyhow::Result<()> {
+         }
+         Some(Command::Configure {}) => handle_configure().await,
+         Some(Command::Doctor {}) => crate::commands::doctor::handle_doctor().await,
++        Some(Command::Auth(cmd)) => handle_auth_subcommand(cmd).await,
+         Some(Command::Info { verbose, check }) => handle_info(verbose, check).await,
+         Some(Command::Mcp { server }) => handle_mcp_command(server).await,
+         Some(Command::Acp { builtins }) => goose::acp::server::run(builtins).await,
+diff --git a/crates/goose-cli/src/commands/auth.rs b/crates/goose-cli/src/commands/auth.rs
+new file mode 100644
+index 000000000000..5abf029fcc2c
+--- /dev/null
++++ b/crates/goose-cli/src/commands/auth.rs
+@@ -0,0 +1,161 @@
++use anyhow::{anyhow, Result};
++use console::style;
++use serde::Serialize;
++
++use goose::providers::aws_sso::{
++    run_end_to_end, DeviceAuth, SsoSummary, DEFAULT_PROFILE_NAME, DEFAULT_SESSION_NAME,
++};
++use goose::providers::bedrock::BEDROCK_DEFAULT_MODEL;
++
++/// Newline-delimited JSON events emitted on stdout when `--json` is set. The
++/// desktop app reads these; humans get the pretty branch instead.
++#[derive(Serialize)]
++#[serde(tag = "type", rename_all = "snake_case")]
++enum Event<'a> {
++    Prompt {
++        verification_uri_complete: &'a str,
++        user_code: &'a str,
++        expires_in: i32,
++    },
++    Success {
++        summary: &'a SsoSummary,
++    },
++    Error {
++        message: String,
++    },
++}
++
++fn emit(event: &Event<'_>) {
++    if let Ok(line) = serde_json::to_string(event) {
++        println!("{}", line);
++    }
++}
++
++pub async fn handle_aws_sso(
++    start_url: Option<String>,
++    sso_region: Option<String>,
++    bedrock_region: Option<String>,
++    model: Option<String>,
++    json: bool,
++) -> Result<()> {
++    let result = run(start_url, sso_region, bedrock_region, model, json).await;
++    if let Err(ref e) = result {
++        if json {
++            emit(&Event::Error {
++                message: format!("{:#}", e),
++            });
++        }
++    }
++    result
++}
++
++async fn run(
++    start_url: Option<String>,
++    sso_region: Option<String>,
++    bedrock_region: Option<String>,
++    model: Option<String>,
++    json: bool,
++) -> Result<()> {
++    let start_url = start_url
++        .or_else(|| std::env::var("GOOSE_AWS_SSO_START_URL").ok())
++        .ok_or_else(|| {
++            anyhow!(
++                "AWS SSO start URL required. Pass --start-url https://<your-org>.awsapps.com/start \
++                 or set GOOSE_AWS_SSO_START_URL"
++            )
++        })?;
++    let sso_region = sso_region
++        .or_else(|| std::env::var("GOOSE_AWS_SSO_REGION").ok())
++        .unwrap_or_else(|| "us-east-1".to_string());
++    let bedrock_region = bedrock_region
++        .or_else(|| std::env::var("GOOSE_AWS_BEDROCK_REGION").ok())
++        .unwrap_or_else(|| sso_region.clone());
++    let model = model.unwrap_or_else(|| BEDROCK_DEFAULT_MODEL.to_string());
++
++    if !json {
++        println!(
++            "{}",
++            style("Signing in to AWS SSO — a browser tab will open.").bold()
++        );
++    }
++
++    let summary = run_end_to_end(&start_url, &sso_region, &bedrock_region, &model, |device| {
++        on_prompt(device, json)
++    })
++    .await?;
++
++    if json {
++        emit(&Event::Success { summary: &summary });
++    } else {
++        print_summary(&summary);
++    }
++    Ok(())
++}
++
++fn on_prompt(device: &DeviceAuth, json: bool) {
++    if json {
++        emit(&Event::Prompt {
++            verification_uri_complete: &device.verification_uri_complete,
++            user_code: &device.user_code,
++            expires_in: device.expires_in,
++        });
++        return;
++    }
++    println!();
++    println!(
++        "  {} {}",
++        style("Verification URL:").bold(),
++        style(&device.verification_uri_complete).cyan()
++    );
++    println!(
++        "  {} {}",
++        style("Confirmation code:").bold(),
++        style(&device.user_code).yellow()
++    );
++    println!();
++    let _ = webbrowser::open(&device.verification_uri_complete);
++    println!("Waiting for you to complete sign-in…");
++}
++
++fn print_summary(summary: &SsoSummary) {
++    println!();
++    println!("{}", style("✓ AWS SSO configured").green().bold());
++    println!("  profile:        {}", summary.profile_name);
++    println!("  session:        {}", summary.session_name);
++    println!(
++        "  account:        {}{}",
++        summary.account_id,
++        summary
++            .account_name
++            .as_deref()
++            .map(|n| format!(" ({})", n))
++            .unwrap_or_default()
++    );
++    println!("  role:           {}", summary.role_name);
++    println!("  bedrock region: {}", summary.bedrock_region);
++    println!("  session expires: {}", summary.expires_at);
++    if !summary.other_accounts.is_empty() {
++        println!(
++            "  {} other account(s) available: {}",
++            summary.other_accounts.len(),
++            summary.other_accounts.join(", ")
++        );
++        println!(
++            "  edit ~/.aws/config [profile {}] to switch.",
++            DEFAULT_PROFILE_NAME
++        );
++    }
++    if !summary.other_roles.is_empty() {
++        println!(
++            "  {} other role(s) available in this account: {}",
++            summary.other_roles.len(),
++            summary.other_roles.join(", ")
++        );
++    }
++    println!();
++    println!(
++        "Goose is now configured to use Amazon Bedrock via AWS SSO (session '{}').",
++        DEFAULT_SESSION_NAME
++    );
++    println!("Run `goose session` or open the desktop app to start chatting.");
++}
+diff --git a/crates/goose-cli/src/commands/mod.rs b/crates/goose-cli/src/commands/mod.rs
+index d687e13e668d..cd09a3d336bc 100644
+--- a/crates/goose-cli/src/commands/mod.rs
++++ b/crates/goose-cli/src/commands/mod.rs
+@@ -1,3 +1,4 @@
++pub mod auth;
+ pub mod configure;
+ pub mod doctor;
+ pub mod gateway;
+diff --git a/crates/goose/Cargo.toml b/crates/goose/Cargo.toml
+index 3db210b88490..787c6a493ecf 100644
+--- a/crates/goose/Cargo.toml
++++ b/crates/goose/Cargo.toml
+@@ -34,8 +34,10 @@ aws-providers = [
+     "dep:aws-config",
+     "dep:aws-smithy-types",
+     "dep:aws-sdk-bedrockruntime",
++    "dep:aws-sdk-bedrock",
+     "dep:aws-sdk-sagemakerruntime",
+     "dep:smithy-transport-reqwest",
++    "dep:sha1",
+ ]
+ cuda = ["local-inference", "candle-core/cuda", "candle-nn/cuda", "goose-providers/cuda"]
+ vulkan = ["local-inference", "goose-providers/vulkan"]
+@@ -154,8 +156,12 @@ sqlx = { version = "0.8.5", default-features = false, features = [
+ 
+ # For Bedrock provider (optional, behind "aws-providers" feature)
+ aws-config = { version = "1.8", default-features = false, features = ["credentials-process", "rt-tokio", "sso", "behavior-version-latest"], optional = true }
++# SHA-1 filename hashing for the AWS SSO token cache (~/.aws/sso/cache/<sha1>.json)
++sha1 = { version = "0.10", default-features = false, optional = true }
+ aws-smithy-types = { version = "1.3.4", default-features = false, features = ["rt-tokio"], optional = true }
+ aws-sdk-bedrockruntime = { version = "1.132", default-features = false, features = ["rt-tokio"], optional = true }
++# Bedrock control plane — used to enumerate the models the user actually has access to.
++aws-sdk-bedrock = { version = "1.126", default-features = false, features = ["rt-tokio"], optional = true }
+ smithy-transport-reqwest = { version = "0.1", default-features = false, features = ["http2", "system-proxy"], optional = true }
+ 
+ # For SageMaker TGI provider (optional, behind "aws-providers" feature)
+diff --git a/crates/goose/src/acp/server/config.rs b/crates/goose/src/acp/server/config.rs
+index 5ce4324ca6d7..fc1dc2131f10 100644
+--- a/crates/goose/src/acp/server/config.rs
++++ b/crates/goose/src/acp/server/config.rs
+@@ -217,7 +217,11 @@ impl GooseAcpAgent {
+         if let Some(model_id) = model_id.as_deref() {
+             let model_exists = entry.default_model == model_id
+                 || entry.models.iter().any(|model| model.id == model_id)
+-                || (provider_id == "local" && local_inference_model_exists(model_id)?);
++                || (provider_id == "local" && local_inference_model_exists(model_id)?)
++                // Bedrock model IDs are opaque strings owned by AWS; the SDK validates
++                // them and returns a specific error at invoke time. A local whitelist
++                // just blocks every model AWS ships after we cut a release.
++                || provider_id == "aws_bedrock";
+             if !model_exists {
+                 return Err(agent_client_protocol::Error::invalid_params().data(format!(
+                     "Model '{model_id}' is not available for provider '{provider_id}'"
+diff --git a/crates/goose/src/posthog.rs b/crates/goose/src/posthog.rs
+index 66a34b61aabd..b4e9dbfb126c 100644
+--- a/crates/goose/src/posthog.rs
++++ b/crates/goose/src/posthog.rs
+@@ -41,14 +41,9 @@ pub fn get_telemetry_choice() -> Option<bool> {
+ 
+ /// Check if telemetry is enabled.
+ ///
+-/// Returns false if:
+-/// - GOOSE_TELEMETRY_OFF environment variable is set to "1" or "true"
+-/// - GOOSE_TELEMETRY_ENABLED config value is set to false
+-/// - User has not made a telemetry choice yet (opt-in required)
+-///
+-/// Returns true only if the user has explicitly opted in.
++/// Hard-wired off for this Goose distribution — we never send analytics.
+ pub fn is_telemetry_enabled() -> bool {
+-    get_telemetry_choice().unwrap_or(false)
++    false
+ }
+ 
+ // ============================================================================
+diff --git a/crates/goose/src/providers/aws_sso.rs b/crates/goose/src/providers/aws_sso.rs
+new file mode 100644
+index 000000000000..e92083c993c8
+--- /dev/null
++++ b/crates/goose/src/providers/aws_sso.rs
+@@ -0,0 +1,579 @@
++//! AWS SSO (IAM Identity Center) device-authorization flow.
++//!
++//! Mirrors what `aws sso configure` + `aws sso login` do, so that the existing
++//! Bedrock provider can pick up short-lived SSO credentials via
++//! `aws_config::defaults()` with zero extra plumbing.
++//!
++//! Uses public AWS SSO OIDC + Portal HTTP APIs directly via `reqwest` — the
++//! OIDC endpoints (`register_client`, `start_device_authorization`, `token`)
++//! and the Portal endpoints (`/federation/accounts`, `/federation/roles`)
++//! accept anonymous JSON and don't need SigV4, so we skip pulling in the
++//! `aws-sdk-ssooidc` / `aws-sdk-sso` crates.
++//!
++//! The Okta login happens transparently in the browser during the AWS-hosted
++//! sign-in step; nothing in this module knows about Okta.
++//!
++//! POC scope (marked with `ponytail:` comments where deliberate):
++//! - single account / single role auto-pick; if the user has multiple, we
++//!   pick the first and log the alternatives.
++//! - no refresh_token support; the 8-hour SSO session expires and the user
++//!   re-runs the flow.
++
++use anyhow::{anyhow, Context, Result};
++use chrono::{DateTime, Duration as ChronoDuration, Utc};
++use serde::{Deserialize, Serialize};
++use sha1::{Digest, Sha1};
++use std::fs;
++use std::path::{Path, PathBuf};
++use std::time::Duration;
++use tokio::time::sleep;
++
++pub const DEFAULT_PROFILE_NAME: &str = "goose";
++pub const DEFAULT_SESSION_NAME: &str = "goose";
++const CLIENT_NAME: &str = "goose";
++const CLIENT_TYPE: &str = "public";
++const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
++const SCOPES: &[&str] = &["sso:account:access"];
++
++fn oidc_endpoint(region: &str) -> String {
++    format!("https://oidc.{}.amazonaws.com", region)
++}
++
++fn portal_endpoint(region: &str) -> String {
++    format!("https://portal.sso.{}.amazonaws.com", region)
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct RegisteredClient {
++    #[serde(rename = "clientId")]
++    pub client_id: String,
++    #[serde(rename = "clientSecret")]
++    pub client_secret: String,
++    #[serde(rename = "clientSecretExpiresAt")]
++    pub client_secret_expires_at: i64,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct DeviceAuth {
++    #[serde(rename = "deviceCode")]
++    pub device_code: String,
++    #[serde(rename = "userCode")]
++    pub user_code: String,
++    #[serde(rename = "verificationUri")]
++    pub verification_uri: String,
++    #[serde(rename = "verificationUriComplete")]
++    pub verification_uri_complete: String,
++    #[serde(rename = "expiresIn")]
++    pub expires_in: i32,
++    pub interval: i32,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct AccessToken {
++    #[serde(rename = "accessToken")]
++    pub access_token: String,
++    #[serde(rename = "expiresIn")]
++    pub expires_in: i32,
++    #[serde(rename = "tokenType")]
++    pub token_type: String,
++}
++
++#[derive(Debug, Deserialize)]
++struct OidcError {
++    error: String,
++    #[serde(default, rename = "error_description")]
++    _error_description: Option<String>,
++}
++
++#[derive(Debug, Clone, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub struct SsoSummary {
++    pub profile_name: String,
++    pub session_name: String,
++    pub start_url: String,
++    pub sso_region: String,
++    pub bedrock_region: String,
++    pub account_id: String,
++    pub account_name: Option<String>,
++    pub role_name: String,
++    pub other_accounts: Vec<String>,
++    pub other_roles: Vec<String>,
++    pub expires_at: DateTime<Utc>,
++}
++
++pub async fn register_client(region: &str) -> Result<RegisteredClient> {
++    let url = format!("{}/client/register", oidc_endpoint(region));
++    let body = serde_json::json!({
++        "clientName": CLIENT_NAME,
++        "clientType": CLIENT_TYPE,
++        "scopes": SCOPES,
++    });
++    let resp = reqwest::Client::new()
++        .post(&url)
++        .json(&body)
++        .send()
++        .await
++        .context("register_client request failed")?;
++    if !resp.status().is_success() {
++        let status = resp.status();
++        let text = resp.text().await.unwrap_or_default();
++        return Err(anyhow!("register_client HTTP {}: {}", status, text));
++    }
++    resp.json::<RegisteredClient>()
++        .await
++        .context("register_client response parse failed")
++}
++
++pub async fn start_device_authorization(
++    region: &str,
++    start_url: &str,
++    client: &RegisteredClient,
++) -> Result<DeviceAuth> {
++    let url = format!("{}/device_authorization", oidc_endpoint(region));
++    let body = serde_json::json!({
++        "clientId": client.client_id,
++        "clientSecret": client.client_secret,
++        "startUrl": start_url,
++    });
++    let resp = reqwest::Client::new()
++        .post(&url)
++        .json(&body)
++        .send()
++        .await
++        .context("start_device_authorization request failed")?;
++    if !resp.status().is_success() {
++        let status = resp.status();
++        let text = resp.text().await.unwrap_or_default();
++        return Err(anyhow!(
++            "start_device_authorization HTTP {}: {}",
++            status,
++            text
++        ));
++    }
++    resp.json::<DeviceAuth>()
++        .await
++        .context("start_device_authorization response parse failed")
++}
++
++/// Poll `create_token` until the user completes the browser sign-in.
++/// Handles RFC 8628 `authorization_pending` / `slow_down` semantics.
++pub async fn poll_for_token(
++    region: &str,
++    client: &RegisteredClient,
++    device: &DeviceAuth,
++) -> Result<AccessToken> {
++    let url = format!("{}/token", oidc_endpoint(region));
++    let mut interval = Duration::from_secs(device.interval.max(1) as u64);
++    let deadline = std::time::Instant::now() + Duration::from_secs(device.expires_in.max(1) as u64);
++    let http = reqwest::Client::new();
++
++    loop {
++        if std::time::Instant::now() >= deadline {
++            return Err(anyhow!("AWS SSO device code expired before authorization"));
++        }
++        sleep(interval).await;
++
++        let body = serde_json::json!({
++            "clientId": client.client_id,
++            "clientSecret": client.client_secret,
++            "grantType": DEVICE_GRANT,
++            "deviceCode": device.device_code,
++        });
++        let resp = http.post(&url).json(&body).send().await?;
++        let status = resp.status();
++        if status.is_success() {
++            return Ok(resp.json::<AccessToken>().await?);
++        }
++        let text = resp.text().await.unwrap_or_default();
++        let err: OidcError = serde_json::from_str(&text).unwrap_or(OidcError {
++            error: "unknown_error".into(),
++            _error_description: Some(text.clone()),
++        });
++        match err.error.as_str() {
++            "authorization_pending" => continue,
++            "slow_down" => interval += Duration::from_secs(5),
++            other => return Err(anyhow!("token endpoint error: {} ({})", other, text)),
++        }
++    }
++}
++
++#[derive(Debug, Clone, Deserialize)]
++struct AccountListResponse {
++    #[serde(default, rename = "accountList")]
++    account_list: Vec<Account>,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++pub struct Account {
++    #[serde(rename = "accountId")]
++    pub account_id: String,
++    #[serde(default, rename = "accountName")]
++    pub account_name: Option<String>,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++struct RoleListResponse {
++    #[serde(default, rename = "roleList")]
++    role_list: Vec<Role>,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++pub struct Role {
++    #[serde(rename = "roleName")]
++    pub role_name: String,
++}
++
++pub async fn list_accounts(region: &str, access_token: &str) -> Result<Vec<Account>> {
++    let url = format!("{}/assignment/accounts", portal_endpoint(region));
++    let resp = reqwest::Client::new()
++        .get(&url)
++        .header("x-amz-sso_bearer_token", access_token)
++        .send()
++        .await?;
++    if !resp.status().is_success() {
++        let status = resp.status();
++        let text = resp.text().await.unwrap_or_default();
++        return Err(anyhow!("list_accounts HTTP {}: {}", status, text));
++    }
++    Ok(resp.json::<AccountListResponse>().await?.account_list)
++}
++
++pub async fn list_roles(region: &str, access_token: &str, account_id: &str) -> Result<Vec<Role>> {
++    let url = format!(
++        "{}/assignment/roles?account_id={}",
++        portal_endpoint(region),
++        urlencoding::encode(account_id)
++    );
++    let resp = reqwest::Client::new()
++        .get(&url)
++        .header("x-amz-sso_bearer_token", access_token)
++        .send()
++        .await?;
++    if !resp.status().is_success() {
++        let status = resp.status();
++        let text = resp.text().await.unwrap_or_default();
++        return Err(anyhow!("list_roles HTTP {}: {}", status, text));
++    }
++    Ok(resp.json::<RoleListResponse>().await?.role_list)
++}
++
++fn aws_dir() -> Result<PathBuf> {
++    let mut p = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
++    p.push(".aws");
++    Ok(p)
++}
++
++/// AWS SDK cache filename convention: sha1(session_name) hex + ".json".
++pub fn sso_cache_filename(session_name: &str) -> String {
++    let mut hasher = Sha1::new();
++    hasher.update(session_name.as_bytes());
++    format!("{:x}.json", hasher.finalize())
++}
++
++/// Cache file the AWS SDKs read to vend short-lived credentials.
++#[derive(Debug, Serialize)]
++struct SsoTokenCache<'a> {
++    #[serde(rename = "startUrl")]
++    start_url: &'a str,
++    region: &'a str,
++    #[serde(rename = "accessToken")]
++    access_token: &'a str,
++    #[serde(rename = "expiresAt")]
++    expires_at: String,
++    #[serde(rename = "clientId")]
++    client_id: &'a str,
++    #[serde(rename = "clientSecret")]
++    client_secret: &'a str,
++}
++
++pub fn write_sso_token_cache(
++    session_name: &str,
++    start_url: &str,
++    sso_region: &str,
++    token: &AccessToken,
++    client: &RegisteredClient,
++) -> Result<(PathBuf, DateTime<Utc>)> {
++    write_sso_token_cache_in(
++        &aws_dir()?,
++        session_name,
++        start_url,
++        sso_region,
++        token,
++        client,
++    )
++}
++
++fn write_sso_token_cache_in(
++    aws_base: &Path,
++    session_name: &str,
++    start_url: &str,
++    sso_region: &str,
++    token: &AccessToken,
++    client: &RegisteredClient,
++) -> Result<(PathBuf, DateTime<Utc>)> {
++    let mut cache_dir = aws_base.to_path_buf();
++    cache_dir.push("sso");
++    cache_dir.push("cache");
++    fs::create_dir_all(&cache_dir).context("create ~/.aws/sso/cache")?;
++    let cache_file = cache_dir.join(sso_cache_filename(session_name));
++
++    let expires_at = Utc::now() + ChronoDuration::seconds(token.expires_in as i64);
++    let payload = SsoTokenCache {
++        start_url,
++        region: sso_region,
++        access_token: &token.access_token,
++        expires_at: expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
++        client_id: &client.client_id,
++        client_secret: &client.client_secret,
++    };
++    atomic_write(&cache_file, &serde_json::to_vec_pretty(&payload)?)
++        .with_context(|| format!("write {}", cache_file.display()))?;
++
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::PermissionsExt;
++        let _ = fs::set_permissions(&cache_file, fs::Permissions::from_mode(0o600));
++    }
++    Ok((cache_file, expires_at))
++}
++
++/// Idempotently upsert `[sso-session <name>]` and `[profile <name>]` blocks in
++/// `~/.aws/config`. Existing profiles/sessions with the same name are replaced;
++/// unrelated content is preserved verbatim.
++pub fn write_aws_config_profile(
++    profile_name: &str,
++    session_name: &str,
++    start_url: &str,
++    sso_region: &str,
++    account_id: &str,
++    role_name: &str,
++    bedrock_region: &str,
++) -> Result<PathBuf> {
++    write_aws_config_profile_in(
++        &aws_dir()?,
++        profile_name,
++        session_name,
++        start_url,
++        sso_region,
++        account_id,
++        role_name,
++        bedrock_region,
++    )
++}
++
++#[allow(clippy::too_many_arguments)]
++fn write_aws_config_profile_in(
++    aws_base: &Path,
++    profile_name: &str,
++    session_name: &str,
++    start_url: &str,
++    sso_region: &str,
++    account_id: &str,
++    role_name: &str,
++    bedrock_region: &str,
++) -> Result<PathBuf> {
++    let dir = aws_base.to_path_buf();
++    fs::create_dir_all(&dir).context("create ~/.aws")?;
++    let path = dir.join("config");
++    let existing = fs::read_to_string(&path).unwrap_or_default();
++
++    let session_header = format!("[sso-session {}]", session_name);
++    let profile_header = if profile_name == "default" {
++        "[default]".to_string()
++    } else {
++        format!("[profile {}]", profile_name)
++    };
++
++    let stripped = strip_ini_sections(&existing, &[&session_header, &profile_header]);
++    let mut out = stripped.trim_end().to_string();
++    if !out.is_empty() {
++        out.push_str("\n\n");
++    }
++    out.push_str(&format!(
++        "{header}\nsso_start_url = {start_url}\nsso_region = {sso_region}\nsso_registration_scopes = {scopes}\n\n{profile_header}\nsso_session = {session_name}\nsso_account_id = {account_id}\nsso_role_name = {role_name}\nregion = {bedrock_region}\n",
++        header = session_header,
++        start_url = start_url,
++        sso_region = sso_region,
++        scopes = SCOPES.join(","),
++        profile_header = profile_header,
++        session_name = session_name,
++        account_id = account_id,
++        role_name = role_name,
++        bedrock_region = bedrock_region,
++    ));
++    atomic_write(&path, out.as_bytes()).with_context(|| format!("write {}", path.display()))?;
++    Ok(path)
++}
++
++/// Write bytes to `path` atomically by staging to `<path>.tmp` and renaming.
++/// `rename` is atomic on the same filesystem, so an interrupted write can
++/// never leave a half-updated `~/.aws/config`.
++fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
++    let tmp = path.with_extension(
++        path.extension()
++            .map(|e| format!("{}.tmp", e.to_string_lossy()))
++            .unwrap_or_else(|| "tmp".to_string()),
++    );
++    fs::write(&tmp, bytes)?;
++    fs::rename(&tmp, path)
++}
++
++/// Remove entire INI sections (header + body until next header) matching any
++/// header in `headers`. Blank lines between kept sections are collapsed.
++fn strip_ini_sections(input: &str, headers: &[&str]) -> String {
++    let mut out = String::with_capacity(input.len());
++    let mut skip = false;
++    for line in input.lines() {
++        let trimmed = line.trim();
++        if trimmed.starts_with('[') && trimmed.ends_with(']') {
++            skip = headers.contains(&trimmed);
++        }
++        if !skip {
++            out.push_str(line);
++            out.push('\n');
++        }
++    }
++    out
++}
++
++/// Point Goose at the new profile so `BedrockProvider::from_env` picks it up.
++pub fn save_goose_config(
++    profile_name: &str,
++    bedrock_region: &str,
++    default_model: &str,
++) -> Result<()> {
++    use crate::config::providers::set_active_provider;
++    use crate::config::Config;
++    use crate::providers::bedrock::BEDROCK_PROVIDER_NAME;
++
++    let config = Config::global();
++    config.set_param("AWS_PROFILE", profile_name)?;
++    config.set_param("AWS_REGION", bedrock_region)?;
++    set_active_provider(config, BEDROCK_PROVIDER_NAME, default_model)?;
++    Ok(())
++}
++
++/// End-to-end: register client, do device flow, pick account/role, write
++/// `~/.aws/*` files and Goose config. `on_prompt` fires once the verification
++/// URI is known so the caller can open a browser / display the user code.
++pub async fn run_end_to_end<F>(
++    start_url: &str,
++    sso_region: &str,
++    bedrock_region: &str,
++    default_model: &str,
++    on_prompt: F,
++) -> Result<SsoSummary>
++where
++    F: FnOnce(&DeviceAuth),
++{
++    let client = register_client(sso_region).await?;
++    let device = start_device_authorization(sso_region, start_url, &client).await?;
++    on_prompt(&device);
++    let token = poll_for_token(sso_region, &client, &device).await?;
++
++    let accounts = list_accounts(sso_region, &token.access_token).await?;
++    if accounts.is_empty() {
++        return Err(anyhow!(
++            "AWS SSO returned no accounts for this user — check permission sets"
++        ));
++    }
++    // ponytail: single-account auto-pick; multi-account picker if users demand it.
++    let account = &accounts[0];
++    let other_accounts = accounts
++        .iter()
++        .skip(1)
++        .map(|a| a.account_id.clone())
++        .collect::<Vec<_>>();
++
++    let roles = list_roles(sso_region, &token.access_token, &account.account_id).await?;
++    if roles.is_empty() {
++        return Err(anyhow!(
++            "AWS SSO returned no roles for account {}",
++            account.account_id
++        ));
++    }
++    // ponytail: single-role auto-pick; multi-role picker if users demand it.
++    let role = &roles[0];
++    let other_roles = roles
++        .iter()
++        .skip(1)
++        .map(|r| r.role_name.clone())
++        .collect::<Vec<_>>();
++
++    let (_cache_path, expires_at) =
++        write_sso_token_cache(DEFAULT_SESSION_NAME, start_url, sso_region, &token, &client)?;
++    write_aws_config_profile(
++        DEFAULT_PROFILE_NAME,
++        DEFAULT_SESSION_NAME,
++        start_url,
++        sso_region,
++        &account.account_id,
++        &role.role_name,
++        bedrock_region,
++    )?;
++    save_goose_config(DEFAULT_PROFILE_NAME, bedrock_region, default_model)?;
++
++    Ok(SsoSummary {
++        profile_name: DEFAULT_PROFILE_NAME.into(),
++        session_name: DEFAULT_SESSION_NAME.into(),
++        start_url: start_url.into(),
++        sso_region: sso_region.into(),
++        bedrock_region: bedrock_region.into(),
++        account_id: account.account_id.clone(),
++        account_name: account.account_name.clone(),
++        role_name: role.role_name.clone(),
++        other_accounts,
++        other_roles,
++        expires_at,
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn sso_cache_filename_matches_aws_sdk_convention() {
++        // sha1("goose") — verified against `printf goose | shasum -a 1`.
++        assert_eq!(
++            sso_cache_filename("goose"),
++            "4f7f358cd341d703b4a502b2d0f53db07823b501.json"
++        );
++    }
++
++    #[test]
++    fn strip_ini_sections_removes_only_named_sections() {
++        let input = "[default]\nregion = us-east-1\n\n[profile goose]\nold = value\n\n[profile other]\nkeep = me\n";
++        let out = strip_ini_sections(input, &["[profile goose]"]);
++        assert!(out.contains("[default]"));
++        assert!(out.contains("[profile other]"));
++        assert!(out.contains("keep = me"));
++        assert!(!out.contains("[profile goose]"));
++        assert!(!out.contains("old = value"));
++    }
++
++    #[test]
++    fn write_aws_config_profile_preserves_unrelated_content() {
++        let tmp = tempfile::tempdir().unwrap();
++        let aws = tmp.path().join(".aws");
++        fs::create_dir_all(&aws).unwrap();
++        fs::write(aws.join("config"), "[profile keepme]\nregion = eu-west-1\n").unwrap();
++
++        let path = write_aws_config_profile_in(
++            &aws,
++            "goose",
++            "goose",
++            "https://d-x.awsapps.com/start",
++            "us-east-1",
++            "111122223333",
++            "PowerUserAccess",
++            "us-east-1",
++        )
++        .unwrap();
++        let contents = fs::read_to_string(&path).unwrap();
++        assert!(contents.contains("[profile keepme]"));
++        assert!(contents.contains("[sso-session goose]"));
++        assert!(contents.contains("[profile goose]"));
++        assert!(contents.contains("sso_account_id = 111122223333"));
++    }
++}
+diff --git a/crates/goose/src/providers/bedrock.rs b/crates/goose/src/providers/bedrock.rs
+index ca1759168566..a68e4932dcb1 100644
+--- a/crates/goose/src/providers/bedrock.rs
++++ b/crates/goose/src/providers/bedrock.rs
+@@ -67,6 +67,8 @@ pub struct BedrockProvider {
+     #[serde(skip)]
+     http_client: reqwest::Client,
+     #[serde(skip)]
++    sdk_config: Option<aws_config::SdkConfig>,
++    #[serde(skip)]
+     mantle_base_url: Option<String>,
+ }
+ 
+@@ -178,10 +180,55 @@ impl BedrockProvider {
+             region: resolved_region,
+             bearer_token,
+             http_client: reqwest::Client::new(),
++            sdk_config: Some(sdk_config),
+             mantle_base_url: None,
+         })
+     }
+ 
++    /// Enumerate models the current identity can actually see: cross-region
++    /// inference profiles (what Claude / recent models are invoked as) plus
++    /// on-demand foundation models. Returns an empty vec if credentials aren't
++    /// available; callers fall back to the static list.
++    async fn fetch_supported_models_from_aws(&self) -> Result<Vec<String>, anyhow::Error> {
++        let Some(sdk_config) = self.sdk_config.as_ref() else {
++            return Ok(Vec::new());
++        };
++        let client = aws_sdk_bedrock::Client::new(sdk_config);
++        let mut ids: Vec<String> = Vec::new();
++
++        // Cross-region inference profiles — the IDs that actually work at invoke
++        // time for the majority of chat models. Failures here should not kill
++        // the enumeration; some roles have foundation model access without
++        // profile-listing permissions.
++        match client.list_inference_profiles().send().await {
++            Ok(resp) => {
++                for p in resp.inference_profile_summaries() {
++                    ids.push(p.inference_profile_id.clone());
++                }
++            }
++            Err(e) => tracing::debug!("list_inference_profiles failed: {}", e),
++        }
++
++        match client.list_foundation_models().send().await {
++            Ok(resp) => {
++                for m in resp.model_summaries() {
++                    let supports_on_demand = m
++                        .inference_types_supported()
++                        .iter()
++                        .any(|t| t.as_str() == "ON_DEMAND");
++                    if supports_on_demand {
++                        ids.push(m.model_id.clone());
++                    }
++                }
++            }
++            Err(e) => tracing::debug!("list_foundation_models failed: {}", e),
++        }
++
++        ids.sort();
++        ids.dedup();
++        Ok(ids)
++    }
++
+     async fn create_client_with_credentials(sdk_config: &aws_config::SdkConfig) -> Result<Client> {
+         sdk_config
+             .credentials_provider()
+@@ -733,7 +780,23 @@ impl Provider for BedrockProvider {
+     }
+ 
+     async fn fetch_supported_models(&self) -> Result<Vec<String>, ProviderError> {
+-        Ok(BEDROCK_KNOWN_MODELS.iter().map(|s| s.to_string()).collect())
++        // Ask Bedrock's control plane which models the current AWS SSO / IAM
++        // identity can actually see. Falls back to the static list if the
++        // caller's role is missing `bedrock:ListInferenceProfiles` /
++        // `bedrock:ListFoundationModels`, or the API is temporarily unreachable.
++        // ponytail: no caching — each call is 2 round trips (~200ms). Add TTL
++        // cache if the model picker becomes chatty.
++        match self.fetch_supported_models_from_aws().await {
++            Ok(models) if !models.is_empty() => Ok(models),
++            Ok(_) => Ok(BEDROCK_KNOWN_MODELS.iter().map(|s| s.to_string()).collect()),
++            Err(e) => {
++                tracing::warn!(
++                    "Bedrock model enumeration failed, falling back to static list: {}",
++                    e
++                );
++                Ok(BEDROCK_KNOWN_MODELS.iter().map(|s| s.to_string()).collect())
++            }
++        }
+     }
+ 
+     async fn stream(
+@@ -930,6 +993,7 @@ mod tests {
+                 region: None,
+                 bearer_token: None,
+                 http_client: reqwest::Client::new(),
++                sdk_config: None,
+                 mantle_base_url: None,
+             },
+             ModelConfig {
+@@ -1102,6 +1166,7 @@ mod tests {
+             region: Some("us-east-1".to_string()),
+             bearer_token: Some("test-token".to_string()),
+             http_client: reqwest::Client::new(),
++            sdk_config: None,
+             mantle_base_url: Some(format!("{}/openai/v1/responses", server.uri())),
+         };
+ 
+diff --git a/crates/goose/src/providers/mod.rs b/crates/goose/src/providers/mod.rs
+index e0f0a8e64b9d..3c5209ee2116 100644
+--- a/crates/goose/src/providers/mod.rs
++++ b/crates/goose/src/providers/mod.rs
+@@ -8,6 +8,8 @@ pub mod api_client {
+     pub use goose_providers::api_client::*;
+ }
+ pub mod avian;
++#[cfg(feature = "aws-providers")]
++pub mod aws_sso;
+ pub mod azure;
+ pub mod azureauth;
+ pub mod base;
+diff --git a/ui/desktop/src/App.tsx b/ui/desktop/src/App.tsx
+index 334e93e6918f..2cf00528c89f 100644
+--- a/ui/desktop/src/App.tsx
++++ b/ui/desktop/src/App.tsx
+@@ -15,7 +15,6 @@ import RecipeParamsModalContainer from './components/RecipeParamsModalContainer'
+ import { isRecipeParamsCancelled } from './acp/errors';
+ import { toast, ToastContainer } from 'react-toastify';
+ import AnnouncementModal from './components/AnnouncementModal';
+-import TelemetryConsentPrompt from './components/TelemetryConsentPrompt';
+ import OnboardingGuard from './components/onboarding/OnboardingGuard';
+ import { createSession } from './sessions';
+ import { acpListSessions, acpDeleteSession } from './acp/sessions';
+@@ -685,7 +684,6 @@ export default function App() {
+             <AppInner />
+           </HashRouter>
+           <AnnouncementModal />
+-          <TelemetryConsentPrompt />
+         </ModelAndProviderProvider>
+       </FeaturesProvider>
+     </ThemeProvider>
+diff --git a/ui/desktop/src/acp/providers.ts b/ui/desktop/src/acp/providers.ts
+index e9e967f40564..06a7e8781bc1 100644
+--- a/ui/desktop/src/acp/providers.ts
++++ b/ui/desktop/src/acp/providers.ts
+@@ -8,6 +8,7 @@ import type {
+ } from '@aaif/goose-sdk';
+ import type { ProviderDetails, ThinkingEffort, UpdateCustomProviderRequest } from '../types/providers';
+ import { getAcpClient } from './acpConnection';
++import { VISIBLE_PROVIDERS } from '../distroConfig';
+ 
+ export type { CanonicalModelInfoDto, ProviderSecretDto };
+ 
+@@ -32,7 +33,10 @@ function updateRequestToCreate(
+ export async function acpListProviderDetails(): Promise<ProviderDetails[]> {
+   const client = await getAcpClient();
+   const { entries } = await client.goose.providersList_unstable({});
+-  return entries.map((entry) => ({
++  const visibleProviders = new Set(VISIBLE_PROVIDERS);
++  return entries
++    .filter((entry) => visibleProviders.has(entry.providerId))
++    .map((entry) => ({
+     name: entry.providerId,
+     is_configured: entry.configured,
+     provider_type: entry.providerType as ProviderDetails['provider_type'],
+@@ -65,7 +69,29 @@ export async function acpListProviderDetails(): Promise<ProviderDetails[]> {
+ export async function acpListProviderModels(providerId: string) {
+   const client = await getAcpClient();
+   const { entries } = await client.goose.providersList_unstable({ providerIds: [providerId] });
+-  return entries.find((e) => e.providerId === providerId)?.models ?? [];
++  const staticModels = entries.find((e) => e.providerId === providerId)?.models ?? [];
++
++  // Ask the provider to enumerate at runtime (Bedrock lists what the current
++  // AWS SSO identity can invoke). Merge with the static inventory so we keep
++  // context limits / reasoning flags where they're known.
++  try {
++    const { models: runtimeIds } = await client.goose.providersSupportedModelsList_unstable({
++      providerId,
++    });
++    if (runtimeIds.length === 0) return staticModels;
++
++    const byId = new Map(staticModels.map((m) => [m.id, m]));
++    return runtimeIds.map(
++      (id) =>
++        byId.get(id) ?? {
++          id,
++          name: id,
++        }
++    );
++  } catch (err) {
++    console.warn(`providersSupportedModelsList_unstable failed for ${providerId}:`, err);
++    return staticModels;
++  }
+ }
+ 
+ export async function acpListProviderCatalogEntries(
+diff --git a/ui/desktop/src/awsSsoIpc.ts b/ui/desktop/src/awsSsoIpc.ts
+new file mode 100644
+index 000000000000..c841f0046506
+--- /dev/null
++++ b/ui/desktop/src/awsSsoIpc.ts
+@@ -0,0 +1,110 @@
++import { spawn } from 'node:child_process';
++import { BrowserWindow, ipcMain } from 'electron';
++import log from './utils/logger';
++import { findGooseBinaryPath } from './gooseServe';
++import { AWS_SSO_DEFAULTS } from './distroConfig';
++
++export interface AwsSsoStartArgs {
++  startUrl: string;
++  ssoRegion: string;
++  bedrockRegion?: string;
++  model?: string;
++}
++
++/** Newline-delimited JSON events the CLI emits on stdout when `--json` is set. */
++export type AwsSsoEvent =
++  | {
++      type: 'prompt';
++      verification_uri_complete: string;
++      user_code: string;
++      expires_in: number;
++    }
++  | { type: 'success'; summary: Record<string, unknown> }
++  | { type: 'error'; message: string }
++  | { type: 'exit'; code: number | null };
++
++const EVENT_CHANNEL = 'aws-sso:event';
++
++interface RegisterOptions {
++  isPackaged: boolean;
++  resourcesPath: string;
++}
++
++export function registerAwsSsoIpc({ isPackaged, resourcesPath }: RegisterOptions): void {
++  // Hardcoded defaults so the whole team gets one-click sign-in without any
++  // shell / env setup. Environment variables win if set, so branches / other
++  // teams can point elsewhere without rebuilding. See distroConfig.ts.
++  ipcMain.handle('aws-sso:get-defaults', () => ({ ...AWS_SSO_DEFAULTS }));
++
++  ipcMain.handle('aws-sso:start', async (event, args: AwsSsoStartArgs) => {
++    const sender = event.sender;
++    const win = BrowserWindow.fromWebContents(sender);
++    if (!args.startUrl || !args.ssoRegion) {
++      sender.send(EVENT_CHANNEL, {
++        type: 'error',
++        message: 'startUrl and ssoRegion are required',
++      });
++      return { ok: false };
++    }
++
++    let binaryPath: string;
++    try {
++      binaryPath = findGooseBinaryPath({ isPackaged, resourcesPath });
++    } catch (err) {
++      sender.send(EVENT_CHANNEL, {
++        type: 'error',
++        message: `Could not locate the goose binary: ${(err as Error).message}`,
++      });
++      return { ok: false };
++    }
++
++    const cliArgs = [
++      'auth',
++      'aws-sso',
++      '--json',
++      '--start-url',
++      args.startUrl,
++      '--sso-region',
++      args.ssoRegion,
++      '--bedrock-region',
++      args.bedrockRegion ?? args.ssoRegion,
++    ];
++    if (args.model) cliArgs.push('--model', args.model);
++
++    log.info(`[aws-sso] spawning ${binaryPath} ${cliArgs.slice(0, 3).join(' ')} …`);
++    const child = spawn(binaryPath, cliArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
++
++    let stdoutBuf = '';
++    child.stdout.on('data', (chunk: Buffer) => {
++      stdoutBuf += chunk.toString('utf8');
++      let idx: number;
++      while ((idx = stdoutBuf.indexOf('\n')) !== -1) {
++        const line = stdoutBuf.slice(0, idx).trim();
++        stdoutBuf = stdoutBuf.slice(idx + 1);
++        if (!line) continue;
++        try {
++          const parsed = JSON.parse(line) as AwsSsoEvent;
++          sender.send(EVENT_CHANNEL, parsed);
++        } catch {
++          log.warn(`[aws-sso] non-JSON stdout line: ${line}`);
++        }
++      }
++    });
++
++    let stderrBuf = '';
++    child.stderr.on('data', (chunk: Buffer) => {
++      stderrBuf += chunk.toString('utf8');
++    });
++
++    child.on('exit', (code) => {
++      if (stderrBuf.trim()) log.warn(`[aws-sso] stderr: ${stderrBuf.trim()}`);
++      sender.send(EVENT_CHANNEL, { type: 'exit', code });
++      if (code === 0 && win) {
++        // Config is on disk; reload so OnboardingGuard re-reads defaults.
++        win.webContents.reload();
++      }
++    });
++
++    return { ok: true };
++  });
++}
+diff --git a/ui/desktop/src/components/TelemetryConsentPrompt.tsx b/ui/desktop/src/components/TelemetryConsentPrompt.tsx
+deleted file mode 100644
+index 56128077dc20..000000000000
+--- a/ui/desktop/src/components/TelemetryConsentPrompt.tsx
++++ /dev/null
+@@ -1,124 +0,0 @@
+-import { useState, useEffect } from 'react';
+-import { Button } from './ui/button';
+-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
+-import { TELEMETRY_UI_ENABLED } from '../updates';
+-import { useConfig } from './ConfigContext';
+-import {
+-  trackTelemetryPreference,
+-  setTelemetryEnabled as setAnalyticsTelemetryEnabled,
+-} from '../utils/analytics';
+-import PrivacyInfoModal from './onboarding/PrivacyInfoModal';
+-import { defineMessages, useIntl } from '../i18n';
+-
+-const i18n = defineMessages({
+-  heading: {
+-    id: 'telemetryConsentPrompt.heading',
+-    defaultMessage: 'Help improve goose',
+-  },
+-  description: {
+-    id: 'telemetryConsentPrompt.description',
+-    defaultMessage:
+-      'Would you like to share anonymous usage data to help improve goose? We never collect your conversations, code, or personal data.',
+-  },
+-  learnMore: {
+-    id: 'telemetryConsentPrompt.learnMore',
+-    defaultMessage: 'Learn more',
+-  },
+-  optIn: {
+-    id: 'telemetryConsentPrompt.optIn',
+-    defaultMessage: 'Yes, share anonymous usage data',
+-  },
+-  optOut: {
+-    id: 'telemetryConsentPrompt.optOut',
+-    defaultMessage: 'No thanks',
+-  },
+-});
+-
+-const TELEMETRY_CONFIG_KEY = 'GOOSE_TELEMETRY_ENABLED';
+-
+-export default function TelemetryConsentPrompt() {
+-  const intl = useIntl();
+-  const { read, upsert } = useConfig();
+-  const [showPrompt, setShowPrompt] = useState(false);
+-  const [showPrivacyInfo, setShowPrivacyInfo] = useState(false);
+-  const [isSubmitting, setIsSubmitting] = useState(false);
+-
+-  useEffect(() => {
+-    if (!TELEMETRY_UI_ENABLED) return;
+-
+-    (async () => {
+-      try {
+-        const provider = await read('GOOSE_PROVIDER', false);
+-        if (!provider || provider === '') return;
+-
+-        const telemetryValue = await read(TELEMETRY_CONFIG_KEY, false);
+-        if (telemetryValue === null) {
+-          setShowPrompt(true);
+-        }
+-      } catch (error) {
+-        console.error('Failed to check telemetry config:', error);
+-      }
+-    })();
+-  }, [read]);
+-
+-  const handleChoice = async (enabled: boolean) => {
+-    setIsSubmitting(true);
+-    try {
+-      await upsert(TELEMETRY_CONFIG_KEY, enabled, false);
+-      trackTelemetryPreference(enabled, 'modal');
+-      setAnalyticsTelemetryEnabled(enabled);
+-    } catch (error) {
+-      console.error('Failed to save telemetry preference:', error);
+-    } finally {
+-      setShowPrompt(false);
+-      setIsSubmitting(false);
+-    }
+-  };
+-
+-  if (!showPrompt) return null;
+-
+-  return (
+-    <>
+-      <Dialog
+-        open
+-        onOpenChange={(open) => {
+-          if (!open) setShowPrompt(false);
+-        }}
+-      >
+-        <DialogContent className="w-[440px]">
+-          <DialogHeader>
+-            <DialogTitle className="text-center">{intl.formatMessage(i18n.heading)}</DialogTitle>
+-          </DialogHeader>
+-          <p className="text-text-muted text-sm">
+-            {intl.formatMessage(i18n.description)}{' '}
+-            <button
+-              onClick={() => setShowPrivacyInfo(true)}
+-              className="text-blue-600 dark:text-blue-400 hover:underline"
+-            >
+-              {intl.formatMessage(i18n.learnMore)}
+-            </button>
+-          </p>
+-          <DialogFooter className="flex flex-col gap-2 sm:flex-col">
+-            <Button
+-              autoFocus
+-              onClick={() => handleChoice(true)}
+-              disabled={isSubmitting}
+-              className="w-full"
+-            >
+-              {intl.formatMessage(i18n.optIn)}
+-            </Button>
+-            <Button
+-              variant="ghost"
+-              onClick={() => handleChoice(false)}
+-              disabled={isSubmitting}
+-              className="w-full text-text-secondary hover:text-text-primary"
+-            >
+-              {intl.formatMessage(i18n.optOut)}
+-            </Button>
+-          </DialogFooter>
+-        </DialogContent>
+-      </Dialog>
+-      <PrivacyInfoModal isOpen={showPrivacyInfo} onClose={() => setShowPrivacyInfo(false)} />
+-    </>
+-  );
+-}
+diff --git a/ui/desktop/src/components/onboarding/AwsSsoModal.tsx b/ui/desktop/src/components/onboarding/AwsSsoModal.tsx
+new file mode 100644
+index 000000000000..5b7878b8f78e
+--- /dev/null
++++ b/ui/desktop/src/components/onboarding/AwsSsoModal.tsx
+@@ -0,0 +1,260 @@
++import { useEffect, useRef, useState } from 'react';
++import { Cloud, Copy, ExternalLink, Loader2 } from 'lucide-react';
++import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
++import { Button } from '../ui/button';
++
++interface AwsSsoModalProps {
++  open: boolean;
++  onOpenChange: (open: boolean) => void;
++}
++
++type Phase = 'loading' | 'form' | 'awaiting' | 'success' | 'error';
++
++interface PromptState {
++  verificationUri: string;
++  userCode: string;
++}
++
++/**
++ * AWS SSO sign-in modal. Sends form values to the main process, which spawns
++ * `goose auth aws-sso --json` and streams events back over `aws-sso:event`.
++ * On success the main process reloads the window so OnboardingGuard re-reads
++ * the freshly-written provider defaults.
++ */
++export default function AwsSsoModal({ open, onOpenChange }: AwsSsoModalProps) {
++  const [phase, setPhase] = useState<Phase>('loading');
++  const [startUrl, setStartUrl] = useState('');
++  const [ssoRegion, setSsoRegion] = useState('us-east-1');
++  const [bedrockRegion, setBedrockRegion] = useState('');
++  const [prompt, setPrompt] = useState<PromptState | null>(null);
++  const [errorMessage, setErrorMessage] = useState<string | null>(null);
++  const cleanupRef = useRef<(() => void) | null>(null);
++
++  useEffect(() => {
++    if (!open) {
++      cleanupRef.current?.();
++      cleanupRef.current = null;
++      setPhase('loading');
++      setPrompt(null);
++      setErrorMessage(null);
++      return;
++    }
++
++    let cancelled = false;
++    void (async () => {
++      const defaults = await window.electron.awsSsoGetDefaults();
++      if (cancelled) return;
++      if (defaults.startUrl) setStartUrl(defaults.startUrl);
++      if (defaults.ssoRegion) setSsoRegion(defaults.ssoRegion);
++      if (defaults.bedrockRegion) setBedrockRegion(defaults.bedrockRegion);
++
++      // Truly zero-config sign-in: if the team has baked in a start URL + region,
++      // skip the form and go straight to the browser.
++      if (defaults.startUrl && defaults.ssoRegion) {
++        startFlow(defaults.startUrl, defaults.ssoRegion, defaults.bedrockRegion);
++      } else {
++        setPhase('form');
++      }
++    })();
++    return () => {
++      cancelled = true;
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [open]);
++
++  const handleSubmit = (e: React.FormEvent) => {
++    e.preventDefault();
++    if (!startUrl.trim() || !ssoRegion.trim()) return;
++    startFlow(startUrl.trim(), ssoRegion.trim(), bedrockRegion.trim());
++  };
++
++  const startFlow = async (url: string, region: string, bedrock: string) => {
++    setPhase('awaiting');
++    setErrorMessage(null);
++
++    cleanupRef.current = window.electron.onAwsSsoEvent((event) => {
++      switch (event.type) {
++        case 'prompt':
++          setPrompt({
++            verificationUri: String(event.verification_uri_complete),
++            userCode: String(event.user_code),
++          });
++          void window.electron.openExternal(String(event.verification_uri_complete));
++          break;
++        case 'success':
++          setPhase('success');
++          break;
++        case 'error':
++          setErrorMessage(String(event.message ?? 'AWS SSO sign-in failed'));
++          setPhase('error');
++          break;
++        case 'exit':
++          setPhase((current) => {
++            if (current === 'awaiting') {
++              setErrorMessage('Sign-in ended unexpectedly. Please retry.');
++              return 'error';
++            }
++            return current;
++          });
++          break;
++      }
++    });
++
++    try {
++      await window.electron.awsSsoStart({
++        startUrl: url,
++        ssoRegion: region,
++        bedrockRegion: bedrock || region,
++      });
++    } catch (err) {
++      setErrorMessage((err as Error).message);
++      setPhase('error');
++    }
++  };
++
++  const renderBody = () => {
++    if (phase === 'loading') {
++      return (
++        <div className="flex items-center gap-2 text-sm text-text-muted py-8 justify-center">
++          <Loader2 size={16} className="animate-spin" />
++          Loading…
++        </div>
++      );
++    }
++
++    if (phase === 'awaiting' && prompt) {
++      return (
++        <div className="flex flex-col gap-4">
++          <p className="text-sm text-text-muted">
++            A browser tab opened for AWS sign-in. If it didn't, click the link below. Confirm the
++            code shown here matches the one in your browser.
++          </p>
++          <div className="rounded-lg bg-background-muted p-4">
++            <div className="text-xs uppercase tracking-wide text-text-muted mb-1">
++              Confirmation code
++            </div>
++            <div className="flex items-center gap-2">
++              <code className="text-2xl font-mono tracking-widest">{prompt.userCode}</code>
++              <button
++                type="button"
++                onClick={() => navigator.clipboard.writeText(prompt.userCode)}
++                className="text-text-muted hover:text-text-default"
++                title="Copy code"
++              >
++                <Copy size={16} />
++              </button>
++            </div>
++          </div>
++          <button
++            type="button"
++            onClick={() => void window.electron.openExternal(prompt.verificationUri)}
++            className="flex items-center gap-2 text-sm text-blue-400 hover:underline"
++          >
++            <ExternalLink size={14} />
++            Open sign-in page
++          </button>
++          <div className="flex items-center gap-2 text-sm text-text-muted">
++            <Loader2 size={14} className="animate-spin" />
++            Waiting for you to finish signing in…
++          </div>
++        </div>
++      );
++    }
++
++    if (phase === 'awaiting') {
++      return (
++        <div className="flex items-center gap-2 text-sm text-text-muted py-8 justify-center">
++          <Loader2 size={16} className="animate-spin" />
++          Contacting AWS SSO…
++        </div>
++      );
++    }
++
++    if (phase === 'success') {
++      return (
++        <div className="flex flex-col gap-3 py-4 text-sm">
++          <p>Signed in and configured for Bedrock. Reloading…</p>
++        </div>
++      );
++    }
++
++    if (phase === 'error') {
++      return (
++        <div className="flex flex-col gap-3">
++          <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3 text-sm text-red-400">
++            {errorMessage}
++          </div>
++          <Button onClick={() => setPhase('form')} variant="secondary">
++            Try again
++          </Button>
++        </div>
++      );
++    }
++
++    return (
++      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
++        <div>
++          <label className="text-sm font-medium block mb-1" htmlFor="aws-sso-start-url">
++            AWS access portal URL
++          </label>
++          <input
++            id="aws-sso-start-url"
++            type="url"
++            required
++            placeholder="https://your-org.awsapps.com/start"
++            value={startUrl}
++            onChange={(e) => setStartUrl(e.target.value)}
++            className="w-full rounded-md border border-border-default bg-background-default px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
++          />
++          <p className="text-xs text-text-muted mt-1">
++            From your IAM Identity Center dashboard — labelled "AWS access portal URL".
++          </p>
++        </div>
++        <div className="grid grid-cols-2 gap-3">
++          <div>
++            <label className="text-sm font-medium block mb-1" htmlFor="aws-sso-region">
++              Identity Center region
++            </label>
++            <input
++              id="aws-sso-region"
++              type="text"
++              required
++              placeholder="us-east-1"
++              value={ssoRegion}
++              onChange={(e) => setSsoRegion(e.target.value)}
++              className="w-full rounded-md border border-border-default bg-background-default px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
++            />
++          </div>
++          <div>
++            <label className="text-sm font-medium block mb-1" htmlFor="aws-bedrock-region">
++              Bedrock region
++            </label>
++            <input
++              id="aws-bedrock-region"
++              type="text"
++              placeholder="(defaults to Identity Center region)"
++              value={bedrockRegion}
++              onChange={(e) => setBedrockRegion(e.target.value)}
++              className="w-full rounded-md border border-border-default bg-background-default px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
++            />
++          </div>
++        </div>
++        <Button type="submit">Sign in with AWS SSO</Button>
++      </form>
++    );
++  };
++
++  return (
++    <Dialog open={open} onOpenChange={onOpenChange}>
++      <DialogContent className="sm:max-w-[500px]">
++        <DialogHeader>
++          <DialogTitle className="flex items-center gap-2">
++            <Cloud size={18} />
++            Sign in with AWS SSO
++          </DialogTitle>
++        </DialogHeader>
++        {renderBody()}
++      </DialogContent>
++    </Dialog>
++  );
++}
+diff --git a/ui/desktop/src/components/onboarding/ProviderConfigForm.tsx b/ui/desktop/src/components/onboarding/ProviderConfigForm.tsx
+index 4cfd3ccddc1b..ca3a95ba2418 100644
+--- a/ui/desktop/src/components/onboarding/ProviderConfigForm.tsx
++++ b/ui/desktop/src/components/onboarding/ProviderConfigForm.tsx
+@@ -209,6 +209,8 @@ function ApiKeyForm({
+   );
+ }
+ 
++import AwsSsoModal from './AwsSsoModal';
++
+ interface ProviderConfigFormProps {
+   provider: ProviderDetails;
+   onConfigured: OnConfigured;
+@@ -216,10 +218,33 @@ interface ProviderConfigFormProps {
+ 
+ export default function ProviderConfigForm({ provider, onConfigured }: ProviderConfigFormProps) {
+   const [error, setError] = useState<string | null>(null);
++  const [showAwsSsoModal, setShowAwsSsoModal] = useState(false);
+ 
+   const isOAuthProvider = provider.metadata.config_keys.some((key) => key.oauth_flow);
++  const isBedrock = provider.name === 'aws_bedrock';
+ 
+   const renderForm = () => {
++    if (isBedrock) {
++      return (
++        <div className="flex flex-col gap-3">
++          <p className="text-sm text-text-muted">
++            Sign in with your AWS Identity Center account and Goose will configure Bedrock for you.
++            No API keys, no local AWS CLI setup.
++          </p>
++          <Button onClick={() => setShowAwsSsoModal(true)} className="w-full">
++            Sign in with AWS SSO
++          </Button>
++          <details className="text-xs text-text-muted">
++            <summary className="cursor-pointer hover:text-text-default">
++              Advanced: configure with AWS_PROFILE / bearer token
++            </summary>
++            <div className="mt-3">
++              <ApiKeyForm provider={provider} onConfigured={onConfigured} onError={setError} />
++            </div>
++          </details>
++        </div>
++      );
++    }
+     if (isOAuthProvider) {
+       return <OAuthForm provider={provider} onConfigured={onConfigured} onError={setError} />;
+     }
+@@ -245,6 +270,7 @@ export default function ProviderConfigForm({ provider, onConfigured }: ProviderC
+           </div>
+         )}
+       </div>
++      <AwsSsoModal open={showAwsSsoModal} onOpenChange={setShowAwsSsoModal} />
+     </div>
+   );
+ }
+diff --git a/ui/desktop/src/distroConfig.ts b/ui/desktop/src/distroConfig.ts
+new file mode 100644
+index 000000000000..4ff324145a69
+--- /dev/null
++++ b/ui/desktop/src/distroConfig.ts
+@@ -0,0 +1,48 @@
++/**
++ * Distribution-specific constants for this build of Goose.
++ *
++ * Every value that changes per fork lives here. Custom distributions
++ * (see CUSTOM_DISTROS.md) should edit only this file plus a small handful
++ * of assets — the rest of the codebase reads from here.
++ *
++ * Nothing in this file is a secret. Values are visible in the packaged app.
++ */
++
++/**
++ * Defaults for the "Sign in with AWS SSO" flow. When both `startUrl` and
++ * `ssoRegion` are set, the modal skips its form and takes the user straight
++ * to the browser — the one-click sign-in path.
++ *
++ * Environment variables win if set, so a single build can still be pointed
++ * at another Identity Center instance without rebuilding.
++ */
++export interface AwsSsoDefaults {
++  startUrl: string;
++  ssoRegion: string;
++  bedrockRegion: string;
++}
++
++export const AWS_SSO_DEFAULTS: AwsSsoDefaults = {
++  startUrl: process.env.GOOSE_AWS_SSO_START_URL ?? 'https://floatcard.awsapps.com/start',
++  ssoRegion: process.env.GOOSE_AWS_SSO_REGION ?? 'us-east-2',
++  bedrockRegion: process.env.GOOSE_AWS_BEDROCK_REGION ?? 'us-east-2',
++};
++
++/**
++ * Providers surfaced in the tile grid. Every registered Rust provider is
++ * still reachable via config / env; this only controls the UI. Add an id
++ * here to un-hide a tile.
++ */
++export const VISIBLE_PROVIDERS: readonly string[] = [
++  'aws_bedrock',
++  'ollama',
++  'claude-acp', // Claude Code
++  'claude-code', // Claude Code CLI
++  'cursor-agent',
++  'google', // Google Gemini (API Key) — works with AI Studio keys for Workspace users
++  'copilot-acp', // GitHub Copilot CLI
++  'local',
++  'pi-acp',
++  'ollama_cloud',
++  'openrouter',
++];
+diff --git a/ui/desktop/src/main.ts b/ui/desktop/src/main.ts
+index d15ee8013e66..b6ed7a7b3af5 100644
+--- a/ui/desktop/src/main.ts
++++ b/ui/desktop/src/main.ts
+@@ -26,6 +26,7 @@ import path from 'node:path';
+ import os from 'node:os';
+ import { execFileSync, spawn, execFile } from 'child_process';
+ import 'dotenv/config';
++import { registerAwsSsoIpc } from './awsSsoIpc';
+ import { checkBackendStatus } from './backendStatus';
+ import { startGooseServe } from './gooseServe';
+ import { GooseServeLeaseRegistry, type GooseServeLease } from './gooseServeLeaseRegistry';
+@@ -2424,6 +2425,11 @@ async function appMain() {
+ 
+   registerUpdateIpcHandlers();
+ 
++  registerAwsSsoIpc({
++    isPackaged: app.isPackaged,
++    resourcesPath: app.isPackaged ? process.resourcesPath : '',
++  });
++
+   // Handle microphone permission requests
+   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+     console.log('Permission requested:', permission);
+diff --git a/ui/desktop/src/preload.ts b/ui/desktop/src/preload.ts
+index 90b365061225..9ecd2b8cad86 100644
+--- a/ui/desktop/src/preload.ts
++++ b/ui/desktop/src/preload.ts
+@@ -132,6 +132,23 @@ type ElectronAPI = {
+   setSetting: <K extends SettingKey>(key: K, value: Settings[K]) => Promise<void>;
+   getSecretKey: () => Promise<string | null>;
+   getAcpUrl: () => Promise<string | null>;
++  awsSsoStart: (args: {
++    startUrl: string;
++    ssoRegion: string;
++    bedrockRegion?: string;
++    model?: string;
++  }) => Promise<{ ok: boolean }>;
++  awsSsoGetDefaults: () => Promise<{
++    startUrl: string;
++    ssoRegion: string;
++    bedrockRegion: string;
++  }>;
++  onAwsSsoEvent: (
++    callback: (event: {
++      type: 'prompt' | 'success' | 'error' | 'exit';
++      [key: string]: unknown;
++    }) => void
++  ) => () => void;
+   setWakelock: (enable: boolean) => Promise<boolean>;
+   getWakelockState: () => Promise<boolean>;
+   setSpellcheck: (enable: boolean) => Promise<boolean>;
+@@ -254,6 +271,24 @@ const electronAPI: ElectronAPI = {
+   },
+   getSecretKey: () => ipcRenderer.invoke('get-secret-key'),
+   getAcpUrl: () => ipcRenderer.invoke('get-acp-url'),
++  awsSsoStart: (args: {
++    startUrl: string;
++    ssoRegion: string;
++    bedrockRegion?: string;
++    model?: string;
++  }) => ipcRenderer.invoke('aws-sso:start', args),
++  awsSsoGetDefaults: () => ipcRenderer.invoke('aws-sso:get-defaults'),
++  onAwsSsoEvent: (
++    callback: (event: {
++      type: 'prompt' | 'success' | 'error' | 'exit';
++      [key: string]: unknown;
++    }) => void
++  ) => {
++    const listener = (_e: Electron.IpcRendererEvent, payload: unknown) =>
++      callback(payload as Parameters<typeof callback>[0]);
++    ipcRenderer.on('aws-sso:event', listener);
++    return () => ipcRenderer.removeListener('aws-sso:event', listener);
++  },
+   setWakelock: (enable: boolean) => ipcRenderer.invoke('set-wakelock', enable),
+   getWakelockState: () => ipcRenderer.invoke('get-wakelock-state'),
+   setSpellcheck: (enable: boolean) => ipcRenderer.invoke('set-spellcheck', enable),

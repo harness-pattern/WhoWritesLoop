@@ -1,0 +1,81 @@
+diff --git a/aider/io.py b/aider/io.py
+index ed6f22d51ae..2a3dee68979 100644
+--- a/aider/io.py
++++ b/aider/io.py
+@@ -885,6 +885,16 @@ def is_valid_response(text):
+                     # Treat EOF (Ctrl+D) as if the user pressed Enter
+                     res = default
+                     break
++                except (PermissionError, OSError) as err:
++                    # prompt_toolkit may fail creating an asyncio self-pipe
++                    # (e.g. WinError 10013). Fall back to plain input.
++                    self.tool_warning(f"Falling back to plain input: {err}")
++                    self.prompt_session = None
++                    try:
++                        res = input(question)
++                    except EOFError:
++                        res = default
++                        break
+ 
+                 if not res:
+                     res = default
+@@ -955,6 +965,14 @@ def prompt_ask(self, question, default="", subject=None):
+             except EOFError:
+                 # Treat EOF (Ctrl+D) as if the user pressed Enter
+                 res = default
++            except (PermissionError, OSError) as err:
++                # Same Windows/socketpair failure path as confirm_ask.
++                self.tool_warning(f"Falling back to plain input: {err}")
++                self.prompt_session = None
++                try:
++                    res = input(question + " ")
++                except EOFError:
++                    res = default
+ 
+         hist = f"{question.strip()} {res.strip()}"
+         self.append_chat_history(hist, linebreak=True, blockquote=True)
+diff --git a/tests/basic/test_io.py b/tests/basic/test_io.py
+index 270a3c24795..0a32d73f8ef 100644
+--- a/tests/basic/test_io.py
++++ b/tests/basic/test_io.py
+@@ -341,6 +341,40 @@ def test_confirm_ask_allow_never(self, mock_input):
+         self.assertEqual(mock_input.call_count, 2)
+         self.assertNotIn(("Do you want to proceed?", None), io.never_prompts)
+ 
++    @patch("builtins.input", return_value="y")
++    def test_confirm_ask_falls_back_when_prompt_session_raises_permission_error(self, mock_input):
++        """prompt_toolkit can raise PermissionError on Windows socketpair (issue #5695)."""
++        io = InputOutput(pretty=False, fancy_input=False)
++        io.yes = None
++        session = MagicMock()
++        session.prompt.side_effect = PermissionError(
++            "[WinError 10013] An attempt was made to access a socket in a way forbidden by its"
++            " access permissions"
++        )
++        io.prompt_session = session
++
++        result = io.confirm_ask("Add these files to the chat?")
++
++        self.assertTrue(result)
++        session.prompt.assert_called_once()
++        mock_input.assert_called_once()
++        self.assertIsNone(io.prompt_session)
++
++    @patch("builtins.input", return_value="typed answer")
++    def test_prompt_ask_falls_back_when_prompt_session_raises_permission_error(self, mock_input):
++        io = InputOutput(pretty=False, fancy_input=False)
++        io.yes = None
++        session = MagicMock()
++        session.prompt.side_effect = PermissionError("socketpair denied")
++        io.prompt_session = session
++
++        result = io.prompt_ask("Name?", default="fallback")
++
++        self.assertEqual(result, "typed answer")
++        session.prompt.assert_called_once()
++        mock_input.assert_called_once()
++        self.assertIsNone(io.prompt_session)
++
+ 
+ class TestInputOutputMultilineMode(unittest.TestCase):
+     def setUp(self):

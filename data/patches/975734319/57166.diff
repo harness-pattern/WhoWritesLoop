@@ -1,0 +1,382 @@
+diff --git a/infra/console.ts b/infra/console.ts
+index 79d5e077cfac..8ddbc43f14a6 100644
+--- a/infra/console.ts
++++ b/infra/console.ts
+@@ -22,6 +22,8 @@ new sst.cloudflare.Bucket("ZenDataNew")
+ const AWS_SES_ACCESS_KEY_ID = new sst.Secret("AWS_SES_ACCESS_KEY_ID")
+ const AWS_SES_SECRET_ACCESS_KEY = new sst.Secret("AWS_SES_SECRET_ACCESS_KEY")
+ const ENTERPRISE_SALES_INBOX_EMAIL = new sst.Secret("ENTERPRISE_SALES_INBOX_EMAIL")
++// OpenCode API key for Jev spam scoring of enterprise form submissions.
++const ENTERPRISE_SPAM_API_KEY = new sst.Secret("ENTERPRISE_SPAM_API_KEY")
+ 
+ const SALESFORCE_CLIENT_ID = new sst.Secret("SALESFORCE_CLIENT_ID")
+ const SALESFORCE_CLIENT_SECRET = new sst.Secret("SALESFORCE_CLIENT_SECRET")
+@@ -40,6 +42,7 @@ new sst.cloudflare.x.SolidStart("Console", {
+     AWS_SES_ACCESS_KEY_ID,
+     AWS_SES_SECRET_ACCESS_KEY,
+     ENTERPRISE_SALES_INBOX_EMAIL,
++    ENTERPRISE_SPAM_API_KEY,
+     SALESFORCE_CLIENT_ID,
+     SALESFORCE_CLIENT_SECRET,
+     SALESFORCE_INSTANCE_URL,
+diff --git a/packages/console/app/src/lib/aws.ts b/packages/console/app/src/lib/aws.ts
+index 5aea909e458c..3880e3c039a2 100644
+--- a/packages/console/app/src/lib/aws.ts
++++ b/packages/console/app/src/lib/aws.ts
+@@ -3,7 +3,7 @@ import { AwsClient } from "aws4fetch"
+ 
+ let client: AwsClient | undefined
+ 
+-export async function sendEmail(input: { to: string; subject: string; body: string; replyTo?: string }) {
++export async function sendEmail(input: { to: string; subject: string; body: string; text?: string; replyTo?: string }) {
+   client ??= new AwsClient({
+     accessKeyId: Resource.AWS_SES_ACCESS_KEY_ID.value,
+     secretAccessKey: Resource.AWS_SES_SECRET_ACCESS_KEY.value,
+@@ -30,7 +30,7 @@ export async function sendEmail(input: { to: string; subject: string; body: stri
+           Body: {
+             Text: {
+               Charset: "UTF-8",
+-              Data: input.body,
++              Data: input.text ?? input.body,
+             },
+             Html: {
+               Charset: "UTF-8",
+diff --git a/packages/console/app/src/lib/enterprise-spam.test.ts b/packages/console/app/src/lib/enterprise-spam.test.ts
+new file mode 100644
+index 000000000000..75785b0da9bd
+--- /dev/null
++++ b/packages/console/app/src/lib/enterprise-spam.test.ts
+@@ -0,0 +1,155 @@
++import { afterEach, expect, mock, spyOn, test } from "bun:test"
++import { enterpriseSpamProbability, ENTERPRISE_SPAM_MODEL } from "./enterprise-spam"
++import { enterpriseEmailContent, handleEnterpriseRequest } from "./enterprise"
++
++const submission = {
++  name: "Fake Visitor",
++  role: "Engineering lead",
++  company: "Example Test Company",
++  email: "fake-visitor@example.test",
++  message: "We need SSO for 200 developers.",
++}
++
++afterEach(() => mock.restore())
++
++const score = (probability: unknown) =>
++  Response.json({ model: ENTERPRISE_SPAM_MODEL, answers: { spam: { type: "noul", noul: probability } } })
++
++test("scores a submission through the System One gateway", async () => {
++  const requests: Request[] = []
++  // The form handler passes the whole submission, phone included; the classifier must not receive it.
++  const withPhone = { ...submission, phone: "+1 555 0100" }
++  const probability = await enterpriseSpamProbability(withPhone, {
++    inferenceUrl: "https://opencode.test/inference",
++    apiKey: "test-key",
++    fetch: async (request) => {
++      requests.push(request)
++      return score(0.97)
++    },
++  })
++
++  expect(probability).toBe(0.97)
++  expect(requests).toHaveLength(1)
++  expect(requests[0].url).toBe("https://opencode.test/inference/systemone/v1/systemone")
++  expect(requests[0].headers.get("authorization")).toBe("Bearer test-key")
++  const body = await requests[0].json()
++  expect(body.model).toBe(ENTERPRISE_SPAM_MODEL)
++  expect(body.state.submission).toMatchObject({ email: submission.email, message: submission.message })
++  expect(body.state.submission).not.toHaveProperty("phone")
++  expect(body.questions.spam.type).toBe("noul")
++})
++
++test("returns no score when the gateway fails, times out, or answers without a probability", async () => {
++  const options = { inferenceUrl: "https://opencode.test/inference", apiKey: "test-key" }
++  const failures = [
++    async () => new Response("nope", { status: 401 }),
++    async () => {
++      throw new Error("network")
++    },
++    async () => score("high"),
++    async () => score(1.5),
++    async () => Response.json({ answers: {} }),
++    (request: Request) =>
++      new Promise<Response>((_, reject) =>
++        request.signal.addEventListener("abort", () => reject(request.signal.reason)),
++      ),
++  ]
++  for (const fetch of failures) {
++    expect(await enterpriseSpamProbability(submission, { ...options, timeoutMs: 20, fetch })).toBeUndefined()
++  }
++})
++
++test("returns no score without logging an error when the gateway is not configured", async () => {
++  const error = spyOn(console, "error").mockImplementation(() => {})
++  expect(await enterpriseSpamProbability(submission, { inferenceUrl: "", apiKey: "test-key" })).toBeUndefined()
++  expect(error).not.toHaveBeenCalled()
++})
++
++const submit = async (fetch: (request: Request) => Promise<Response>) => {
++  const leads: Record<string, unknown>[] = []
++  const response = await handleEnterpriseRequest(
++    new Request("http://localhost/api/enterprise", {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ ...submission, alias: "" }),
++    }),
++    {
++      spam: { inferenceUrl: "https://opencode.test/inference", apiKey: "test-key", fetch },
++      salesforceSubmit: async (payload) => {
++        leads.push(payload)
++        return true
++      },
++      notifications: false,
++      accountLookup: async () => null,
++    },
++  )
++  return { status: response.status, body: await response.json(), leads }
++}
++
++test("confident spam gets the normal success response, never reaches Salesforce, and is logged", async () => {
++  const warn = spyOn(console, "warn").mockImplementation(() => {})
++  const result = await submit(async () => score(0.95))
++  expect(result.status).toBe(200)
++  expect(result.body).toMatchObject({ success: true })
++  expect(result.leads).toHaveLength(0)
++  expect(warn).toHaveBeenCalledWith("Enterprise inquiry dropped as spam", {
++    email: submission.email,
++    probability: 0.95,
++  })
++})
++
++test("uncertain, missing, or failed scores still create the lead", async () => {
++  spyOn(console, "error").mockImplementation(() => {})
++  for (const fetch of [
++    async () => score(0.6),
++    async () => Response.json({ answers: {} }),
++    async () => {
++      throw new Error("classifier down")
++    },
++  ]) {
++    const result = await submit(fetch)
++    expect(result.status).toBe(200)
++    expect(result.leads).toHaveLength(1)
++  }
++})
++
++test("the sales inbox email escapes submitted HTML", () => {
++  const content = enterpriseEmailContent({
++    name: "<b>Name</b>",
++    role: "Role",
++    email: "fake-visitor@example.test",
++    message: `<script>alert("x")</script> & <img src=x onerror=alert(1)>`,
++    alias: "",
++  })
++  expect(content.html).not.toContain("<script>")
++  expect(content.html).not.toContain("<img")
++  expect(content.html).not.toContain("<b>")
++  expect(content.html).toContain(
++    "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &lt;img src=x onerror=alert(1)&gt;",
++  )
++  expect(content.html).toContain("&lt;b&gt;Name&lt;/b&gt;<br>")
++})
++
++test("the sales inbox plain-text email is not HTML-escaped", () => {
++  const content = enterpriseEmailContent(
++    { ...submission, name: "Ada <CTO>", message: "Pricing & SSO?", phone: "+1 555 0100", alias: "" },
++    "$10k+",
++  )
++  expect(content.text).not.toContain("<br>")
++  expect(content.text).not.toContain("&lt;")
++  expect(content.text).not.toContain("&amp;")
++  expect(content.text).toBe(
++    [
++      "Pricing & SSO?",
++      "",
++      "Current monthly inference spend: $10k+",
++      "",
++      "--",
++      "Ada <CTO>",
++      submission.role,
++      submission.company,
++      submission.email,
++      "+1 555 0100",
++    ].join("\n"),
++  )
++})
+diff --git a/packages/console/app/src/lib/enterprise-spam.ts b/packages/console/app/src/lib/enterprise-spam.ts
+new file mode 100644
+index 000000000000..4720c038a9fd
+--- /dev/null
++++ b/packages/console/app/src/lib/enterprise-spam.ts
+@@ -0,0 +1,75 @@
++import { Resource } from "@opencode/console-resource"
++
++export const ENTERPRISE_SPAM_MODEL = "jev-1.13"
++// Drop only submissions Jev is confident about; anything less reaches sales as before.
++export const ENTERPRISE_SPAM_THRESHOLD = 0.9
++const TIMEOUT_MS = 2000
++
++const question = {
++  type: "noul",
++  instructions:
++    "Is this OpenCode enterprise sales form submission spam, abuse, or an attack rather than a genuine inquiry from someone interested in OpenCode?",
++  criteria: {
++    true: "Code, HTML, scripts, SQL, template or prompt-injection payloads, or other attack strings in any field; gibberish or random characters; advertising, SEO, link building, crypto, adult, or gambling content; someone selling their own product or services to OpenCode; or mass-mailed text unrelated to OpenCode.",
++    false:
++      "A real person asking about OpenCode for their company or team, including pricing, seats, security, SSO, deployment, models, procurement, support, or a partnership. Short, informal, misspelled, non-English, or vague messages are still genuine when they appear to come from a person interested in OpenCode.",
++  },
++} as const
++
++// Scores a submission with Jev through the OpenCode System One gateway.
++// Returns undefined when scoring is unavailable so the caller can fail open.
++export async function enterpriseSpamProbability(
++  input: { name: string; role: string; company?: string; email: string; message: string },
++  options: {
++    fetch?: (request: Request) => Promise<Response>
++    inferenceUrl?: string
++    apiKey?: string
++    timeoutMs?: number
++  } = {},
++): Promise<number | undefined> {
++  try {
++    // Preview stages have no inference URL; skip scoring quietly instead of logging every submission.
++    const inferenceUrl = options.inferenceUrl ?? Resource.ConsoleMigration.inferenceUrl
++    if (!inferenceUrl) return undefined
++    const url = new URL(inferenceUrl)
++    url.pathname = `${url.pathname.replace(/\/$/, "")}/systemone/v1/systemone`
++    const send = options.fetch ?? ((request: Request) => (Resource.INFERENCE as { fetch: typeof fetch }).fetch(request))
++    const response = await send(
++      new Request(url, {
++        method: "POST",
++        headers: {
++          Authorization: `Bearer ${options.apiKey ?? Resource.ENTERPRISE_SPAM_API_KEY.value}`,
++          "Content-Type": "application/json",
++        },
++        body: JSON.stringify({
++          model: ENTERPRISE_SPAM_MODEL,
++          state: {
++            submission: {
++              name: input.name,
++              role: input.role,
++              company: input.company ?? "",
++              email: input.email,
++              message: input.message,
++            },
++          },
++          questions: { spam: question },
++        }),
++        signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
++      }),
++    )
++    if (!response.ok) {
++      console.error("Enterprise spam scoring failed:", response.status)
++      return undefined
++    }
++    const data = (await response.json()) as { answers?: { spam?: { type?: string; noul?: unknown } } }
++    const probability = data.answers?.spam?.noul
++    if (typeof probability !== "number" || !Number.isFinite(probability) || probability < 0 || probability > 1) {
++      console.error("Enterprise spam scoring returned no probability")
++      return undefined
++    }
++    return probability
++  } catch (error) {
++    console.error("Enterprise spam scoring unavailable:", error instanceof Error ? error.name : "unknown")
++    return undefined
++  }
++}
+diff --git a/packages/console/app/src/lib/enterprise.ts b/packages/console/app/src/lib/enterprise.ts
+index eaf047f69dee..ba26d5f6639d 100644
+--- a/packages/console/app/src/lib/enterprise.ts
++++ b/packages/console/app/src/lib/enterprise.ts
+@@ -5,6 +5,7 @@ import { localeFromRequest } from "~/lib/language"
+ import { createLead } from "~/lib/salesforce"
+ import { inferenceSpendOptions } from "~/lib/inference-spend"
+ import { lookupConsoleAccount, type ConsoleAccount } from "~/lib/console-account"
++import { ENTERPRISE_SPAM_THRESHOLD, enterpriseSpamProbability } from "~/lib/enterprise-spam"
+ 
+ interface EnterpriseFormData {
+   name: string
+@@ -29,6 +30,36 @@ function splitFullName(fullName: string) {
+   return { firstName: parts[0], lastName: parts.slice(1).join(" ") }
+ }
+ 
++function escapeHtml(value: unknown) {
++  return String(value)
++    .replaceAll("&", "&amp;")
++    .replaceAll("<", "&lt;")
++    .replaceAll(">", "&gt;")
++    .replaceAll('"', "&quot;")
++    .replaceAll("'", "&#39;")
++}
++
++export function enterpriseEmailContent(body: EnterpriseFormData, inferenceSpend?: string) {
++  const field = (value?: unknown) => (value ? `${escapeHtml(value)}<br>` : "")
++  return {
++    html: `
++${escapeHtml(body.message)}<br><br>
++${inferenceSpend ? `Current monthly inference spend: ${escapeHtml(inferenceSpend)}<br><br>` : ""}
++--<br>
++${field(body.name)}
++${field(body.role)}
++${field(body.company)}${field(body.email)}
++${field(body.phone)}`.trim(),
++    text: [
++      body.message,
++      "",
++      ...(inferenceSpend ? [`Current monthly inference spend: ${inferenceSpend}`, ""] : []),
++      "--",
++      ...[body.name, body.role, body.company, body.email, body.phone].filter(Boolean),
++    ].join("\n"),
++  }
++}
++
+ function subscribe(email: string, fullName: string) {
+   const name = splitFullName(fullName)
+   const fields: Record<string, string> = {}
+@@ -66,6 +97,7 @@ export async function handleEnterpriseRequest(
+     salesforceSubmit?: (payload: Record<string, unknown>) => Promise<boolean>
+     notifications?: boolean
+     accountLookup?: (email: string) => Promise<ConsoleAccount | null>
++    spam?: Parameters<typeof enterpriseSpamProbability>[1]
+   } = {},
+ ) {
+   const dict = i18n(localeFromRequest(request))
+@@ -91,19 +123,21 @@ export async function handleEnterpriseRequest(
+       return Response.json({ error: dict["enterprise.form.error.invalidInferenceSpend"] }, { status: 400 })
+     }
+ 
++    // Fail open: a missing score never blocks a lead. Confident spam gets the same
++    // response as the honeypot and never reaches Salesforce, email, or EmailOctopus.
++    const spam = await enterpriseSpamProbability(body, options.spam)
++    if (spam !== undefined) console.info("Enterprise inquiry spam score", { probability: spam })
++    if (spam !== undefined && spam >= ENTERPRISE_SPAM_THRESHOLD) {
++      console.warn("Enterprise inquiry dropped as spam", { email: body.email, probability: spam })
++      return Response.json({ success: true, message: dict["enterprise.form.success.submitted"] }, { status: 200 })
++    }
++
+     const account = await (options.accountLookup ?? lookupConsoleAccount)(body.email).catch((err) => {
+       console.error("Failed to look up Console account:", err)
+       return undefined
+     })
+ 
+-    const emailContent = `
+-${body.message}<br><br>
+-${inferenceSpend ? `Current monthly inference spend: ${inferenceSpend.salesforceValue}<br><br>` : ""}
+---<br>
+-${body.name}<br>
+-${body.role}<br>
+-${body.company ? `${body.company}<br>` : ""}${body.email}<br>
+-${body.phone ? `${body.phone}<br>` : ""}`.trim()
++    const emailContent = enterpriseEmailContent(body, inferenceSpend?.salesforceValue)
+ 
+     const [lead, mail, octopus] = await Promise.all([
+       createLead(
+@@ -127,7 +161,8 @@ ${body.phone ? `${body.phone}<br>` : ""}`.trim()
+         : sendEmail({
+             to: Resource.ENTERPRISE_SALES_INBOX_EMAIL.value,
+             subject: `Enterprise Inquiry from ${body.name}`,
+-            body: emailContent,
++            body: emailContent.html,
++            text: emailContent.text,
+             replyTo: body.email,
+           }).then(
+             () => true,

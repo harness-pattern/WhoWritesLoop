@@ -1,0 +1,629 @@
+diff --git a/libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py b/libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py
+index 8256bbc4449..eddb6b4853f 100644
+--- a/libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py
++++ b/libs/prebuilt/langgraph/prebuilt/chat_agent_executor.py
+@@ -1,4 +1,6 @@
+ import inspect
++import json
++from copy import deepcopy
+ from typing import (
+     Any,
+     Awaitable,
+@@ -24,6 +26,7 @@
+     AnyMessage,
+     BaseMessage,
+     SystemMessage,
++    ToolCall,
+     ToolMessage,
+ )
+ from langchain_core.runnables import (
+@@ -33,20 +36,25 @@
+     RunnableSequence,
+ )
+ from langchain_core.tools import BaseTool
++from langchain_core.tools import tool as create_tool
++from langchain_core.tools.base import (
++    TOOL_MESSAGE_BLOCK_TYPES,
++    get_all_basemodel_annotations,
++)
+ from pydantic import BaseModel
+-from typing_extensions import Annotated, NotRequired, TypedDict
++from typing_extensions import Annotated, NotRequired, TypedDict, get_args, get_origin
+ 
+ from langgraph._internal._runnable import RunnableCallable, RunnableLike
+ from langgraph._internal._typing import MISSING
+-from langgraph.errors import ErrorCode, create_error_message
++from langgraph.errors import ErrorCode, GraphBubbleUp, create_error_message
+ from langgraph.graph import END, StateGraph
+ from langgraph.graph.message import add_messages
+ from langgraph.graph.state import CompiledStateGraph
+ from langgraph.managed import RemainingSteps
+-from langgraph.prebuilt.tool_node import ToolNode
++from langgraph.prebuilt.tool_node import InjectedState, InjectedStore
+ from langgraph.runtime import Runtime
+ from langgraph.store.base import BaseStore
+-from langgraph.types import Checkpointer, Send
++from langgraph.types import Checkpointer, Command, Send
+ from langgraph.typing import ContextT
+ from langgraph.warnings import LangGraphDeprecatedSinceV10
+ 
+@@ -54,6 +62,431 @@
+ StructuredResponseSchema = Union[dict, type[BaseModel]]
+ F = TypeVar("F", bound=Callable[..., Any])
+ 
++# Constants and helper functions for ToolExecutor
++INVALID_TOOL_NAME_ERROR_TEMPLATE = (
++    "Error: {requested_tool} is not a valid tool, try one of [{available_tools}]."
++)
++TOOL_CALL_ERROR_TEMPLATE = "Error: {error}\n Please fix your mistakes."
++
++
++def _msg_content_output(output: Any) -> Union[str, list[Union[str, dict[str, Any]]]]:
++    """Convert tool output to valid message content format."""
++    if isinstance(output, str):
++        return output
++    elif isinstance(output, list) and all(
++        [
++            isinstance(x, dict) and x.get("type") in TOOL_MESSAGE_BLOCK_TYPES
++            for x in output
++        ]
++    ):
++        return output
++    else:
++        try:
++            return json.dumps(output, ensure_ascii=False)
++        except Exception:
++            return str(output)
++
++
++def _handle_tool_error(
++    e: Exception,
++    *,
++    flag: Union[
++        bool,
++        str,
++        Callable[..., str],
++        tuple[type[Exception], ...],
++    ],
++) -> str:
++    """Generate error message content based on exception handling configuration."""
++    if isinstance(flag, (bool, tuple)):
++        content = TOOL_CALL_ERROR_TEMPLATE.format(error=repr(e))
++    elif isinstance(flag, str):
++        content = flag
++    elif callable(flag):
++        content = flag(e)
++    else:
++        raise ValueError(
++            f"Got unexpected type of `handle_tool_error`. Expected bool, str "
++            f"or callable. Received: {flag}"
++        )
++    return content
++
++
++def _infer_handled_types(handler: Callable[..., str]) -> tuple[type[Exception], ...]:
++    """Infer exception types handled by a custom error handler function."""
++    sig = inspect.signature(handler)
++    params = list(sig.parameters.values())
++    if params:
++        # If it's a method, the first argument is typically 'self' or 'cls'
++        first_param = (
++            params[0]
++            if params[0].name not in ("self", "cls")
++            else params[1]
++            if len(params) > 1
++            else None
++        )
++        if first_param and first_param.annotation != inspect.Parameter.empty:
++            annotation = first_param.annotation
++            # Handle Union types
++            if get_origin(annotation) is Union:
++                types = get_args(annotation)
++                exception_types = []
++                for t in types:
++                    if isinstance(t, type) and issubclass(t, Exception):
++                        exception_types.append(t)
++                    elif t is not type(
++                        None
++                    ):  # Allow None in Union for optional handling
++                        raise ValueError(
++                            f"Handler annotation must be Exception types, got {t}"
++                        )
++                return tuple(exception_types) if exception_types else (Exception,)
++            # Handle single type
++            elif isinstance(annotation, type) and issubclass(annotation, Exception):
++                return (annotation,)
++    return (Exception,)
++
++
++def _is_injection(
++    type_arg: Any, injection_type: Union[Type[InjectedState], Type[InjectedStore]]
++) -> bool:
++    """Check if a type argument represents an injection annotation."""
++    return isinstance(type_arg, injection_type)
++
++
++def _get_state_args(tool: BaseTool) -> dict[str, Optional[str]]:
++    """Extract state injection arguments from tool annotations."""
++    full_schema = tool.get_input_schema()
++    tool_args_to_state_fields: dict = {}
++
++    for name, type_ in get_all_basemodel_annotations(full_schema).items():
++        injections = [
++            type_arg
++            for type_arg in get_args(type_)
++            if _is_injection(type_arg, InjectedState)
++        ]
++        if len(injections) > 1:
++            raise ValueError(
++                "A tool argument should not be annotated with InjectedState more than "
++                f"once. Received arg {name} with annotations {injections}."
++            )
++        elif len(injections) == 1:
++            injection = injections[0]
++            if isinstance(injection, InjectedState) and injection.field:
++                tool_args_to_state_fields[name] = injection.field
++            else:
++                tool_args_to_state_fields[name] = None
++        else:
++            pass
++    return tool_args_to_state_fields
++
++
++def _get_store_arg(tool: BaseTool) -> Optional[str]:
++    """Extract store injection argument from tool annotations."""
++    full_schema = tool.get_input_schema()
++    for name, type_ in get_all_basemodel_annotations(full_schema).items():
++        injections = [
++            type_arg
++            for type_arg in get_args(type_)
++            if _is_injection(type_arg, InjectedStore)
++        ]
++        if len(injections) > 1:
++            raise ValueError(
++                "A tool argument should not be annotated with InjectedStore more than "
++                f"once. Received arg {name} with annotations {injections}."
++            )
++        elif len(injections) == 1:
++            return name
++        else:
++            pass
++    return None
++
++
++class ToolExecutor(RunnableCallable):
++    """A wrapper for executing individual tools with state/store injection and error handling.
++
++    This class provides the same functionality as ToolNode but for single tool execution,
++    enabling individual tool nodes in the graph instead of a single tools node.
++    """
++
++    def __init__(
++        self,
++        tool: BaseTool,
++        *,
++        handle_tool_errors: Union[
++            bool, str, Callable[..., str], tuple[type[Exception], ...]
++        ] = True,
++        messages_key: str = "messages",
++    ) -> None:
++        """Initialize the ToolExecutor with a single tool and configuration.
++
++        Args:
++            tool: The tool to execute.
++            handle_tool_errors: Error handling configuration.
++            messages_key: The key in the state dictionary that contains the message list.
++        """
++        super().__init__(self._func, self._afunc, name=tool.name, trace=False)
++        self.tool = tool
++        self.handle_tool_errors = handle_tool_errors
++        self.messages_key = messages_key
++        self.tool_to_state_args = _get_state_args(tool)
++        self.tool_to_store_arg = _get_store_arg(tool)
++
++    def _func(
++        self,
++        tool_call: ToolCall,
++        config: RunnableConfig,
++        *,
++        store: Optional[BaseStore],
++    ) -> dict[str, list[ToolMessage]]:
++        """Execute the tool synchronously."""
++        tool_message = self._run_one(tool_call, config, store)
++        return {self.messages_key: [tool_message]}
++
++    async def _afunc(
++        self,
++        tool_call: ToolCall,
++        config: RunnableConfig,
++        *,
++        store: Optional[BaseStore],
++    ) -> dict[str, list[ToolMessage]]:
++        """Execute the tool asynchronously."""
++        tool_message = await self._arun_one(tool_call, config, store)
++        return {self.messages_key: [tool_message]}
++
++    def _run_one(
++        self,
++        call: ToolCall,
++        config: RunnableConfig,
++        store: Optional[BaseStore],
++    ) -> ToolMessage:
++        """Run a single tool call synchronously."""
++        if invalid_tool_message := self._validate_tool_call(call):
++            return invalid_tool_message
++
++        # Inject state and store into the tool call
++        injected_call = self._inject_tool_args(call, store)
++
++        try:
++            call_args = {**injected_call, **{"type": "tool_call"}}
++            response = self.tool.invoke(call_args, config)
++
++        except GraphBubbleUp as e:
++            raise e
++        except Exception as e:
++            if isinstance(self.handle_tool_errors, tuple):
++                handled_types: tuple = self.handle_tool_errors
++            elif callable(self.handle_tool_errors):
++                handled_types = _infer_handled_types(self.handle_tool_errors)
++            else:
++                # default behavior is catching all exceptions
++                handled_types = (Exception,)
++
++            # Unhandled
++            if not self.handle_tool_errors or not isinstance(e, handled_types):
++                raise e
++            # Handled
++            else:
++                content = _handle_tool_error(e, flag=self.handle_tool_errors)
++            return ToolMessage(
++                content=content,
++                name=call["name"],
++                tool_call_id=call["id"],
++                status="error",
++            )
++
++        if isinstance(response, Command):
++            # For now, we'll convert Command responses to ToolMessage
++            # This maintains compatibility with the existing behavior
++            if hasattr(response, "update") and isinstance(response.update, dict):
++                messages = response.update.get(self.messages_key, [])
++                if messages and isinstance(messages[0], ToolMessage):
++                    return messages[0]
++            # Fallback to creating a ToolMessage from Command
++            return ToolMessage(
++                content=str(response.update)
++                if hasattr(response, "update")
++                else str(response),
++                name=call["name"],
++                tool_call_id=call["id"],
++            )
++        elif isinstance(response, ToolMessage):
++            response.content = cast(
++                Union[str, list], _msg_content_output(response.content)
++            )
++            return response
++        else:
++            return ToolMessage(
++                content=_msg_content_output(response),
++                name=call["name"],
++                tool_call_id=call["id"],
++            )
++
++    async def _arun_one(
++        self,
++        call: ToolCall,
++        config: RunnableConfig,
++        store: Optional[BaseStore],
++    ) -> ToolMessage:
++        """Run a single tool call asynchronously."""
++        if invalid_tool_message := self._validate_tool_call(call):
++            return invalid_tool_message
++
++        # Inject state and store into the tool call
++        injected_call = self._inject_tool_args(call, store)
++
++        try:
++            call_args = {**injected_call, **{"type": "tool_call"}}
++            response = await self.tool.ainvoke(call_args, config)
++
++        except GraphBubbleUp as e:
++            raise e
++        except Exception as e:
++            if isinstance(self.handle_tool_errors, tuple):
++                handled_types: tuple = self.handle_tool_errors
++            elif callable(self.handle_tool_errors):
++                handled_types = _infer_handled_types(self.handle_tool_errors)
++            else:
++                # default behavior is catching all exceptions
++                handled_types = (Exception,)
++
++            # Unhandled
++            if not self.handle_tool_errors or not isinstance(e, handled_types):
++                raise e
++            # Handled
++            else:
++                content = _handle_tool_error(e, flag=self.handle_tool_errors)
++            return ToolMessage(
++                content=content,
++                name=call["name"],
++                tool_call_id=call["id"],
++                status="error",
++            )
++
++        if isinstance(response, Command):
++            # For now, we'll convert Command responses to ToolMessage
++            # This maintains compatibility with the existing behavior
++            if hasattr(response, "update") and isinstance(response.update, dict):
++                messages = response.update.get(self.messages_key, [])
++                if messages and isinstance(messages[0], ToolMessage):
++                    return messages[0]
++            # Fallback to creating a ToolMessage from Command
++            return ToolMessage(
++                content=str(response.update)
++                if hasattr(response, "update")
++                else str(response),
++                name=call["name"],
++                tool_call_id=call["id"],
++            )
++        elif isinstance(response, ToolMessage):
++            response.content = cast(
++                Union[str, list], _msg_content_output(response.content)
++            )
++            return response
++        else:
++            return ToolMessage(
++                content=_msg_content_output(response),
++                name=call["name"],
++                tool_call_id=call["id"],
++            )
++
++    def _validate_tool_call(self, call: ToolCall) -> Optional[ToolMessage]:
++        """Validate that the tool call is for the correct tool."""
++        if call["name"] != self.tool.name:
++            content = INVALID_TOOL_NAME_ERROR_TEMPLATE.format(
++                requested_tool=call["name"],
++                available_tools=self.tool.name,
++            )
++            return ToolMessage(
++                content, name=call["name"], tool_call_id=call["id"], status="error"
++            )
++        else:
++            return None
++
++    def _inject_tool_args(
++        self,
++        tool_call: ToolCall,
++        store: Optional[BaseStore],
++    ) -> ToolCall:
++        """Inject state and store into tool call arguments."""
++        # For individual tool execution, we don't have access to the full state
++        # State injection will need to be handled at the graph level
++        # For now, we only handle store injection
++        injected_call = deepcopy(tool_call)
++
++        # Inject store if needed
++        if self.tool_to_store_arg:
++            if store is None:
++                raise ValueError(
++                    "Cannot inject store into tools with InjectedStore annotations - "
++                    "please compile your graph with a store."
++                )
++            injected_call["args"] = {
++                **injected_call["args"],
++                self.tool_to_store_arg: store,
++            }
++
++        return injected_call
++
++    def inject_tool_args(
++        self,
++        tool_call: ToolCall,
++        input: Union[
++            list[AnyMessage],
++            dict[str, Any],
++            BaseModel,
++        ],
++        store: Optional[BaseStore],
++    ) -> ToolCall:
++        """Inject graph state and store into tool call arguments.
++
++        This method provides compatibility with ToolNode.inject_tool_args()
++        for use in routing logic.
++        """
++        injected_call = deepcopy(tool_call)
++
++        # Inject state arguments
++        if self.tool_to_state_args:
++            if isinstance(input, list):
++                # Convert list to dict format for state injection
++                input = {self.messages_key: input}
++
++            tool_state_args = {}
++            for arg_name, state_field in self.tool_to_state_args.items():
++                if state_field is None:
++                    # Inject the entire state
++                    tool_state_args[arg_name] = input
++                else:
++                    # Inject specific field from state
++                    if isinstance(input, dict) and state_field in input:
++                        tool_state_args[arg_name] = input[state_field]
++                    elif hasattr(input, state_field):
++                        tool_state_args[arg_name] = getattr(input, state_field)
++                    else:
++                        raise ValueError(
++                            f"Invalid input to ToolExecutor. Tool {tool_call['name']} requires "
++                            f"state field '{state_field}' but it was not found in input."
++                        )
++
++            injected_call["args"] = {
++                **injected_call["args"],
++                **tool_state_args,
++            }
++
++        # Inject store if needed
++        if self.tool_to_store_arg:
++            if store is None:
++                raise ValueError(
++                    "Cannot inject store into tools with InjectedStore annotations - "
++                    "please compile your graph with a store."
++                )
++            injected_call["args"] = {
++                **injected_call["args"],
++                self.tool_to_store_arg: store,
++            }
++
++        return injected_call
++
+ 
+ # We create the AgentState that we will pass around
+ # This simply involves a list of messages
+@@ -259,7 +692,7 @@ def create_react_agent(
+             Awaitable[Runnable[LanguageModelInput, BaseMessage]],
+         ],
+     ],
+-    tools: Union[Sequence[Union[BaseTool, Callable, dict[str, Any]]], ToolNode],
++    tools: Sequence[Union[BaseTool, Callable, dict[str, Any]]],
+     *,
+     prompt: Optional[Prompt] = None,
+     response_format: Optional[
+@@ -323,7 +756,7 @@ def select_model(state: AgentState, runtime: Runtime[ModelContext]) -> ChatOpenA
+                 `.bind_tools()` and support required functionality. Bound tools
+                 must be a subset of those specified in the `tools` parameter.
+ 
+-        tools: A list of tools or a ToolNode instance.
++        tools: A list of tools.
+             If an empty list is provided, the agent will consist of a single LLM node without tool calling.
+         prompt: An optional prompt for the LLM. Can take a few different forms:
+ 
+@@ -424,7 +857,7 @@ def select_model(state: AgentState, runtime: Runtime[ModelContext]) -> ChatOpenA
+         A compiled LangChain runnable that can be used for chat interactions.
+ 
+     The "agent" node calls the language model with the messages list (after applying the prompt).
+-    If the resulting AIMessage contains `tool_calls`, the graph will then call the ["tools"][langgraph.prebuilt.tool_node.ToolNode].
++    If the resulting AIMessage contains `tool_calls`, the graph will then call the individual tool nodes.
+     The "tools" node executes the tools (1 tool per `tool_call`) and adds the responses to the messages list
+     as `ToolMessage` objects. The agent node then calls the language model again.
+     The process repeats until no more `tool_calls` are present in the response.
+@@ -499,14 +932,13 @@ def check_weather(location: str) -> str:
+             else AgentState
+         )
+ 
+-    llm_builtin_tools: list[dict] = []
+-    if isinstance(tools, ToolNode):
+-        tool_classes = list(tools.tools_by_name.values())
+-        tool_node = tools
+-    else:
+-        llm_builtin_tools = [t for t in tools if isinstance(t, dict)]
+-        tool_node = ToolNode([t for t in tools if not isinstance(t, dict)])
+-        tool_classes = list(tool_node.tools_by_name.values())
++    llm_builtin_tools = [t for t in tools if isinstance(t, dict)]
++    tool_classes = []
++    for tool_ in tools:
++        if not isinstance(tool_, dict):
++            if not isinstance(tool_, BaseTool):
++                tool_ = create_tool(tool_)
++            tool_classes.append(tool_)
+ 
+     is_dynamic_model = not isinstance(model, (str, Runnable)) and callable(model)
+     is_async_dynamic_model = is_dynamic_model and inspect.iscoroutinefunction(model)
+@@ -794,11 +1226,15 @@ def should_continue(state: StateSchema) -> Union[str, list[Send]]:
+             elif version == "v2":
+                 if post_model_hook is not None:
+                     return "post_model_hook"
++                # Create a temporary ToolExecutor to inject tool arguments
++                temp_executor = ToolExecutor(tool_classes[0]) if tool_classes else None
+                 tool_calls = [
+-                    tool_node.inject_tool_args(call, state, store)  # type: ignore[arg-type]
++                    temp_executor.inject_tool_args(call, state, store)  # type: ignore[arg-type]
++                    if temp_executor
++                    else call
+                     for call in last_message.tool_calls
+                 ]
+-                return [Send("tools", [tool_call]) for tool_call in tool_calls]
++                return [Send(call["name"], call) for call in tool_calls]
+ 
+     # Define a new graph
+     workflow = StateGraph(
+@@ -811,7 +1247,12 @@ def should_continue(state: StateSchema) -> Union[str, list[Send]]:
+         RunnableCallable(call_model, acall_model),
+         input_schema=input_schema,
+     )
+-    workflow.add_node("tools", tool_node)
++    # Add individual tool nodes instead of a single tools node
++    for tool in tool_classes:
++        workflow.add_node(
++            tool.name,
++            ToolExecutor(tool, handle_tool_errors=True, messages_key="messages"),
++        )
+ 
+     # Optionally add a pre-model hook node that will be called
+     # every time before the "agent" (LLM-calling node)
+@@ -827,7 +1268,9 @@ def should_continue(state: StateSchema) -> Union[str, list[Send]]:
+     workflow.set_entry_point(entrypoint)
+ 
+     agent_paths = []
+-    post_model_hook_paths = [entrypoint, "tools"]
++    # Include all individual tool names instead of just 'tools'
++    tool_names = [tool.name for tool in tool_classes]
++    post_model_hook_paths = [entrypoint] + tool_names
+ 
+     # Add a post model hook node if post_model_hook is provided
+     if post_model_hook is not None:
+@@ -835,7 +1278,7 @@ def should_continue(state: StateSchema) -> Union[str, list[Send]]:
+         agent_paths.append("post_model_hook")
+         workflow.add_edge("agent", "post_model_hook")
+     else:
+-        agent_paths.append("tools")
++        agent_paths.extend(tool_names)
+ 
+     # Add a structured output node if response_format is provided
+     if response_format is not None:
+@@ -862,7 +1305,7 @@ def post_model_hook_router(state: StateSchema) -> Union[str, list[Send]]:
+             """Route to the next node after post_model_hook.
+ 
+             Routes to one of:
+-            * "tools": if there are pending tool calls without a corresponding message.
++            * Individual tool nodes: if there are pending tool calls without a corresponding message.
+             * "generate_structured_response": if no pending tool calls exist and response_format is specified.
+             * END: if no pending tool calls exist and no response_format is specified.
+             """
+@@ -879,11 +1322,15 @@ def post_model_hook_router(state: StateSchema) -> Union[str, list[Send]]:
+             ]
+ 
+             if pending_tool_calls:
++                # Create a temporary ToolExecutor to inject tool arguments
++                temp_executor = ToolExecutor(tool_classes[0]) if tool_classes else None
+                 pending_tool_calls = [
+-                    tool_node.inject_tool_args(call, state, store)  # type: ignore[arg-type]
++                    temp_executor.inject_tool_args(call, state, store)  # type: ignore[arg-type]
++                    if temp_executor
++                    else call
+                     for call in pending_tool_calls
+                 ]
+-                return [Send("tools", [tool_call]) for tool_call in pending_tool_calls]
++                return [Send(call["name"], call) for call in pending_tool_calls]
+             elif isinstance(messages[-1], ToolMessage):
+                 return entrypoint
+             elif response_format is not None:
+@@ -919,11 +1366,15 @@ def route_tool_responses(state: StateSchema) -> str:
+         return entrypoint
+ 
+     if should_return_direct:
+-        workflow.add_conditional_edges(
+-            "tools", route_tool_responses, path_map=[entrypoint, END]
+-        )
++        # Add conditional edges for each individual tool node
++        for tool in tool_classes:
++            workflow.add_conditional_edges(
++                tool.name, route_tool_responses, path_map=[entrypoint, END]
++            )
+     else:
+-        workflow.add_edge("tools", entrypoint)
++        # Add edges from each individual tool node back to entrypoint
++        for tool in tool_classes:
++            workflow.add_edge(tool.name, entrypoint)
+ 
+     # Finally, we compile it!
+     # This compiles it into a LangChain Runnable,

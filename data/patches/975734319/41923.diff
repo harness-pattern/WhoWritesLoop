@@ -1,0 +1,456 @@
+diff --git a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
+index 377ebb598be4..f09a94cb386c 100644
+--- a/packages/tui/src/app.tsx
++++ b/packages/tui/src/app.tsx
+@@ -496,7 +496,7 @@ function App(props: { pair?: DialogPairCredentials }) {
+         toast.show({
+           variant: "error",
+           title: `MCP server failed: ${server.name}`,
+-          message: "Open MCP servers to view details.",
++          message: "Run /mcps to view details.",
+         })
+     }
+   })
+diff --git a/packages/tui/src/component/dialog-error-details.tsx b/packages/tui/src/component/dialog-error-details.tsx
+new file mode 100644
+index 000000000000..0dde1594748c
+--- /dev/null
++++ b/packages/tui/src/component/dialog-error-details.tsx
+@@ -0,0 +1,85 @@
++import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
++import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
++import { createMemo, createSignal, onMount } from "solid-js"
++import { useConfig } from "../config"
++import { useClipboard } from "../context/clipboard"
++import { Keymap } from "../context/keymap"
++import { getScrollAcceleration } from "../util/scroll"
++import { useDialog } from "../ui/dialog"
++import { useTheme } from "../context/theme"
++import { useToast } from "../ui/toast"
++
++export function DialogErrorDetails(props: { title: string; error: string; onBack: () => void }) {
++  const dialog = useDialog()
++  const clipboard = useClipboard()
++  const toast = useToast()
++  const theme = useTheme("elevated")
++  const overlayTheme = useTheme("overlay")
++  const dimensions = useTerminalDimensions()
++  const config = useConfig().data
++  const [copied, setCopied] = createSignal(false)
++  const height = createMemo(() => Math.max(3, Math.floor(dimensions().height / 2) - 5))
++  let scroll: ScrollBoxRenderable | undefined
++
++  onMount(() => dialog.setSize("large"))
++
++  const copy = () => {
++    void clipboard
++      .write(props.error)
++      .then(() => setCopied(true))
++      .catch(toast.error)
++  }
++
++  Keymap.createLayer(() => ({
++    mode: "modal",
++    commands: [{ bind: "escape", title: "Back", group: "Dialog", run: props.onBack }],
++  }))
++
++  useKeyboard((event) => {
++    if (event.name === "c") return copy()
++    if (event.name === "up") return scroll?.scrollBy(-1)
++    if (event.name === "down") return scroll?.scrollBy(1)
++    if (event.name === "pageup") return scroll?.scrollBy(-height())
++    if (event.name === "pagedown") return scroll?.scrollBy(height())
++    if (event.name === "home") return scroll?.scrollTo(0)
++    if (event.name === "end" && scroll) return scroll.scrollTo(scroll.scrollHeight)
++  })
++
++  return (
++    <box paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
++      <box flexDirection="row" justifyContent="space-between">
++        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
++          {props.title}
++        </text>
++        <text fg={theme.text.subdued} onMouseUp={props.onBack}>
++          esc back
++        </text>
++      </box>
++      <text fg={theme.text.feedback.error.default}>✗ Failed</text>
++      <box
++        backgroundColor={overlayTheme.background.default}
++        paddingLeft={2}
++        paddingRight={2}
++        paddingTop={1}
++        paddingBottom={1}
++      >
++        <scrollbox
++          ref={(element: ScrollBoxRenderable) => (scroll = element)}
++          height={height()}
++          scrollbarOptions={{ visible: false }}
++          scrollAcceleration={getScrollAcceleration(config)}
++        >
++          <text fg={overlayTheme.text.default} wrapMode="word">
++            {props.error}
++          </text>
++        </scrollbox>
++      </box>
++      <box flexDirection="row" justifyContent="space-between">
++        <text fg={theme.text.subdued}>↑↓ scroll</text>
++        <text fg={theme.text.subdued} onMouseUp={copy}>
++          {copied() ? "✓ copied" : "c copy details"}
++        </text>
++      </box>
++    </box>
++  )
++}
+diff --git a/packages/tui/src/component/dialog-mcp.tsx b/packages/tui/src/component/dialog-mcp.tsx
+index a2999a081e54..fe2e3331818a 100644
+--- a/packages/tui/src/component/dialog-mcp.tsx
++++ b/packages/tui/src/component/dialog-mcp.tsx
+@@ -1,4 +1,4 @@
+-import { createEffect, createMemo, createSignal, onMount, Show } from "solid-js"
++import { createEffect, createMemo, createSignal, Show } from "solid-js"
+ import { useData } from "../context/data"
+ import { useClient } from "../context/client"
+ import { Keymap } from "../context/keymap"
+@@ -6,13 +6,10 @@ import { pipe, sortBy } from "remeda"
+ import { DialogSelect } from "../ui/dialog-select"
+ import { useDialog } from "../ui/dialog"
+ import { useTheme } from "../context/theme"
+-import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
++import { TextAttributes } from "@opentui/core"
+ import type { McpServer } from "@opencode-ai/client"
+-import { useClipboard } from "../context/clipboard"
+ import { useToast } from "../ui/toast"
+-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+-import { useConfig } from "../config"
+-import { getScrollAcceleration } from "../util/scroll"
++import { DialogErrorDetails } from "./dialog-error-details"
+ 
+ function statusError(status: McpServer["status"]) {
+   if (status.status === "failed") return status.error
+@@ -143,8 +140,9 @@ export function DialogMcp() {
+         }
+       >
+         {(server) => (
+-          <DialogMcpError
+-            server={server()}
++          <DialogErrorDetails
++            title={`MCP server: ${server().name}`}
++            error={statusError(server().status) ?? "Unknown MCP connection error"}
+             onBack={() => {
+               setDetail()
+               dialog.setSize("medium")
+@@ -155,79 +153,3 @@ export function DialogMcp() {
+     </box>
+   )
+ }
+-
+-function DialogMcpError(props: { server: McpServer; onBack: () => void }) {
+-  const dialog = useDialog()
+-  const clipboard = useClipboard()
+-  const toast = useToast()
+-  const theme = useTheme("elevated")
+-  const overlayTheme = useTheme("overlay")
+-  const dimensions = useTerminalDimensions()
+-  const config = useConfig().data
+-  const [copied, setCopied] = createSignal(false)
+-  const error = () => statusError(props.server.status) ?? "Unknown MCP connection error"
+-  const height = createMemo(() => Math.max(3, Math.floor(dimensions().height / 2) - 5))
+-  let scroll: ScrollBoxRenderable | undefined
+-
+-  onMount(() => dialog.setSize("large"))
+-
+-  const copy = () => {
+-    void clipboard
+-      .write(error())
+-      .then(() => setCopied(true))
+-      .catch(toast.error)
+-  }
+-
+-  Keymap.createLayer(() => ({
+-    mode: "modal",
+-    commands: [{ bind: "escape", title: "Back to MCP servers", group: "Dialog", run: props.onBack }],
+-  }))
+-
+-  useKeyboard((event) => {
+-    if (event.name === "c") return copy()
+-    if (event.name === "up") return scroll?.scrollBy(-1)
+-    if (event.name === "down") return scroll?.scrollBy(1)
+-    if (event.name === "pageup") return scroll?.scrollBy(-height())
+-    if (event.name === "pagedown") return scroll?.scrollBy(height())
+-    if (event.name === "home") return scroll?.scrollTo(0)
+-    if (event.name === "end" && scroll) return scroll.scrollTo(scroll.scrollHeight)
+-  })
+-
+-  return (
+-    <box paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
+-      <box flexDirection="row" justifyContent="space-between">
+-        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
+-          MCP server: {props.server.name}
+-        </text>
+-        <text fg={theme.text.subdued} onMouseUp={props.onBack}>
+-          esc back
+-        </text>
+-      </box>
+-      <text fg={theme.text.feedback.error.default}>✗ Failed</text>
+-      <box
+-        backgroundColor={overlayTheme.background.default}
+-        paddingLeft={2}
+-        paddingRight={2}
+-        paddingTop={1}
+-        paddingBottom={1}
+-      >
+-        <scrollbox
+-          ref={(element: ScrollBoxRenderable) => (scroll = element)}
+-          height={height()}
+-          scrollbarOptions={{ visible: false }}
+-          scrollAcceleration={getScrollAcceleration(config)}
+-        >
+-          <text fg={overlayTheme.text.default} wrapMode="word">
+-            {error()}
+-          </text>
+-        </scrollbox>
+-      </box>
+-      <box flexDirection="row" justifyContent="space-between">
+-        <text fg={theme.text.subdued}>↑↓ scroll</text>
+-        <text fg={theme.text.subdued} onMouseUp={copy}>
+-          {copied() ? "✓ copied" : "c copy details"}
+-        </text>
+-      </box>
+-    </box>
+-  )
+-}
+diff --git a/packages/tui/src/feature-plugins/home/footer.tsx b/packages/tui/src/feature-plugins/home/footer.tsx
+index 0c540692ee14..a81995bb24cf 100644
+--- a/packages/tui/src/feature-plugins/home/footer.tsx
++++ b/packages/tui/src/feature-plugins/home/footer.tsx
+@@ -1,10 +1,11 @@
+ import { Plugin } from "@opencode-ai/plugin/tui"
+ import { createMemo, Match, Show, Switch } from "solid-js"
+ import { useTerminalDimensions } from "@opentui/solid"
++import { usePlugin } from "../../plugin/context"
+ 
+ function Mcp(props: { context: Plugin.Context }) {
+   const list = createMemo(() => props.context.data.location.mcp.server.list(props.context.location) ?? [])
+-  const failed = createMemo(() => list().some((item) => item.status.status === "failed"))
++  const failed = createMemo(() => list().filter((item) => item.status.status === "failed").length)
+   const count = createMemo(() => list().filter((item) => item.status.status === "connected").length)
+ 
+   return (
+@@ -14,6 +15,7 @@ function Mcp(props: { context: Plugin.Context }) {
+           <Switch>
+             <Match when={failed()}>
+               <span style={{ fg: props.context.theme.text.feedback.error.default }}>⊙ </span>
++              {failed()} MCP failed
+             </Match>
+             <Match when={true}>
+               <span
+@@ -24,11 +26,28 @@ function Mcp(props: { context: Plugin.Context }) {
+               >
+                 ⊙{" "}
+               </span>
++              {count()} MCP
+             </Match>
+           </Switch>
+-          {count()} MCP
+         </text>
+-        <text fg={props.context.theme.text.subdued}>/status</text>
++        <text fg={props.context.theme.text.subdued}>/mcps</text>
++      </box>
++    </Show>
++  )
++}
++
++function Plugins(props: { context: Plugin.Context }) {
++  const plugins = usePlugin()
++  const failed = createMemo(() => plugins.list().filter((item) => item.status === "failed").length)
++
++  return (
++    <Show when={failed()}>
++      <box gap={1} flexDirection="row" flexShrink={0}>
++        <text fg={props.context.theme.text.default}>
++          <span style={{ fg: props.context.theme.text.feedback.error.default }}>⊙ </span>
++          {failed()} plugin{failed() === 1 ? "" : "s"} failed
++        </text>
++        <text fg={props.context.theme.text.subdued}>/plugins</text>
+       </box>
+     </Show>
+   )
+@@ -50,6 +69,7 @@ function View(props: { context: Plugin.Context }) {
+         gap={2}
+       >
+         <Mcp context={props.context} />
++        <Plugins context={props.context} />
+         <box flexGrow={1} />
+         <box flexShrink={0}>
+           <text fg={props.context.theme.text.subdued}>{props.context.app.version}</text>
+diff --git a/packages/tui/src/feature-plugins/system/plugins.tsx b/packages/tui/src/feature-plugins/system/plugins.tsx
+index 676ee3e4752d..5a950e7dd7ad 100644
+--- a/packages/tui/src/feature-plugins/system/plugins.tsx
++++ b/packages/tui/src/feature-plugins/system/plugins.tsx
+@@ -1,22 +1,26 @@
+ import { Plugin } from "@opencode-ai/plugin/tui"
+-import { createMemo, createSignal } from "solid-js"
++import { createEffect, createMemo, createSignal, Show } from "solid-js"
+ import { usePlugin } from "../../plugin/context"
+ import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
++import { useDialog } from "../../ui/dialog"
++import { DialogErrorDetails } from "../../component/dialog-error-details"
+ 
+ const id = "opencode.plugins"
+ 
+ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePlugin> }) {
+   const [locked, setLocked] = createSignal(false)
+-  const options = createMemo(() =>
+-    props.plugins
++  const [focused, setFocused] = createSignal<string>()
++  const [detail, setDetail] = createSignal<{ title: string; error: string }>()
++  const dialog = useDialog()
++  const options = createMemo(() => {
++    const builtins = props.plugins
+       .registered()
+-      .filter((plugin) => plugin.id !== id)
+-      .sort((a, b) => a.id.localeCompare(b.id))
++      .filter((plugin) => plugin.id !== id && plugin.source === "builtin")
+       .map(
+         (plugin): DialogSelectOption<string> => ({
+           title: plugin.id,
+           value: plugin.id,
+-          category: plugin.source === "builtin" ? "Built-in" : "External",
++          category: "Built-in",
+           footer: (
+             <span
+               style={{
+@@ -29,8 +33,43 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
+             </span>
+           ),
+         }),
+-      ),
+-  )
++      )
++    const external = props.plugins.list().map(
++      (plugin): DialogSelectOption<string> => ({
++        title: "id" in plugin ? plugin.id : plugin.target,
++        value: "id" in plugin ? plugin.id : plugin.target,
++        category: "External",
++        searchText: plugin.target,
++        footer: (
++          <span
++            style={{
++              fg:
++                plugin.status === "active"
++                  ? props.context.theme.text.feedback.success.default
++                  : plugin.status === "failed"
++                    ? props.context.theme.text.feedback.error.default
++                    : props.context.theme.text.subdued,
++            }}
++          >
++            {plugin.status}
++          </span>
++        ),
++      }),
++    )
++    return [...builtins, ...external].sort((a, b) => a.title.localeCompare(b.title))
++  })
++
++  const failure = (value: string | undefined) =>
++    props.plugins.list().find((plugin) => {
++      if (plugin.status !== "failed") return false
++      return ("id" in plugin ? plugin.id : plugin.target) === value
++    })
++
++  createEffect(() => {
++    if (focused()) return
++    const first = options()[0]
++    if (first) setFocused(first.value)
++  })
+ 
+   const toggle = (plugin: DialogSelectOption<string>) => {
+     if (locked()) return
+@@ -51,15 +90,53 @@ function View(props: { context: Plugin.Context; plugins: ReturnType<typeof usePl
+       .finally(() => setLocked(false))
+   }
+ 
++  const select = (plugin: DialogSelectOption<string>) => {
++    const failed = failure(plugin.value)
++    if (!failed || failed.status !== "failed") return toggle(plugin)
++    setDetail({ title: failed.target, error: failed.error })
++  }
++
+   return (
+-    <DialogSelect
+-      title="Plugins"
+-      options={options()}
+-      locked={locked()}
+-      preserveSelection={true}
+-      actions={[{ title: "toggle", command: "plugins.toggle", onTrigger: toggle }]}
+-      onSelect={toggle}
+-    />
++    <box>
++      <Show
++        when={detail()}
++        fallback={
++          <DialogSelect
++            title="Plugins"
++            options={options()}
++            current={focused()}
++            locked={locked()}
++            preserveSelection={true}
++            onMove={(option) => setFocused(option.value)}
++            actions={[
++              {
++                title: "toggle",
++                command: "plugins.toggle",
++                disabled: (option) => Boolean(failure(option?.value)),
++                onTrigger: toggle,
++              },
++            ]}
++            onSelect={select}
++            footer={
++              <Show when={failure(focused())}>
++                <text fg={props.context.theme.text.subdued}>enter to view error</text>
++              </Show>
++            }
++          />
++        }
++      >
++        {(item) => (
++          <DialogErrorDetails
++            title={`Plugin: ${item().title}`}
++            error={item().error}
++            onBack={() => {
++              setDetail()
++              dialog.setSize("medium")
++            }}
++          />
++        )}
++      </Show>
++    </box>
+   )
+ }
+ 
+@@ -72,6 +149,7 @@ function Commands(props: { context: Plugin.Context }) {
+         id: "plugins.list",
+         title: "Plugins",
+         group: "System",
++        slash: { name: "plugins" },
+         palette: true,
+         run() {
+           props.context.ui.dialog.show(() => <View context={props.context} plugins={plugins} />)
+diff --git a/packages/tui/src/plugin/context.tsx b/packages/tui/src/plugin/context.tsx
+index a8053f4a254d..3ea3e23a5f5e 100644
+--- a/packages/tui/src/plugin/context.tsx
++++ b/packages/tui/src/plugin/context.tsx
+@@ -390,7 +390,11 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver; d
+           (prev) => prev.status === "failed" && prev.target === state.target && prev.error === state.error,
+         )
+       )
+-        host.toast.show({ variant: "error", title: "Plugin", message: `${state.target}: ${state.error}` })
++        host.toast.show({
++          variant: "error",
++          title: `Plugin failed: ${state.target}`,
++          message: "Run /plugins to view details.",
++        })
+     setStore("states", reconcileStore(states))
+   }
+   const slotItems = new WeakMap<SlotRender, Claim<SlotRender>>()

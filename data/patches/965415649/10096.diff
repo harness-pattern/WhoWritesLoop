@@ -1,0 +1,387 @@
+diff --git a/codex-rs/app-server/src/codex_message_processor.rs b/codex-rs/app-server/src/codex_message_processor.rs
+index c70f705a96c9..e05b690c939b 100644
+--- a/codex-rs/app-server/src/codex_message_processor.rs
++++ b/codex-rs/app-server/src/codex_message_processor.rs
+@@ -1258,7 +1258,7 @@ impl CodexMessageProcessor {
+         }
+ 
+         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
+-        let env = create_env(&self.config.shell_environment_policy);
++        let env = create_env(&self.config.shell_environment_policy, None);
+         let timeout_ms = params
+             .timeout_ms
+             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+diff --git a/codex-rs/cli/src/debug_sandbox.rs b/codex-rs/cli/src/debug_sandbox.rs
+index 8c1f3e5d39e7..950fac534434 100644
+--- a/codex-rs/cli/src/debug_sandbox.rs
++++ b/codex-rs/cli/src/debug_sandbox.rs
+@@ -130,7 +130,7 @@ async fn run_command_under_sandbox(
+     let sandbox_policy_cwd = cwd.clone();
+ 
+     let stdio_policy = StdioPolicy::Inherit;
+-    let env = create_env(&config.shell_environment_policy);
++    let env = create_env(&config.shell_environment_policy, None);
+ 
+     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
+     if let SandboxType::Windows = sandbox_type {
+diff --git a/codex-rs/core/src/exec_env.rs b/codex-rs/core/src/exec_env.rs
+index 91bf97ef0cca..eabd35b410d0 100644
+--- a/codex-rs/core/src/exec_env.rs
++++ b/codex-rs/core/src/exec_env.rs
+@@ -1,9 +1,12 @@
+ use crate::config::types::EnvironmentVariablePattern;
+ use crate::config::types::ShellEnvironmentPolicy;
+ use crate::config::types::ShellEnvironmentPolicyInherit;
++use codex_protocol::ThreadId;
+ use std::collections::HashMap;
+ use std::collections::HashSet;
+ 
++pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
++
+ /// Construct an environment map based on the rules in the specified policy. The
+ /// resulting map can be passed directly to `Command::envs()` after calling
+ /// `env_clear()` to ensure no unintended variables are leaked to the spawned
+@@ -11,11 +14,21 @@ use std::collections::HashSet;
+ ///
+ /// The derivation follows the algorithm documented in the struct-level comment
+ /// for [`ShellEnvironmentPolicy`].
+-pub fn create_env(policy: &ShellEnvironmentPolicy) -> HashMap<String, String> {
+-    populate_env(std::env::vars(), policy)
++///
++/// `CODEX_THREAD_ID` is injected when a thread id is provided, even when
++/// `include_only` is set.
++pub fn create_env(
++    policy: &ShellEnvironmentPolicy,
++    thread_id: Option<ThreadId>,
++) -> HashMap<String, String> {
++    populate_env(std::env::vars(), policy, thread_id)
+ }
+ 
+-fn populate_env<I>(vars: I, policy: &ShellEnvironmentPolicy) -> HashMap<String, String>
++fn populate_env<I>(
++    vars: I,
++    policy: &ShellEnvironmentPolicy,
++    thread_id: Option<ThreadId>,
++) -> HashMap<String, String>
+ where
+     I: IntoIterator<Item = (String, String)>,
+ {
+@@ -72,6 +85,11 @@ where
+         env_map.retain(|k, _| matches_any(k, &policy.include_only));
+     }
+ 
++    // Step 6 – Populate the thread ID environment variable when provided.
++    if let Some(thread_id) = thread_id {
++        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
++    }
++
+     env_map
+ }
+ 
+@@ -98,14 +116,16 @@ mod tests {
+         ]);
+ 
+         let policy = ShellEnvironmentPolicy::default(); // inherit All, default excludes ignored
+-        let result = populate_env(vars, &policy);
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
+ 
+-        let expected: HashMap<String, String> = hashmap! {
++        let mut expected: HashMap<String, String> = hashmap! {
+             "PATH".to_string() => "/usr/bin".to_string(),
+             "HOME".to_string() => "/home/user".to_string(),
+             "API_KEY".to_string() => "secret".to_string(),
+             "SECRET_TOKEN".to_string() => "t".to_string(),
+         };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+ 
+         assert_eq!(result, expected);
+     }
+@@ -123,12 +143,14 @@ mod tests {
+             ignore_default_excludes: false, // apply KEY/SECRET/TOKEN filter
+             ..Default::default()
+         };
+-        let result = populate_env(vars, &policy);
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
+ 
+-        let expected: HashMap<String, String> = hashmap! {
++        let mut expected: HashMap<String, String> = hashmap! {
+             "PATH".to_string() => "/usr/bin".to_string(),
+             "HOME".to_string() => "/home/user".to_string(),
+         };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+ 
+         assert_eq!(result, expected);
+     }
+@@ -144,11 +166,13 @@ mod tests {
+             ..Default::default()
+         };
+ 
+-        let result = populate_env(vars, &policy);
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
+ 
+-        let expected: HashMap<String, String> = hashmap! {
++        let mut expected: HashMap<String, String> = hashmap! {
+             "PATH".to_string() => "/usr/bin".to_string(),
+         };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+ 
+         assert_eq!(result, expected);
+     }
+@@ -163,12 +187,42 @@ mod tests {
+         };
+         policy.r#set.insert("NEW_VAR".to_string(), "42".to_string());
+ 
+-        let result = populate_env(vars, &policy);
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
+ 
+-        let expected: HashMap<String, String> = hashmap! {
++        let mut expected: HashMap<String, String> = hashmap! {
+             "PATH".to_string() => "/usr/bin".to_string(),
+             "NEW_VAR".to_string() => "42".to_string(),
+         };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
++
++        assert_eq!(result, expected);
++    }
++
++    #[test]
++    fn populate_env_inserts_thread_id() {
++        let vars = make_vars(&[("PATH", "/usr/bin")]);
++        let policy = ShellEnvironmentPolicy::default();
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
++
++        let mut expected: HashMap<String, String> = hashmap! {
++            "PATH".to_string() => "/usr/bin".to_string(),
++        };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
++
++        assert_eq!(result, expected);
++    }
++
++    #[test]
++    fn populate_env_omits_thread_id_when_missing() {
++        let vars = make_vars(&[("PATH", "/usr/bin")]);
++        let policy = ShellEnvironmentPolicy::default();
++        let result = populate_env(vars, &policy, None);
++
++        let expected: HashMap<String, String> = hashmap! {
++            "PATH".to_string() => "/usr/bin".to_string(),
++        };
+ 
+         assert_eq!(result, expected);
+     }
+@@ -183,8 +237,10 @@ mod tests {
+             ..Default::default()
+         };
+ 
+-        let result = populate_env(vars.clone(), &policy);
+-        let expected: HashMap<String, String> = vars.into_iter().collect();
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars.clone(), &policy, Some(thread_id));
++        let mut expected: HashMap<String, String> = vars.into_iter().collect();
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+         assert_eq!(result, expected);
+     }
+ 
+@@ -198,10 +254,12 @@ mod tests {
+             ..Default::default()
+         };
+ 
+-        let result = populate_env(vars, &policy);
+-        let expected: HashMap<String, String> = hashmap! {
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
++        let mut expected: HashMap<String, String> = hashmap! {
+             "PATH".to_string() => "/usr/bin".to_string(),
+         };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+         assert_eq!(result, expected);
+     }
+ 
+@@ -220,11 +278,13 @@ mod tests {
+             ..Default::default()
+         };
+ 
+-        let result = populate_env(vars, &policy);
+-        let expected: HashMap<String, String> = hashmap! {
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
++        let mut expected: HashMap<String, String> = hashmap! {
+             "Path".to_string() => "C:\\Windows\\System32".to_string(),
+             "TEMP".to_string() => "C:\\Temp".to_string(),
+         };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+ 
+         assert_eq!(result, expected);
+     }
+@@ -242,10 +302,12 @@ mod tests {
+             .r#set
+             .insert("ONLY_VAR".to_string(), "yes".to_string());
+ 
+-        let result = populate_env(vars, &policy);
+-        let expected: HashMap<String, String> = hashmap! {
++        let thread_id = ThreadId::new();
++        let result = populate_env(vars, &policy, Some(thread_id));
++        let mut expected: HashMap<String, String> = hashmap! {
+             "ONLY_VAR".to_string() => "yes".to_string(),
+         };
++        expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+         assert_eq!(result, expected);
+     }
+ }
+diff --git a/codex-rs/core/src/tasks/user_shell.rs b/codex-rs/core/src/tasks/user_shell.rs
+index 4305417a3579..192daafbd9dc 100644
+--- a/codex-rs/core/src/tasks/user_shell.rs
++++ b/codex-rs/core/src/tasks/user_shell.rs
+@@ -104,7 +104,10 @@ impl SessionTask for UserShellCommandTask {
+         let exec_env = ExecEnv {
+             command: exec_command.clone(),
+             cwd: cwd.clone(),
+-            env: create_env(&turn_context.shell_environment_policy),
++            env: create_env(
++                &turn_context.shell_environment_policy,
++                Some(session.conversation_id),
++            ),
+             // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
+             // should use that instead of an "arbitrarily large" timeout here.
+             expiration: USER_SHELL_TIMEOUT_MS.into(),
+diff --git a/codex-rs/core/src/tools/handlers/shell.rs b/codex-rs/core/src/tools/handlers/shell.rs
+index dbfb0364bf2f..1b1d173c436d 100644
+--- a/codex-rs/core/src/tools/handlers/shell.rs
++++ b/codex-rs/core/src/tools/handlers/shell.rs
+@@ -1,4 +1,5 @@
+ use async_trait::async_trait;
++use codex_protocol::ThreadId;
+ use codex_protocol::models::ShellCommandToolCallParams;
+ use codex_protocol::models::ShellToolCallParams;
+ use std::sync::Arc;
+@@ -41,12 +42,16 @@ struct RunExecLikeArgs {
+ }
+ 
+ impl ShellHandler {
+-    fn to_exec_params(params: &ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
++    fn to_exec_params(
++        params: &ShellToolCallParams,
++        turn_context: &TurnContext,
++        thread_id: ThreadId,
++    ) -> ExecParams {
+         ExecParams {
+             command: params.command.clone(),
+             cwd: turn_context.resolve_path(params.workdir.clone()),
+             expiration: params.timeout_ms.into(),
+-            env: create_env(&turn_context.shell_environment_policy),
++            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
+             windows_sandbox_level: turn_context.windows_sandbox_level,
+             justification: params.justification.clone(),
+@@ -65,6 +70,7 @@ impl ShellCommandHandler {
+         params: &ShellCommandToolCallParams,
+         session: &crate::codex::Session,
+         turn_context: &TurnContext,
++        thread_id: ThreadId,
+     ) -> ExecParams {
+         let shell = session.user_shell();
+         let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+@@ -73,7 +79,7 @@ impl ShellCommandHandler {
+             command,
+             cwd: turn_context.resolve_path(params.workdir.clone()),
+             expiration: params.timeout_ms.into(),
+-            env: create_env(&turn_context.shell_environment_policy),
++            env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
+             windows_sandbox_level: turn_context.windows_sandbox_level,
+             justification: params.justification.clone(),
+@@ -121,7 +127,8 @@ impl ToolHandler for ShellHandler {
+             ToolPayload::Function { arguments } => {
+                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
+                 let prefix_rule = params.prefix_rule.clone();
+-                let exec_params = Self::to_exec_params(&params, turn.as_ref());
++                let exec_params =
++                    Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
+                 Self::run_exec_like(RunExecLikeArgs {
+                     tool_name: tool_name.clone(),
+                     exec_params,
+@@ -135,7 +142,8 @@ impl ToolHandler for ShellHandler {
+                 .await
+             }
+             ToolPayload::LocalShell { params } => {
+-                let exec_params = Self::to_exec_params(&params, turn.as_ref());
++                let exec_params =
++                    Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
+                 Self::run_exec_like(RunExecLikeArgs {
+                     tool_name: tool_name.clone(),
+                     exec_params,
+@@ -197,7 +205,12 @@ impl ToolHandler for ShellCommandHandler {
+ 
+         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
+         let prefix_rule = params.prefix_rule.clone();
+-        let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
++        let exec_params = Self::to_exec_params(
++            &params,
++            session.as_ref(),
++            turn.as_ref(),
++            session.conversation_id,
++        );
+         ShellHandler::run_exec_like(RunExecLikeArgs {
+             tool_name,
+             exec_params,
+@@ -397,7 +410,10 @@ mod tests {
+ 
+         let expected_command = session.user_shell().derive_exec_args(&command, true);
+         let expected_cwd = turn_context.resolve_path(workdir.clone());
+-        let expected_env = create_env(&turn_context.shell_environment_policy);
++        let expected_env = create_env(
++            &turn_context.shell_environment_policy,
++            Some(session.conversation_id),
++        );
+ 
+         let params = ShellCommandToolCallParams {
+             command,
+@@ -409,7 +425,12 @@ mod tests {
+             justification: justification.clone(),
+         };
+ 
+-        let exec_params = ShellCommandHandler::to_exec_params(&params, &session, &turn_context);
++        let exec_params = ShellCommandHandler::to_exec_params(
++            &params,
++            &session,
++            &turn_context,
++            session.conversation_id,
++        );
+ 
+         // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
+         assert_eq!(exec_params.command, expected_command);
+diff --git a/codex-rs/core/src/unified_exec/process_manager.rs b/codex-rs/core/src/unified_exec/process_manager.rs
+index 5b3e83a5dc54..6b44926df470 100644
+--- a/codex-rs/core/src/unified_exec/process_manager.rs
++++ b/codex-rs/core/src/unified_exec/process_manager.rs
+@@ -483,7 +483,10 @@ impl UnifiedExecProcessManager {
+         cwd: PathBuf,
+         context: &UnifiedExecContext,
+     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+-        let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
++        let env = apply_unified_exec_env(create_env(
++            &context.turn.shell_environment_policy,
++            Some(context.session.conversation_id),
++        ));
+         let features = context.session.features();
+         let mut orchestrator = ToolOrchestrator::new();
+         let mut runtime = UnifiedExecRuntime::new(self);
+diff --git a/codex-rs/linux-sandbox/tests/suite/landlock.rs b/codex-rs/linux-sandbox/tests/suite/landlock.rs
+index 84f89a167822..75551d4d9136 100644
+--- a/codex-rs/linux-sandbox/tests/suite/landlock.rs
++++ b/codex-rs/linux-sandbox/tests/suite/landlock.rs
+@@ -34,7 +34,7 @@ const NETWORK_TIMEOUT_MS: u64 = 10_000;
+ 
+ fn create_env_from_core_vars() -> HashMap<String, String> {
+     let policy = ShellEnvironmentPolicy::default();
+-    create_env(&policy)
++    create_env(&policy, None)
+ }
+ 
+ #[expect(clippy::print_stdout)]

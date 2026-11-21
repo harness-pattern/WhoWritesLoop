@@ -1,0 +1,241 @@
+diff --git a/docs/tools/file-system.md b/docs/tools/file-system.md
+index 83c3691dd35..2ac528a13e0 100644
+--- a/docs/tools/file-system.md
++++ b/docs/tools/file-system.md
+@@ -121,6 +121,12 @@ around the `old_string` to ensure it modifies the correct location.
+     If `false` (default), only succeeds if exactly one occurrence is found.
+ - **Confirmation:** Requires manual user approval.
+ 
++## Cancellation
++
++`write_file` and `replace` check for cancellation before writing, including
++after preparing the content and parent directory. Cancellation does not undo a
++write that has already started.
++
+ ## Next steps
+ 
+ - Follow the [File management tutorial](../cli/tutorials/file-management.md) for
+diff --git a/packages/core/src/tools/edit.test.ts b/packages/core/src/tools/edit.test.ts
+index 5aa6c472b02..d59cdb6f154 100644
+--- a/packages/core/src/tools/edit.test.ts
++++ b/packages/core/src/tools/edit.test.ts
+@@ -33,6 +33,10 @@ vi.mock('../utils/editor.js', () => ({
+   openDiff: mockOpenDiff,
+ }));
+ 
++vi.mock('node:fs/promises', async (importOriginal) => ({
++  ...(await importOriginal<typeof import('node:fs/promises')>()),
++}));
++
+ vi.mock('./jit-context.js', () => ({
+   discoverJitContext: vi.fn().mockResolvedValue(''),
+   appendJitContext: vi.fn().mockImplementation((content, context) => {
+@@ -65,6 +69,7 @@ import {
+ import path from 'node:path';
+ import { isSubpath, resolveToRealPath } from '../utils/paths.js';
+ import fs from 'node:fs';
++import * as fsPromises from 'node:fs/promises';
+ import os from 'node:os';
+ import { ApprovalMode } from '../policy/types.js';
+ import { type Config } from '../config/config.js';
+@@ -739,6 +744,61 @@ function doIt() {
+       filePath = path.join(rootDir, testFile);
+     });
+ 
++    it.each([
++      { fileExists: true, cancelDuring: 'read' },
++      { fileExists: false, cancelDuring: 'read' },
++      { fileExists: true, cancelDuring: 'directory access' },
++      { fileExists: false, cancelDuring: 'directory access' },
++    ])(
++      'does not write after cancellation during $cancelDuring (existing file: $fileExists)',
++      async ({ fileExists, cancelDuring }) => {
++        const originalContent = 'original content';
++        if (fileExists) {
++          fs.writeFileSync(filePath, originalContent, 'utf8');
++        }
++        const controller = new AbortController();
++        if (cancelDuring === 'read') {
++          const readTextFile =
++            fileSystemService.readTextFile.bind(fileSystemService);
++          vi.spyOn(fileSystemService, 'readTextFile').mockImplementationOnce(
++            async (target) => {
++              try {
++                return await readTextFile(target);
++              } finally {
++                controller.abort();
++              }
++            },
++          );
++        } else {
++          const access = fsPromises.access;
++          vi.spyOn(fsPromises, 'access').mockImplementationOnce(
++            async (target) => {
++              await access(target);
++              controller.abort();
++            },
++          );
++        }
++
++        const result = await tool
++          .build({
++            file_path: filePath,
++            instruction: 'Replace the content',
++            old_string: fileExists ? originalContent : '',
++            new_string: 'replacement content',
++          })
++          .execute({ abortSignal: controller.signal })
++          .catch((error: unknown) => error);
++
++        expect(controller.signal.aborted).toBe(true);
++        if (fileExists) {
++          expect(fs.readFileSync(filePath, 'utf8')).toBe(originalContent);
++        } else {
++          expect(fs.existsSync(filePath)).toBe(false);
++        }
++        expect(result).toEqual(new Error('Edit aborted'));
++      },
++    );
++
+     it('should reject when calculateEdit fails after an abort signal', async () => {
+       const params: EditToolParams = {
+         file_path: path.join(rootDir, 'abort-execute.txt'),
+diff --git a/packages/core/src/tools/edit.ts b/packages/core/src/tools/edit.ts
+index a36779a9c1a..b930831f7c5 100644
+--- a/packages/core/src/tools/edit.ts
++++ b/packages/core/src/tools/edit.ts
+@@ -981,6 +981,10 @@ class EditToolInvocation
+       };
+     }
+ 
++    if (signal.aborted) {
++      throw new Error('Edit aborted');
++    }
++
+     if (editData.error) {
+       return {
+         llmContent: editData.error.raw,
+@@ -1004,6 +1008,9 @@ class EditToolInvocation
+       if (useCRLF) {
+         finalContent = finalContent.replace(/\r?\n/g, '\r\n');
+       }
++      if (signal.aborted) {
++        throw new Error('Edit aborted');
++      }
+       await this.config
+         .getFileSystemService()
+         .writeTextFile(this.resolvedPath, finalContent);
+@@ -1131,6 +1138,9 @@ ${snippet}`);
+         returnDisplay: displayResult,
+       };
+     } catch (error) {
++      if (signal.aborted) {
++        throw error;
++      }
+       const errorMsg = error instanceof Error ? error.message : String(error);
+       return {
+         llmContent: `Error executing edit: ${errorMsg}`,
+diff --git a/packages/core/src/tools/write-file.test.ts b/packages/core/src/tools/write-file.test.ts
+index 799c3a67552..ac9d7a66335 100644
+--- a/packages/core/src/tools/write-file.test.ts
++++ b/packages/core/src/tools/write-file.test.ts
+@@ -1223,6 +1223,64 @@ describe('WriteFileTool', () => {
+     });
+   });
+ 
++  describe('cancellation', () => {
++    it.each([
++      { fileExists: true, cancelDuring: 'read' },
++      { fileExists: false, cancelDuring: 'read' },
++      { fileExists: true, cancelDuring: 'directory access' },
++      { fileExists: false, cancelDuring: 'directory access' },
++    ])(
++      'does not write after cancellation during $cancelDuring (existing file: $fileExists)',
++      async ({ fileExists, cancelDuring }) => {
++        const filePath = path.join(rootDir, 'cancelled.json');
++        const originalContent = '{"value":"original"}';
++        if (fileExists) {
++          fs.writeFileSync(filePath, originalContent, 'utf8');
++        }
++        const controller = new AbortController();
++        const readTextFile = fsService.readTextFile.bind(fsService);
++        const access = fs.promises.access.bind(fs.promises);
++        const abortSpy =
++          cancelDuring === 'read'
++            ? vi
++                .spyOn(fsService, 'readTextFile')
++                .mockImplementationOnce(async (target) => {
++                  try {
++                    return await readTextFile(target);
++                  } finally {
++                    controller.abort();
++                  }
++                })
++            : vi
++                .spyOn(fs.promises, 'access')
++                .mockImplementationOnce(async (target) => {
++                  await access(target);
++                  controller.abort();
++                });
++
++        try {
++          const result = await tool
++            .build({
++              file_path: filePath,
++              content: '{"value":"replacement"}',
++            })
++            .execute({ abortSignal: controller.signal })
++            .catch((error: unknown) => error);
++
++          expect(controller.signal.aborted).toBe(true);
++          if (fileExists) {
++            expect(fs.readFileSync(filePath, 'utf8')).toBe(originalContent);
++          } else {
++            expect(fs.existsSync(filePath)).toBe(false);
++          }
++          expect(result).toEqual(new Error('Write aborted'));
++        } finally {
++          abortSpy.mockRestore();
++        }
++      },
++    );
++  });
++
+   describe('concurrent writes to the same file', () => {
+     it('does not report two creations of the same new file', async () => {
+       const abortSignal = new AbortController().signal;
+diff --git a/packages/core/src/tools/write-file.ts b/packages/core/src/tools/write-file.ts
+index d85728ce364..27f342dbe78 100644
+--- a/packages/core/src/tools/write-file.ts
++++ b/packages/core/src/tools/write-file.ts
+@@ -427,6 +427,10 @@ class WriteFileToolInvocation extends BaseToolInvocation<
+       abortSignal,
+     );
+ 
++    if (abortSignal.aborted) {
++      throw new Error('Write aborted');
++    }
++
+     if (correctedContentResult.error) {
+       const errDetails = correctedContentResult.error;
+       const errorMsg = errDetails.code
+@@ -472,6 +476,9 @@ class WriteFileToolInvocation extends BaseToolInvocation<
+         finalContent = finalContent.replace(/\r?\n/g, '\r\n');
+       }
+ 
++      if (abortSignal.aborted) {
++        throw new Error('Write aborted');
++      }
+       await this.config
+         .getFileSystemService()
+         .writeTextFile(this.resolvedPath, finalContent);
+@@ -583,6 +590,9 @@ class WriteFileToolInvocation extends BaseToolInvocation<
+         returnDisplay: displayResult,
+       };
+     } catch (error) {
++      if (abortSignal.aborted) {
++        throw error;
++      }
+       // Capture detailed error information for debugging
+       let errorMsg: string;
+       let errorType = ToolErrorType.FILE_WRITE_FAILURE;

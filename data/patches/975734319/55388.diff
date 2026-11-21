@@ -1,0 +1,148 @@
+diff --git a/packages/core/src/config/variable.ts b/packages/core/src/config/variable.ts
+index e6d7ad4d266a..8920fd1b2f17 100644
+--- a/packages/core/src/config/variable.ts
++++ b/packages/core/src/config/variable.ts
+@@ -19,7 +19,6 @@ type ParseSource =
+ 
+ type SubstituteInput = ParseSource & {
+   text: string
+-  missing?: "error" | "empty"
+   env?: Record<string, string>
+ }
+ 
+@@ -56,27 +55,24 @@ const substituteFiles = Effect.fnUntraced(function* (input: SubstituteInput, tex
+     const filePath = token.slice("{file:".length, -1)
+     const expandedPath = filePath.startsWith("~/") ? path.join(os.homedir(), filePath.slice(2)) : filePath
+     const resolvedPath = path.isAbsolute(expandedPath) ? expandedPath : path.resolve(configDir, expandedPath)
+-    const fileContent = yield* fs.readFileString(resolvedPath).pipe(
+-      Effect.catch((error) => {
+-        if (input.missing === "empty") return Effect.succeed("")
++    const fileContent = yield* fs
++      .readFileStringSafe(resolvedPath)
++      .pipe(
++        Effect.mapError(
++          (error) =>
++            new InvalidError({ path: configSource, message: `bad file reference: "${token}"` }, { cause: error }),
++        ),
++      )
++    // Like a missing {env:VAR}, a missing or unreadable file substitutes empty so one stale secret
++    // reference cannot take down every Location that loads this config.
++    if (fileContent === undefined)
++      yield* Effect.logWarning("config file reference is missing or unreadable", {
++        source: configSource,
++        reference: token,
++        path: resolvedPath,
++      })
+ 
+-        const message = `bad file reference: "${token}"`
+-        return Effect.fail(
+-          new InvalidError(
+-            {
+-              path: configSource,
+-              message:
+-                error._tag === "PlatformError" && error.reason._tag === "NotFound"
+-                  ? `${message} ${resolvedPath} does not exist`
+-                  : message,
+-            },
+-            { cause: error },
+-          ),
+-        )
+-      }),
+-    )
+-
+-    out += JSON.stringify(fileContent.trim()).slice(1, -1)
++    out += JSON.stringify((fileContent ?? "").trim()).slice(1, -1)
+     cursor = index + token.length
+   }
+ 
+diff --git a/packages/core/test/config/config.test.ts b/packages/core/test/config/config.test.ts
+index 071e24a447bf..34de57f8a06a 100644
+--- a/packages/core/test/config/config.test.ts
++++ b/packages/core/test/config/config.test.ts
+@@ -1306,7 +1306,7 @@ describe("Config", () => {
+                   fs.writeFile(
+                     path.join(tmp.path, "opencode.jsonc"),
+                     `{
+-                      // Ignored reference: {file:missing.txt}
++                      // Ignored reference: {file:.}
+                       "username": "user-{env:OPENCODE_TEST_MISSING}",
+                       "mcp": {
+                         "servers": {
+@@ -1315,7 +1315,8 @@ describe("Config", () => {
+                             "url": "https://example.com/mcp",
+                             "headers": {
+                               "Authorization": "Bearer {env:OPENCODE_TEST_MCP_TOKEN}",
+-                              "X-Token": "{file:token.txt}"
++                              "X-Token": "{file:token.txt}",
++                              "X-Missing": "Bearer {file:~/.opencode-test-missing/key}"
+                             }
+                           }
+                         }
+@@ -1335,6 +1336,7 @@ describe("Config", () => {
+                 expect(remote.headers).toEqual({
+                   Authorization: "Bearer secret",
+                   "X-Token": 'file\n"token"',
++                  "X-Missing": "Bearer ",
+                 })
+               }).pipe(Effect.provide(testLayer(tmp.path)))
+             }),
+diff --git a/packages/core/test/location-layer.test.ts b/packages/core/test/location-layer.test.ts
+index 4506d0fca4d6..c9401a1f79eb 100644
+--- a/packages/core/test/location-layer.test.ts
++++ b/packages/core/test/location-layer.test.ts
+@@ -103,7 +103,7 @@ describe("LocationServiceMap", () => {
+             yield* Effect.addFinalizer(() => Effect.promise(() => fs.chmod(directory, 0o755)))
+           }
+           if (failure === "config reference") {
+-            yield* Effect.promise(() => fs.mkdir(directory))
++            yield* Effect.promise(() => fs.mkdir(path.join(directory, "username.txt"), { recursive: true }))
+             yield* Effect.promise(() =>
+               fs.writeFile(path.join(directory, "opencode.json"), JSON.stringify({ username: "{file:username.txt}" })),
+             )
+@@ -124,6 +124,7 @@ describe("LocationServiceMap", () => {
+           }
+           if (failure === "permissions") yield* Effect.promise(() => fs.chmod(directory, 0o755))
+           if (failure === "config reference") {
++            yield* Effect.promise(() => fs.rm(path.join(directory, "username.txt"), { recursive: true }))
+             yield* Effect.promise(() => fs.writeFile(path.join(directory, "username.txt"), "test-user"))
+           }
+           expect((yield* Effect.promise(() => fs.stat(directory))).isDirectory()).toBe(true)
+@@ -147,7 +148,7 @@ describe("LocationServiceMap", () => {
+         const locations = yield* LocationServiceMap.Service
+         if (failure === "file") yield* Effect.promise(() => fs.writeFile(directory, "file"))
+         if (failure === "config reference") {
+-          yield* Effect.promise(() => fs.mkdir(directory))
++          yield* Effect.promise(() => fs.mkdir(path.join(directory, "username.txt"), { recursive: true }))
+           yield* Effect.promise(() =>
+             fs.writeFile(path.join(directory, "opencode.json"), JSON.stringify({ username: "{file:username.txt}" })),
+           )
+@@ -165,6 +166,7 @@ describe("LocationServiceMap", () => {
+         if (failure === "file") yield* Effect.promise(() => fs.rm(directory))
+         if (failure !== "config reference") yield* Effect.promise(() => fs.mkdir(directory))
+         if (failure === "config reference") {
++          yield* Effect.promise(() => fs.rm(path.join(directory, "username.txt"), { recursive: true }))
+           yield* Effect.promise(() => fs.writeFile(path.join(directory, "username.txt"), "test-user"))
+         }
+         const repaired = yield* locations.contextEffect(ref)
+diff --git a/packages/core/test/session-move.test.ts b/packages/core/test/session-move.test.ts
+index 5e7fb7967489..cbcfa6104687 100644
+--- a/packages/core/test/session-move.test.ts
++++ b/packages/core/test/session-move.test.ts
+@@ -215,7 +215,7 @@ describe("Session.move", () => {
+           yield* Effect.promise(() => Promise.all([mkdir(source), mkdir(destination)]))
+           if (broken)
+             yield* Effect.promise(() =>
+-              Bun.write(path.join(source, "opencode.json"), JSON.stringify({ instructions: ["{file:./missing.txt}"] })),
++              Bun.write(path.join(source, "opencode.json"), JSON.stringify({ instructions: ["{file:.}"] })),
+             )
+           const session = yield* Session.Service
+           const execution = yield* SessionExecution.Service
+@@ -271,7 +271,7 @@ describe("Session.move", () => {
+           const source = Location.Ref.make({ directory: AbsolutePath.make(path.join(tmp.path, "source")) })
+           const destination = AbsolutePath.make(path.join(tmp.path, "destination"))
+           yield* Effect.promise(() => Promise.all([mkdir(source.directory), mkdir(destination)]))
+-          const config = JSON.stringify({ instructions: ["{file:./missing.txt}"] })
++          const config = JSON.stringify({ instructions: ["{file:.}"] })
+           if (!broken) yield* Effect.promise(() => Bun.write(path.join(source.directory, "opencode.json"), config))
+           const selectedID = Session.ID.create()
+           const replacements: LayerNode.Replacements = [

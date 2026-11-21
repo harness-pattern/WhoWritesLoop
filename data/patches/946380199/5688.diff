@@ -1,0 +1,1200 @@
+diff --git a/packages/codex/patches/sdk-private-macos-deny-paths.patch b/packages/codex/patches/sdk-private-macos-deny-paths.patch
+new file mode 100644
+index 0000000000..2514ed6d28
+--- /dev/null
++++ b/packages/codex/patches/sdk-private-macos-deny-paths.patch
+@@ -0,0 +1,277 @@
++diff --git a/codex-rs/core/src/tools/orchestrator.rs b/codex-rs/core/src/tools/orchestrator.rs
++index 03561e1c..df1ecd03 100644
++--- a/codex-rs/core/src/tools/orchestrator.rs
+++++ b/codex-rs/core/src/tools/orchestrator.rs
++@@ -151,7 +151,8 @@ impl ToolOrchestrator {
++         let sandbox_manager = match environment.environment.local_runtime_paths() {
++             Some(paths) => sandbox_manager
++                 .with_restricted_macos_process_sandbox(paths.restricted_macos_process_sandbox)
++-                .with_allowed_symlinked_codex_home(paths.allowed_symlinked_codex_home.clone()),
+++                .with_allowed_symlinked_codex_home(paths.allowed_symlinked_codex_home.clone())
+++                .with_local_macos_deny_paths(paths.local_macos_deny_paths.clone()),
++             None => sandbox_manager,
++         };
++         let sandbox_config = environment.config();
++diff --git a/codex-rs/exec-server/src/discoverV2/capability_discoveries.rs b/codex-rs/exec-server/src/discoverV2/capability_discoveries.rs
++index bda6f20e..54d3e15a 100644
++--- a/codex-rs/exec-server/src/discoverV2/capability_discoveries.rs
+++++ b/codex-rs/exec-server/src/discoverV2/capability_discoveries.rs
++@@ -53,7 +53,7 @@ pub(super) async fn load_capability_discoveries(
++     locations: &CapabilityLocations,
++     sandbox: Option<&crate::FileSystemSandboxContext>,
++ ) -> io::Result<Arc<DiscoverV2CapabilitiesResponse>> {
++-    let sandbox = sandbox.filter(|sandbox| sandbox.should_read_from_sandbox());
+++    let sandbox = sandbox.filter(|sandbox| file_system.should_read_from_sandbox(sandbox));
++     let warnings = if !locations.warnings.is_empty() {
++         vec!["some capability locations could not be resolved; discovery may be incomplete".into()]
++     } else {
++diff --git a/codex-rs/exec-server/src/fs_sandbox.rs b/codex-rs/exec-server/src/fs_sandbox.rs
++index 0d88316b..396f4b34 100644
++--- a/codex-rs/exec-server/src/fs_sandbox.rs
+++++ b/codex-rs/exec-server/src/fs_sandbox.rs
++@@ -154,9 +154,11 @@ impl FileSystemSandboxRunner {
++             .with_linux_sandbox_pid_namespace(self.runtime_paths.linux_sandbox_pid_namespace)
++             .with_private_read_deny(self.runtime_paths.private_read_deny.clone());
++         #[cfg(target_os = "macos")]
++-        let sandbox_manager = sandbox_manager.with_allowed_symlinked_codex_home(
++-            self.runtime_paths.allowed_symlinked_codex_home.clone(),
++-        );
+++        let sandbox_manager = sandbox_manager
+++            .with_allowed_symlinked_codex_home(
+++                self.runtime_paths.allowed_symlinked_codex_home.clone(),
+++            )
+++            .with_local_macos_deny_paths(self.runtime_paths.local_macos_deny_paths.clone());
++         let (sandbox, windows_sandbox_level) = crate::sandbox_selection::select_sandbox(
++             &sandbox_manager,
++             permission_profile,
++diff --git a/codex-rs/exec-server/src/local_file_system.rs b/codex-rs/exec-server/src/local_file_system.rs
++index 32ddcfb9..aeb871e1 100644
++--- a/codex-rs/exec-server/src/local_file_system.rs
+++++ b/codex-rs/exec-server/src/local_file_system.rs
++@@ -57,6 +57,8 @@ pub(crate) struct UnsandboxedFileSystem {
++ pub struct LocalFileSystem {
++     unsandboxed: UnsandboxedFileSystem,
++     sandboxed: Option<SandboxedFileSystem>,
+++    #[cfg(target_os = "macos")]
+++    has_local_macos_deny_paths: bool,
++ }
++
++ impl LocalFileSystem {
++@@ -64,12 +66,16 @@ impl LocalFileSystem {
++         Self {
++             unsandboxed: UnsandboxedFileSystem::default(),
++             sandboxed: None,
+++            #[cfg(target_os = "macos")]
+++            has_local_macos_deny_paths: false,
++         }
++     }
++
++     pub fn with_runtime_paths(runtime_paths: ExecServerRuntimeOptions) -> Self {
++         Self {
++             unsandboxed: UnsandboxedFileSystem::default(),
+++            #[cfg(target_os = "macos")]
+++            has_local_macos_deny_paths: !runtime_paths.local_macos_deny_paths.is_empty(),
++             sandboxed: Some(SandboxedFileSystem::new(runtime_paths)),
++         }
++     }
++@@ -83,6 +89,14 @@ impl LocalFileSystem {
++         })
++     }
++
+++    pub(crate) fn should_read_from_sandbox(&self, sandbox: &FileSystemSandboxContext) -> bool {
+++        #[cfg(target_os = "macos")]
+++        if self.has_local_macos_deny_paths {
+++            return true;
+++        }
+++        sandbox.should_read_from_sandbox()
+++    }
+++
++     fn file_system_for_reads<'a>(
++         &'a self,
++         sandbox: Option<&'a FileSystemSandboxContext>,
++@@ -93,7 +107,7 @@ impl LocalFileSystem {
++         if let Some(sandbox) = sandbox {
++             sandbox.validate_file_system_paths_for_current_host()?;
++         }
++-        if sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox) {
+++        if sandbox.is_some_and(|sandbox| self.should_read_from_sandbox(sandbox)) {
++             Ok((self.sandboxed()?, sandbox))
++         } else {
++             Ok((&self.unsandboxed, None))
++@@ -128,7 +142,7 @@ impl LocalFileSystem {
++         if let Some(sandbox) = sandbox {
++             sandbox.validate_file_system_paths_for_current_host()?;
++             let needs_sandbox = match mode {
++-                FsOpenMode::Read => sandbox.should_read_from_sandbox(),
+++                FsOpenMode::Read => self.should_read_from_sandbox(sandbox),
++                 FsOpenMode::Replace => sandbox.should_write_into_sandbox(),
++             };
++             if needs_sandbox {
++@@ -150,7 +164,7 @@ impl LocalFileSystem {
++     #[tracing::instrument(
++         name = "fs.read_file",
++         skip_all,
++-        fields(sandboxed = sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox))
+++        fields(sandboxed = sandbox.is_some_and(|sandbox| self.should_read_from_sandbox(sandbox)))
++     )]
++     async fn read_file(
++         &self,
++@@ -197,7 +211,7 @@ impl LocalFileSystem {
++     #[tracing::instrument(
++         name = "fs.get_metadata",
++         skip_all,
++-        fields(sandboxed = sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox))
+++        fields(sandboxed = sandbox.is_some_and(|sandbox| self.should_read_from_sandbox(sandbox)))
++     )]
++     async fn get_metadata(
++         &self,
++diff --git a/codex-rs/exec-server/src/process_sandbox.rs b/codex-rs/exec-server/src/process_sandbox.rs
++index 3a183ac5..33acadf5 100644
++--- a/codex-rs/exec-server/src/process_sandbox.rs
+++++ b/codex-rs/exec-server/src/process_sandbox.rs
++@@ -215,7 +215,8 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
++     #[cfg(target_os = "macos")]
++     let sandbox_manager = sandbox_manager
++         .with_restricted_macos_process_sandbox(runtime_paths.restricted_macos_process_sandbox)
++-        .with_allowed_symlinked_codex_home(runtime_paths.allowed_symlinked_codex_home.clone());
+++        .with_allowed_symlinked_codex_home(runtime_paths.allowed_symlinked_codex_home.clone())
+++        .with_local_macos_deny_paths(runtime_paths.local_macos_deny_paths.clone());
++     let (sandbox, windows_sandbox_level) = select_sandbox(
++         &sandbox_manager,
++         &permissions,
++diff --git a/codex-rs/exec-server/src/runtime_options.rs b/codex-rs/exec-server/src/runtime_options.rs
++index c8d76dba..ef17e5a1 100644
++--- a/codex-rs/exec-server/src/runtime_options.rs
+++++ b/codex-rs/exec-server/src/runtime_options.rs
++@@ -1,12 +1,15 @@
++ //! Executor-local paths and trusted startup settings used when preparing execution.
++
+++#[cfg(target_os = "macos")]
+++use std::fmt;
++ use std::path::PathBuf;
++
++ use codex_sandboxing::LinuxSandboxPidNamespace;
++ use codex_utils_absolute_path::AbsolutePathBuf;
++
++ /// Paths and sandbox settings initialized when creating an executor.
++-#[derive(Clone, Debug, Eq, PartialEq)]
+++#[derive(Clone, Eq, PartialEq)]
+++#[cfg_attr(not(target_os = "macos"), derive(Debug))]
++ pub struct ExecServerRuntimeOptions {
++     /// Stable path to the Codex executable used to launch hidden helper modes.
++     pub codex_self_exe: AbsolutePathBuf,
++@@ -27,6 +30,42 @@ pub struct ExecServerRuntimeOptions {
++     /// User-config opt-out of writable-root symlink checks beneath this host's home.
++     #[cfg(target_os = "macos")]
++     pub allowed_symlinked_codex_home: Option<AbsolutePathBuf>,
+++    /// Deny paths owned by the local host, outside the serialized permission profile.
+++    #[cfg(target_os = "macos")]
+++    pub local_macos_deny_paths: Vec<AbsolutePathBuf>,
+++}
+++
+++#[cfg(target_os = "macos")]
+++impl fmt::Debug for ExecServerRuntimeOptions {
+++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+++        let mut debug = f.debug_struct("ExecServerRuntimeOptions");
+++        debug
+++            .field("codex_self_exe", &self.codex_self_exe)
+++            .field("codex_linux_sandbox_exe", &self.codex_linux_sandbox_exe)
+++            .field(
+++                "linux_sandbox_pid_namespace",
+++                &self.linux_sandbox_pid_namespace,
+++            )
+++            .field(
+++                "proxy_private_ips_via_upstream",
+++                &self.proxy_private_ips_via_upstream,
+++            )
+++            .field(
+++                "join_unreturned_local_exec_on_interrupt",
+++                &self.join_unreturned_local_exec_on_interrupt,
+++            );
+++        #[cfg(target_os = "macos")]
+++        debug
+++            .field(
+++                "restricted_macos_process_sandbox",
+++                &self.restricted_macos_process_sandbox,
+++            )
+++            .field(
+++                "allowed_symlinked_codex_home",
+++                &self.allowed_symlinked_codex_home,
+++            );
+++        debug.finish_non_exhaustive()
+++    }
++ }
++
++ impl ExecServerRuntimeOptions {
++@@ -58,6 +97,8 @@ impl ExecServerRuntimeOptions {
++             restricted_macos_process_sandbox: false,
++             #[cfg(target_os = "macos")]
++             allowed_symlinked_codex_home: None,
+++            #[cfg(target_os = "macos")]
+++            local_macos_deny_paths: Vec::new(),
++         })
++     }
++
++diff --git a/codex-rs/sandboxing/src/manager.rs b/codex-rs/sandboxing/src/manager.rs
++index d6d91139..cc902299 100644
++--- a/codex-rs/sandboxing/src/manager.rs
+++++ b/codex-rs/sandboxing/src/manager.rs
++@@ -281,6 +281,8 @@ pub struct SandboxManager {
++     seatbelt_profile: MacosSeatbeltProfile,
++     #[cfg(target_os = "macos")]
++     allowed_symlinked_codex_home: Option<AbsolutePathBuf>,
+++    #[cfg(target_os = "macos")]
+++    local_macos_deny_paths: Vec<AbsolutePathBuf>,
++ }
++
++ impl SandboxManager {
++@@ -297,6 +299,8 @@ impl SandboxManager {
++             seatbelt_profile: MacosSeatbeltProfile::FileSystemHelper,
++             #[cfg(target_os = "macos")]
++             allowed_symlinked_codex_home: None,
+++            #[cfg(target_os = "macos")]
+++            local_macos_deny_paths: Vec::new(),
++         }
++     }
++
++@@ -332,6 +336,13 @@ impl SandboxManager {
++         self
++     }
++
+++    /// Apply host-owned paths only when compiling the local Seatbelt policy.
+++    #[cfg(target_os = "macos")]
+++    pub fn with_local_macos_deny_paths(mut self, paths: Vec<AbsolutePathBuf>) -> Self {
+++        self.local_macos_deny_paths = paths;
+++        self
+++    }
+++
++     pub fn select_initial(
++         &self,
++         permission_profile: &PermissionProfile,
++@@ -462,10 +473,25 @@ impl SandboxManager {
++                 use crate::seatbelt::SeatbeltPreparationError;
++                 use crate::seatbelt::create_seatbelt_command_args_with_profile;
++
+++                use codex_protocol::permissions::FileSystemAccessMode;
+++                use codex_protocol::permissions::FileSystemPath;
+++                use codex_protocol::permissions::FileSystemSandboxEntry;
+++
++                 let pending = pending_sandboxed_request?;
++-                let (file_system_sandbox_policy, network_sandbox_policy) = pending
+++                let (mut file_system_sandbox_policy, network_sandbox_policy) = pending
++                     .effective_permission_profile
++                     .to_runtime_permissions();
+++                // Keep private paths out of the request's effective permission profile.
+++                file_system_sandbox_policy
+++                    .entries
+++                    .extend(self.local_macos_deny_paths.iter().map(|path| {
+++                        FileSystemSandboxEntry::new(
+++                            FileSystemPath::Path {
+++                                path: PathUri::from_abs_path(path),
+++                            },
+++                            FileSystemAccessMode::Deny,
+++                        )
+++                    }));
++                 let mut args = create_seatbelt_command_args_with_profile(
++                     CreateSeatbeltCommandArgsParams {
++                         command: argv,
+diff --git a/packages/codex/patches/series.json b/packages/codex/patches/series.json
+index 270ae2e29f..9c2a00e256 100644
+--- a/packages/codex/patches/series.json
++++ b/packages/codex/patches/series.json
+@@ -607,7 +607,11 @@
+     {
+       "path": "sdk-native-web-search-images.patch",
+       "sha256": "87c4c6eda5d7d3086c434c0227fab9301c847c94c97eae32eabba7598f4e67bf"
++    },
++    {
++      "path": "sdk-private-macos-deny-paths.patch",
++      "sha256": "327e277742f7d0f984e7c1219b9e4457b0f24c0c72bf29f280485409400ef97d"
+     }
+   ],
+-  "result_tree": "f3d7735089db99009b21c118cb97cbc1dae373d0"
++  "result_tree": "13b14299628af557417468e2a8f31346fa61d64e"
+ }
+diff --git a/packages/codex/rust/engine.rs b/packages/codex/rust/engine.rs
+index d9eba27445..5c431de4f7 100644
+--- a/packages/codex/rust/engine.rs
++++ b/packages/codex/rust/engine.rs
+@@ -555,7 +555,11 @@ impl EngineState {
+             ),
+             (None, None) => {
+                 crate::environment::for_unattached_threads(
+-                    &config, /*sdk_local*/ false, /*private_read_deny*/ None,
++                    &config,
++                    /*sdk_local*/ false,
++                    /*private_read_deny*/ None,
++                    #[cfg(target_os = "macos")]
++                    Vec::new(),
+                 )
+                 .await?
+             }
+diff --git a/packages/codex/rust/environment.rs b/packages/codex/rust/environment.rs
+index da05407ac1..84838e1493 100644
+--- a/packages/codex/rust/environment.rs
++++ b/packages/codex/rust/environment.rs
+@@ -81,6 +81,7 @@ pub async fn for_unattached_threads(
+     config: &Config,
+     sdk_local: bool,
+     private_read_deny: Option<AbsolutePathBuf>,
++    #[cfg(target_os = "macos")] local_macos_deny_paths: Vec<AbsolutePathBuf>,
+ ) -> Result<(EnvironmentManager, Option<String>)> {
+     // An explicitly absent helper supports model-only clients. Native MCP
+     // admits servers against the actual manager at session selection time.
+@@ -98,7 +99,11 @@ pub async fn for_unattached_threads(
+     let paths = if sdk_local {
+         let paths = paths.with_join_unreturned_local_exec_on_interrupt();
+         #[cfg(target_os = "macos")]
+-        let paths = paths.with_restricted_macos_process_sandbox();
++        let paths = {
++            let mut paths = paths.with_restricted_macos_process_sandbox();
++            paths.local_macos_deny_paths = local_macos_deny_paths;
++            paths
++        };
+         paths
+     } else {
+         paths
+@@ -550,8 +555,24 @@ impl EnvironmentOptions {
+             } else {
+                 None
+             };
+-            let (manager, _) =
+-                for_unattached_threads(config, /*sdk_local*/ true, private_read_deny).await?;
++            #[cfg(target_os = "macos")]
++            let local_macos_deny_paths = if self.trusted_workspace_write {
++                macos_saved_login_deny_paths(private_paths, |fallback| {
++                    fallback
++                        .canonicalize()
++                        .context("could not resolve the MCP OAuth fallback")
++                })?
++            } else {
++                Vec::new()
++            };
++            let (manager, _) = for_unattached_threads(
++                config,
++                /*sdk_local*/ true,
++                private_read_deny,
++                #[cfg(target_os = "macos")]
++                local_macos_deny_paths,
++            )
++            .await?;
+             let environment = manager
+                 .try_local_environment()
+                 .context("local executor requires the native process helper")?;
+@@ -582,7 +603,11 @@ impl EnvironmentOptions {
+         // Reserve its lazy local launcher without selecting a host workspace:
+         // for_unattached_threads has no default; selection below remains remote.
+         let (manager, _) = for_unattached_threads(
+-            config, /*sdk_local*/ false, /*private_read_deny*/ None,
++            config,
++            /*sdk_local*/ false,
++            /*private_read_deny*/ None,
++            #[cfg(target_os = "macos")]
++            Vec::new(),
+         )
+         .await?;
+         if needs_local_mcp {
+@@ -659,8 +684,8 @@ impl EnvironmentOptions {
+                 "trusted workspace-write requires a writable local executor without storage mounts"
+             );
+             ensure!(
+-                cfg!(target_os = "linux"),
+-                "trusted workspace-write requires a local Linux executor"
++                cfg!(any(target_os = "linux", target_os = "macos")),
++                "trusted workspace-write requires a local Linux or macOS executor"
+             );
+         }
+         ensure!(
+@@ -1076,8 +1101,11 @@ async fn strict_write_profile(
+     ensure!(
+         !trusted_workspace_write
+             || (local
+-                && Platform::from_platform_os(info.platform_os.as_deref()) == Platform::Linux),
+-        "trusted workspace-write requires a local Linux executor"
++                && matches!(
++                    Platform::from_platform_os(info.platform_os.as_deref()),
++                    Platform::Linux | Platform::Macos
++                )),
++        "trusted workspace-write requires a local Linux or macOS executor"
+     );
+     ensure!(
+         matches!(
+@@ -1134,7 +1162,7 @@ async fn strict_write_profile(
+         check_local_helper_write_roots(environment, &roots)?;
+         let credential_targets =
+             check_local_private_write_roots(&roots, codex_home, private_paths)?;
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "macos"))]
+         if trusted_workspace_write && let Some(target) = credential_targets.saved_login {
+             use std::os::unix::fs::MetadataExt;
+ 
+@@ -1144,35 +1172,54 @@ async fn strict_write_profile(
+                 metadata.is_file() && metadata.nlink() == 1,
+                 "trusted local executor requires a saved Codex login file without hard links"
+             );
+-            let directory = private_paths.credential_directory.context(
+-                "trusted local execution with a saved Codex login on Linux requires \
+-                 CodexLogin.credential_directory or strict write policy",
+-            )?;
+-            if let Some(fallback) = &credential_targets.legacy_mcp {
+-                let metadata = fallback
+-                    .symlink_metadata()
+-                    .context("could not verify the legacy MCP credential file")?;
+-                ensure!(
+-                    metadata.is_file() && metadata.nlink() == 1,
+-                    "trusted local executor requires a legacy MCP credential file without hard links"
+-                );
++            #[cfg(target_os = "linux")]
++            {
++                let directory = private_paths.credential_directory.context(
++                    "trusted local execution with a saved Codex login on Linux requires \
++                     CodexLogin.credential_directory or strict write policy",
++                )?;
++                if let Some(fallback) = &credential_targets.legacy_mcp {
++                    let metadata = fallback
++                        .symlink_metadata()
++                        .context("could not verify the legacy MCP credential file")?;
++                    ensure!(
++                        metadata.is_file() && metadata.nlink() == 1,
++                        "trusted local executor requires a legacy MCP credential file without hard links"
++                    );
++                    ensure!(
++                        fallback.starts_with(directory)
++                            || environment
++                                .local_runtime_paths()
++                                .and_then(|paths| paths.private_read_deny.as_deref())
++                                == Some(fallback.as_path()),
++                        "the legacy MCP credential file changed since executor startup"
++                    );
++                }
++                filesystem_policy.entries.push(FileSystemSandboxEntry::new(
++                    FileSystemPath::Path {
++                        path: PathUri::from_host_native_path(directory)?,
++                    },
++                    FileSystemAccessMode::Deny,
++                ));
++            }
++            #[cfg(target_os = "macos")]
++            {
++                let protected = macos_saved_login_deny_paths(private_paths, |fallback| {
++                    check_local_write_root_overlap(
++                        fallback,
++                        &roots,
++                        "local executor writable roots must stay outside the MCP OAuth fallback",
++                    )
++                })?;
+                 ensure!(
+-                    fallback.starts_with(directory)
+-                        || environment
+-                            .local_runtime_paths()
+-                            .and_then(|paths| paths.private_read_deny.as_deref())
+-                            == Some(fallback.as_path()),
+-                    "the legacy MCP credential file changed since executor startup"
++                    environment
++                        .local_runtime_paths()
++                        .is_some_and(|paths| paths.local_macos_deny_paths == protected),
++                    "private saved-login paths changed since executor startup"
+                 );
+             }
+-            filesystem_policy.entries.push(FileSystemSandboxEntry::new(
+-                FileSystemPath::Path {
+-                    path: PathUri::from_host_native_path(directory)?,
+-                },
+-                FileSystemAccessMode::Deny,
+-            ));
+         }
+-        #[cfg(not(target_os = "linux"))]
++        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+         let _ = credential_targets.saved_login;
+     }
+     if local && !trusted_workspace_write {
+@@ -1237,6 +1284,44 @@ fn canonical_local_read_root(path: &Path, grant: &str) -> Result<AbsolutePathBuf
+     AbsolutePathBuf::from_absolute_path(path).map_err(Into::into)
+ }
+ 
++#[cfg(target_os = "macos")]
++fn macos_saved_login_deny_paths(
++    private_paths: LocalPrivatePaths<'_>,
++    resolve_fallback: impl FnOnce(&Path) -> Result<PathBuf>,
++) -> Result<Vec<AbsolutePathBuf>> {
++    use std::os::unix::fs::MetadataExt;
++
++    let Some(file) = private_paths.saved_login_file else {
++        return Ok(Vec::new());
++    };
++    let directory = private_paths.credential_directory.context(
++        "trusted local execution with a saved Codex login on macOS requires \
++         CodexLogin.credential_directory or strict write policy",
++    )?;
++    let mut paths = vec![AbsolutePathBuf::from_absolute_path(directory)?];
++    // An existing MCP OAuth fallback may remain in the declared login home.
++    let fallback = file.with_file_name(".credentials.json");
++    match fallback.symlink_metadata() {
++        Ok(_) => {
++            let target = resolve_fallback(&fallback)?;
++            let metadata = target
++                .symlink_metadata()
++                .context("could not verify the MCP OAuth fallback")?;
++            ensure!(
++                metadata.is_file() && metadata.nlink() == 1,
++                "trusted local executor requires a regular MCP OAuth fallback file without hard links"
++            );
++            paths.push(AbsolutePathBuf::from_absolute_path(&fallback)?);
++            if target != fallback {
++                paths.push(AbsolutePathBuf::from_absolute_path(&target)?);
++            }
++        }
++        Err(error) if error.kind() == ErrorKind::NotFound => {}
++        Err(error) => return Err(error).context("could not verify the MCP OAuth fallback"),
++    }
++    Ok(paths)
++}
++
+ fn check_local_private_write_roots(
+     roots: &LocalWriteRoots<'_>,
+     codex_home: &Path,
+diff --git a/packages/codex/src/_agents_codex/agent.py b/packages/codex/src/_agents_codex/agent.py
+index 88cca3ba09..3a842e595c 100644
+--- a/packages/codex/src/_agents_codex/agent.py
++++ b/packages/codex/src/_agents_codex/agent.py
+@@ -301,8 +301,8 @@ class CodexLogin:
+     Set ``account_id`` to require a specific ChatGPT account or workspace.
+     The SDK checks the saved login when it opens a Session.
+ 
+-    Linux trusted workspace execution requires ``credential_directory``, an
+-    absolute path to an application-owned directory dedicated to credentials.
++    Trusted workspace execution requires ``credential_directory``, an absolute
++    path to an application-owned directory dedicated to credentials.
+     The selected ``codex_home/auth.json`` must resolve to ``auth.json`` in that
+     directory. Keep the directory and its ancestors in place while Sessions
+     use it. The executor cannot read that directory. Use strict execution
+diff --git a/packages/codex/src/_agents_codex/executor.py b/packages/codex/src/_agents_codex/executor.py
+index 16cfe3f452..4030014a54 100644
+--- a/packages/codex/src/_agents_codex/executor.py
++++ b/packages/codex/src/_agents_codex/executor.py
+@@ -293,7 +293,7 @@ class Environment(Generic[ContextT_contra]):
+     sequence keeps only that directory writable. Strict write enforcement is the
+     default and requires a Linux or macOS executor. To retain remote approval
+     behavior, explicitly select ``write_policy="legacy"`` without writable roots.
+-    Linux local executors also support ``write_policy="trusted_workspace_write"``.
++    Linux and macOS local executors also accept ``write_policy="trusted_workspace_write"``.
+ 
+     With ``exec_command``, set ``network`` to a NetworkPolicy or a dictionary with
+     the same fields. Omit the policy to keep the executor's default restricted
+@@ -419,7 +419,7 @@ def local(
+         additional writable roots, and platform runtime paths. Run the executor
+         on an isolated job host if those paths contain sensitive data.
+ 
+-        Set ``write_policy="trusted_workspace_write"`` for trusted local Linux jobs.
++        Set ``write_policy="trusted_workspace_write"`` for trusted local jobs on Linux or macOS.
+         Commands can read files accessible to the application user and inherit
+         the application process environment, including ambient credentials,
+         subject to native sandbox and network rules. Both inherited values and
+@@ -483,8 +483,10 @@ def __post_init__(self) -> None:
+         if self.write_policy == "trusted_workspace_write":
+             if not self._is_local:
+                 raise ValueError("Trusted workspace-write requires Environment.local")
+-            if sys.platform != "linux":
+-                raise ValueError("Trusted workspace-write requires Environment.local on Linux")
++            if sys.platform not in ("linux", "darwin"):
++                raise ValueError(
++                    "Trusted workspace-write requires Environment.local on Linux or macOS"
++                )
+         if self.temp_dir is not None:
+             if self.write_policy != "trusted_workspace_write":
+                 raise ValueError("temp_dir requires trusted workspace-write")
+diff --git a/packages/codex/tests/test_native_codex_login.py b/packages/codex/tests/test_native_codex_login.py
+index 99c8423959..03ec60a9bf 100644
+--- a/packages/codex/tests/test_native_codex_login.py
++++ b/packages/codex/tests/test_native_codex_login.py
+@@ -93,8 +93,7 @@ def split_saved_login(tmp_path: Path) -> tuple[Path, Path]:
+     return home, credential_directory
+ 
+ 
+-@pytest.fixture(autouse=True)
+-def uncompressed_model_requests(monkeypatch):
++def disable_model_request_compression(monkeypatch: pytest.MonkeyPatch) -> None:
+     # The shared aiohttp peer can read JSON without an optional Zstandard decoder.
+     def without_compression(native_create):
+         def create(config, *args, **kwargs):
+@@ -109,6 +108,11 @@ def create(config, *args, **kwargs):
+         monkeypatch.setattr(native, name, without_compression(getattr(native, name)))
+ 
+ 
++@pytest.fixture(autouse=True)
++def uncompressed_model_requests(monkeypatch: pytest.MonkeyPatch) -> None:
++    disable_model_request_compression(monkeypatch)
++
++
+ @pytest.fixture
+ def codex_endpoint(responses, monkeypatch):
+     session_module = importlib.import_module("_agents_codex.session")
+@@ -249,6 +253,28 @@ async def test_trusted_local_executor_denies_selected_saved_login_reads(
+     )
+ 
+ 
++@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS")
++@pytest.mark.requires_native_macos_sandbox
++async def test_trusted_macos_requires_saved_login_directory(
++    codex_endpoint: ResponsesFixture, tmp_path: Path
++) -> None:
++    workspace = tmp_path / "work"
++    workspace.mkdir()
++    home = saved_login(tmp_path / "mixed")
++    (home / "ordinary").write_text("readable")
++    agent = codex_agent(home)
++
++    with pytest.raises(
++        RuntimeError,
++        match=r"on macOS requires CodexLogin\.credential_directory or strict write policy",
++    ):
++        async with agent.session(
++            environment=Environment.local(cwd=workspace, write_policy="trusted_workspace_write")
++        ):
++            pytest.fail("Trusted execution opened a mixed credential directory")
++    assert codex_endpoint.requests == []
++
++
+ @pytest.mark.skipif(sys.platform != "linux", reason="trusted mode requires Linux")
+ async def test_trusted_local_executor_rejects_hard_linked_legacy_credentials(
+     codex_endpoint: ResponsesFixture, tmp_path: Path
+diff --git a/packages/codex/tests/test_native_codex_login_refresh.py b/packages/codex/tests/test_native_codex_login_refresh.py
+index 7dd3424e7d..02ec6e1c08 100644
+--- a/packages/codex/tests/test_native_codex_login_refresh.py
++++ b/packages/codex/tests/test_native_codex_login_refresh.py
+@@ -5,6 +5,7 @@
+ import asyncio
+ import json
+ import os
++import shlex
+ import shutil
+ import ssl
+ import stat
+@@ -21,11 +22,17 @@
+ from cryptography.hazmat.primitives.asymmetric import ec
+ from cryptography.x509.oid import NameOID
+ 
+-from agents import Turn, TurnStoppedError
++from agents import Environment, Turn, TurnStoppedError
+ from tests._asyncio import timeout
+-from tests.native_fixtures import assistant_output
++from tests.native_fixtures import ResponsesFixture, assistant_output, function_call, tool_output
+ from tests.test_core_schema_transport import connect_proxy
+-from tests.test_native_codex_login import ACCOUNT, codex_agent, saved_login, submit
++from tests.test_native_codex_login import (
++    ACCOUNT,
++    codex_agent,
++    disable_model_request_compression,
++    saved_login,
++    submit,
++)
+ 
+ AUTH_HOST = "auth.openai.com"
+ SESSION_COUNT = 3
+@@ -221,6 +228,184 @@ async def refresh(request: web.Request) -> web.Response:
+         assert any(request.startswith(connect_request) for request in connects)
+ 
+ 
++@pytest.mark.serial
++@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS")
++@pytest.mark.requires_native_macos_sandbox
++async def test_trusted_macos_keeps_saved_login_private_during_rotation(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    from _agents_codex import session as session_module
++
++    disable_model_request_compression(monkeypatch)
++    tmp_path = tmp_path.resolve()
++    directory = saved_login(tmp_path / "credentials")
++    cache = directory / "auth.json"
++    cache.chmod(0o600)
++    original = cache.stat()
++    home = tmp_path / "home"
++    home.mkdir()
++    alias = home / "auth.json"
++    alias.symlink_to(cache)
++    mcp_fallback = home / ".credentials.json"
++    mcp_target = home / "synthetic-mcp-store"
++    mcp_target.write_text("{}", encoding="utf-8")
++    mcp_target.chmod(0o600)
++    source_mcp_target = home / "synthetic-source-mcp-store"
++    source_mcp_target.write_text("{}", encoding="utf-8")
++    mcp_fallback.symlink_to(source_mcp_target)
++    note = home / "ordinary"
++    workspace = tmp_path / "work"
++    workspace.mkdir()
++    staging = directory / "staging"
++    staging.mkdir()
++    marker = staging / "inert"
++
++    private_paths = shlex.join(map(str, (alias, cache, marker, mcp_fallback, mcp_target)))
++    command = (
++        "set -eu; for phase in before during after; do "
++        'until [ -f "$phase.go" ]; do /bin/sleep 0.05; done; '
++        f'test "$(/bin/cat {shlex.quote(str(note))})" = "$phase"; '
++        f"for path in {private_paths}; do "
++        'if ( : < "$path" ) 2>/dev/null; then exit 17; fi; '
++        'done; : > "$phase.ok"; done'
++    )
++    peer = ResponsesFixture()
++    peer.respond(assistant_output("Ready to restore."))
++    peer.respond(
++        function_call(
++            "exec_command", {"cmd": command, "login": False, "yield_time_ms": 1000}, "probe"
++        )
++    )
++    peer.respond(assistant_output("Probe running."))
++    peer.respond(assistant_output("Login refreshed."))
++    expired = False
++    refresh_count = 0
++
++    async def probe(phase: str) -> None:
++        note.write_text(phase, encoding="utf-8")
++        (workspace / f"{phase}.go").touch()
++        async with timeout(5):
++            while not (workspace / f"{phase}.ok").exists():
++                await asyncio.sleep(0.05)
++
++    async def model_response(request: web.Request) -> web.StreamResponse:
++        assert request.headers["ChatGPT-Account-ID"] == ACCOUNT
++        bearer = request.headers["Authorization"]
++        if expired and bearer == "Bearer saved-token":
++            return web.json_response({"error": {"message": "Expired"}}, status=401)
++        assert bearer == ("Bearer rotated-token" if expired else "Bearer saved-token")
++        return await peer.handle(request)
++
++    async def refresh(request: web.Request) -> web.Response:
++        nonlocal refresh_count
++        refresh_count += 1
++        grant = await request.json()
++        assert grant["grant_type"] == "refresh_token"
++        assert grant["refresh_token"] == "synthetic-refresh-token"
++        assert cache.stat().st_ino == original.st_ino
++        await probe("during")
++        return web.json_response(
++            {"access_token": "rotated-token", "refresh_token": "rotated-refresh-token"}
++        )
++
++    model_app = web.Application(handler_args={"auto_decompress": False})
++    model_app.router.add_post("/v1/responses", model_response)
++    auth_app = web.Application()
++    auth_app.router.add_post("/oauth/token", refresh)
++    ca_file, tls = refresh_server_tls(tmp_path)
++    async with timeout(40), AsyncExitStack() as peers:
++        model = await peers.enter_async_context(TestServer(model_app))
++        auth = TestServer(auth_app, scheme="https")
++        peers.push_async_callback(auth.close)
++        await auth.start_server(ssl=tls)
++        proxy, _ = await peers.enter_async_context(
++            connect_proxy(str(auth.make_url("/")), authority=f"{AUTH_HOST}:443")
++        )
++        for variable in ("HTTPS_PROXY", "https_proxy"):
++            monkeypatch.setenv(variable, proxy)
++        for variable in ("NO_PROXY", "no_proxy"):
++            monkeypatch.setenv(variable, "127.0.0.1")
++        for variable in ("OPENAI_API_KEY", "CODEX_API_KEY"):
++            monkeypatch.delenv(variable, raising=False)
++        monkeypatch.setenv("CODEX_CA_CERTIFICATE", str(ca_file))
++        monkeypatch.setattr(session_module, "_CODEX_RESPONSES_BASE_URL", str(model.make_url("/v1")))
++
++        agent = codex_agent(home, credential_directory=directory)
++        environment = Environment.local(
++            cwd=workspace, tools=["exec_command"], write_policy="trusted_workspace_write"
++        )
++        hard_link = home / "synthetic-mcp-hard-link"
++        hard_link.hardlink_to(source_mcp_target)
++        with pytest.raises(RuntimeError, match="MCP OAuth fallback file without hard links") as exc:
++            async with agent.session(environment=environment):
++                pytest.fail("Trusted execution opened a hard-linked MCP OAuth fallback")
++        assert str(mcp_fallback) not in str(exc.value)
++        assert str(source_mcp_target) not in str(exc.value)
++        assert peer.requests == []
++        hard_link.unlink()
++
++        async with agent.session(environment=environment) as session:
++            assert (await submit(session, "Settle the initial turn.")).final_output == (
++                "Ready to restore."
++            )
++            history_json = await session._native.read_thread_history(None)
++            raw_receipts = [
++                executor
++                for record in json.loads(history_json)
++                if record["type"] == "turn_context"
++                for executor in (
++                    (record["payload"].get("sdk_receipt") or {}).get("executors") or []
++                )
++            ]
++            policies_json = await session._native._executor_policies()
++            assert raw_receipts and json.loads(policies_json)
++            assert all("permission_profile" in receipt for receipt in raw_receipts)
++
++            state = await session.save_state()
++            assert any(
++                record["type"] == "turn_context" and record["payload"].get("permission_profile")
++                for record in state.history
++            )
++            # Capture before the model names private paths in its test command.
++            for encoded in (history_json, policies_json, state.to_json()):
++                for private in (directory, mcp_fallback, source_mcp_target):
++                    assert str(private) not in encoded
++
++        # A new executor binds the current fallback without changing portable identity.
++        mcp_fallback.unlink()
++        mcp_fallback.symlink_to(mcp_target)
++        async with agent.session(environment=environment, state=state) as session:
++            assert (await submit(session, "Start the isolation probe.")).final_output == (
++                "Probe running."
++            )
++            assert "Process running with session ID" in tool_output(peer.requests[-1], "probe")
++            marker.touch()
++            await probe("before")
++            expired = True
++            assert (await submit(session, "Refresh the saved login.")).final_output == (
++                "Login refreshed."
++            )
++            assert refresh_count == 1
++            assert cache.stat().st_ino != original.st_ino
++            assert stat.S_IMODE(cache.stat().st_mode) == 0o600
++            assert json.loads(cache.read_text(encoding="utf-8"))["tokens"]["access_token"] == (
++                "rotated-token"
++            )
++            assert alias.is_symlink() and alias.resolve() == cache
++            await probe("after")
++
++            receipts = [
++                executor
++                async for turn in session.turns()
++                if "receipt" in turn
++                for executor in turn["receipt"]["executors"] or []
++            ]
++            assert receipts
++            assert all("permission_profile" not in receipt for receipt in receipts)
++            encoded = json.dumps(receipts)
++            assert mcp_fallback.name not in encoded and mcp_target.name not in encoded
++
++
+ @pytest.mark.serial
+ @pytest.mark.parametrize(
+     "denied_mode",
+diff --git a/packages/codex/tests/test_native_executor_local.py b/packages/codex/tests/test_native_executor_local.py
+index e94256f795..8d23519d1b 100644
+--- a/packages/codex/tests/test_native_executor_local.py
++++ b/packages/codex/tests/test_native_executor_local.py
+@@ -17,7 +17,7 @@
+ from datetime import datetime, timezone
+ from pathlib import Path, PurePosixPath
+ from tempfile import TemporaryDirectory
+-from typing import Any
++from typing import Any, Literal
+ from uuid import uuid4
+ 
+ import pytest
+@@ -90,11 +90,16 @@ def test_local_declaration_has_no_transport_and_normalizes_additional_roots() ->
+     assert host._config(local)["env_vars"] == env_vars
+ 
+ 
+-def test_trusted_workspace_write_is_linux_only(monkeypatch: pytest.MonkeyPatch) -> None:
+-    monkeypatch.setattr(sys, "platform", "darwin")
+-    with pytest.raises(ValueError, match="requires Environment.local on Linux"):
+-        Environment.local(cwd="/job/worktree", write_policy="trusted_workspace_write")
++@pytest.mark.parametrize("platform", ["linux", "darwin"])
++def test_trusted_workspace_write_on_supported_local_platforms(
++    monkeypatch: pytest.MonkeyPatch, platform: str
++) -> None:
++    monkeypatch.setattr(sys, "platform", platform)
+     assert Environment.local(cwd="/job/worktree").write_policy == "strict"
++    assert (
++        Environment.local(cwd="/job/worktree", write_policy="trusted_workspace_write").write_policy
++        == "trusted_workspace_write"
++    )
+ 
+ 
+ def test_trusted_workspace_write_requires_a_local_opt_in() -> None:
+@@ -142,17 +147,7 @@ async def test_missing_local_root_refuses_session_before_model(
+ 
+ 
+ @pytest.mark.skipif(sys.platform not in ("linux", "darwin"), reason="requires native Unix")
+-@pytest.mark.parametrize(
+-    "trusted",
+-    [
+-        pytest.param(False, id="strict"),
+-        pytest.param(
+-            True,
+-            marks=pytest.mark.skipif(sys.platform != "linux", reason="trusted mode requires Linux"),
+-            id="trusted",
+-        ),
+-    ],
+-)
++@pytest.mark.parametrize("trusted", [False, True], ids=["strict", "trusted"])
+ async def test_local_write_roots_cannot_include_the_native_helper_installation(
+     responses: ResponsesFixture, tmp_path: Path, trusted: bool
+ ) -> None:
+@@ -737,7 +732,63 @@ def git(cwd: Path, *args: str) -> str:
+     assert (linked / ".agents" / "protected").read_text() == "metadata"
+ 
+ 
+-@pytest.mark.requires_native_linux_sandbox
++def _macos_identity_probe(directory: Path) -> str:
++    source = directory / "identity-probe.c"
++    probe = directory / "identity-probe"
++    source.write_text(
++        r"""
++#include <mach/mach.h>
++#include <mach/task_special_ports.h>
++#include <stdio.h>
++#include <unistd.h>
++
++// Match the no-report global-name query in the pinned Seatbelt tests.
++extern const int SANDBOX_CHECK_NO_REPORT;
++extern int sandbox_check(pid_t, const char *, int, ...);
++
++int main(void) {
++    const int global_name_filter = 2;
++    const char *services[] = {
++        "com.apple.system.opendirectoryd.libinfo",
++        "com.apple.system.DirectoryService.libinfo_v1",
++        "com.apple.system.opendirectoryd.membership",
++    };
++    mach_port_t port = MACH_PORT_NULL;
++    kern_return_t status = task_get_special_port(mach_task_self(), TASK_BOOTSTRAP_PORT, &port);
++    int present = status == KERN_SUCCESS && MACH_PORT_VALID(port);
++    printf("bootstrap port status=%d present=%d\n", status, present);
++    if (present) {
++        mach_port_deallocate(mach_task_self(), port);
++    }
++    for (size_t i = 0; i < sizeof(services) / sizeof(services[0]); ++i) {
++        int result = sandbox_check(
++            getpid(), "mach-lookup", global_name_filter | SANDBOX_CHECK_NO_REPORT, services[i]
++        );
++        printf("mach-lookup %s=%d\n", services[i], result);
++    }
++    return 0;
++}
++""",
++        encoding="utf-8",
++    )
++    try:
++        subprocess.run(
++            ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-o", str(probe), str(source)],
++            capture_output=True,
++            timeout=15,
++            check=True,
++        )
++    except (OSError, subprocess.SubprocessError) as error:
++        return f"printf 'identity probe build unavailable (%s)\\n' {type(error).__name__}"
++    return f"{shlex.quote(str(probe))} || printf 'identity probe exit=%s\\n' \"$?\""
++
++
++@pytest.mark.skipif(sys.platform not in ("linux", "darwin"), reason="requires native Unix")
++@(
++    pytest.mark.requires_native_linux_sandbox
++    if sys.platform == "linux"
++    else pytest.mark.requires_native_macos_sandbox
++)
+ @pytest.mark.usefixtures("isolated_github_cli")
+ async def test_trusted_local_shell_uses_host_context_and_fences_linked_worktree_writes(
+     responses: ResponsesFixture,
+@@ -819,6 +870,30 @@ def git(cwd: Path, *args: str) -> str:
+             "DYLD_SYNTHETIC_MARKER": "synthetic-explicit-loader-value",
+         },
+     )
++    # Darwin's id -F fails when getpwuid cannot resolve the real UID.
++    macos_uid_lookup = ("/usr/bin/id", "-F")
++    ssh = "/usr/bin/ssh" if sys.platform == "darwin" else "ssh"
++    ssh_command = f"{ssh} -G -T -F /dev/null credential.example.invalid"
++    if sys.platform == "darwin":
++        identity_probe = _macos_identity_probe(linked)
++        ssh_probe = (
++            f"ssh_config=$({ssh_command} & ssh_pid=$!; "
++            'if ! wait "$ssh_pid"; then '
++            'printf "trusted SSH pid=%s, UID lookup exit=%s\\n" "$ssh_pid" "$uid_status" >&2; '
++            "exit 1; fi) && printf '%s\\n' \"$ssh_config\" | grep -q '^user '; "
++        )
++        # Keep checking Git and write grants after recording the real SSH exit.
++        ssh_probe = (
++            f"{identity_probe}; "
++            f"uid_status=0; {shlex.join(macos_uid_lookup)} >/dev/null 2>&1 || uid_status=$?; "
++            'printf "trusted UID lookup exit=%s\\n" "$uid_status"; '
++            f"ssh_status=0; ({ssh_probe}) || ssh_status=$?; "
++            'printf "trusted SSH config exit=%s\\n" "$ssh_status"; '
++        )
++    else:
++        ssh_probe = (
++            f'ssh_config=$({ssh_command}); printf "%s\\n" "$ssh_config" | grep -q "^user "; '
++        )
+     command = (
+         'set -eu; test "$(fixture-tool)" = "fixture tool"; '
+         f'test "$HOME" = {shlex.quote(str(home))}; '
+@@ -827,8 +902,7 @@ def git(cwd: Path, *args: str) -> str:
+         f'test "$TMPDIR" = {shlex.quote(str(job_temp))}; '
+         'test -z "${OPENAI_API_KEY+x}${openai_api_key+x}${CODEX_API_KEY+x}${LD_LIBRARY_PATH+x}"; '
+         'test -z "${ld_synthetic_marker+x}${DYLD_SYNTHETIC_MARKER+x}"; '
+-        "ssh_config=$(ssh -G -T -F /dev/null credential.example.invalid); "
+-        'printf "%s\\n" "$ssh_config" | grep -q "^user "; '
++        f"{ssh_probe}"
+         "printf 'protocol=https\\nhost=credential.example.invalid\\n\\n' "
+         "| git credential fill | grep -qx password=synthetic-git-password; "
+         'scratch=$(mktemp -d "$TMPDIR/sdk-job.XXXXXX"); printf job > "$scratch/result"; '
+@@ -887,7 +961,68 @@ def popleft(self) -> list[dict[str, Any]]:
+         turn = await session.submit("Create and commit the artifact.")
+         assert (await turn.get_result()).final_output == "done"
+     output = "\n".join(command_outputs)
+-    assert "Process exited with code 0" in output, output
++    failure = output
++    if sys.platform == "darwin" and (
++        probe := re.search(r"^trusted SSH pid=([0-9]+), UID lookup exit=[0-9]+\r?$", output, re.M)
++    ):
++        pid = probe[1]
++        denial = "no matching Mach lookup denial visible"
++        try:
++            log = subprocess.run(
++                [
++                    "/usr/bin/log",
++                    "show",
++                    "--last",
++                    "1m",
++                    "--predicate",
++                    f'eventMessage CONTAINS "ssh({pid}) deny(" '
++                    'AND eventMessage CONTAINS " mach-lookup "',
++                ],
++                capture_output=True,
++                text=True,
++                timeout=5,
++                check=False,
++            )
++            if match := re.search(rf"ssh\({pid}\) deny\([0-9]+\) mach-lookup [\w.-]+", log.stdout):
++                denial = match[0]
++        except (OSError, subprocess.TimeoutExpired):
++            pass
++        control = (
++            f"status=0; {shlex.join(macos_uid_lookup)} >/dev/null 2>&1 || status=$?; "
++            'printf "UID lookup exit=%s\\n" "$status"; '
++            f"status=0; {ssh_command} >/dev/null 2>&1 || status=$?; "
++            'printf "SSH config exit=%s\\n" "$status"; '
++            f"{identity_probe}"
++        )
++        host_lookup = "identity probe unavailable"
++        try:
++            host_lookup = subprocess.run(
++                ["/bin/sh", "-c", control],
++                capture_output=True,
++                text=True,
++                timeout=5,
++                check=True,
++            ).stdout.strip()
++        except (OSError, subprocess.SubprocessError):
++            pass
++        responses.respond(
++            function_call(
++                "exec_command",
++                {"cmd": control, "login": False, "yield_time_ms": 5000},
++                "strict-identity",
++            )
++        )
++        responses.respond(assistant_output("done"))
++        strict_environment = Environment.local(cwd=linked, tools=["exec_command"])
++        try:
++            async with timeout(20), agent.session(environment=strict_environment) as session:
++                turn = await session.submit("Check account lookup.")
++                await turn.get_result()
++            strict_lookup = tool_output(responses.requests[-1], "strict-identity")
++        except (AssertionError, TimeoutError, NativeError) as error:
++            strict_lookup = f"identity probe unavailable ({type(error).__name__})"
++        failure = f"{output}\nHost {host_lookup}\nStrict {strict_lookup}\n{denial}"
++    assert "Process exited with code 0" in output, failure
+     advertised = json.dumps(responses.requests[0])
+     assert "Fixture for selected-skill" in advertised
+     assert "Fixture for hidden-skill" not in advertised
+@@ -898,9 +1033,62 @@ def popleft(self) -> list[dict[str, Any]]:
+     assert (linked / ".agents" / "marker").read_text() == "protected"
+     (job_result,) = job_temp.glob("sdk-job.*/result")
+     assert job_result.read_text() == "job"
++    if sys.platform == "darwin":
++        assert "trusted SSH config exit=0" in output.splitlines(), (
++            f"{failure}\nTrusted Git, job temp, and write-fence assertions passed."
++        )
++        assert "trusted UID lookup exit=0" in output.splitlines(), failure
+ 
+ 
+-@pytest.mark.requires_native_linux_sandbox
++@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Xcode and Homebrew")
++@pytest.mark.requires_native_macos_sandbox
++@pytest.mark.usefixtures("isolated_github_cli")
++async def test_trusted_local_runs_xcode_shims_and_homebrew(
++    responses: ResponsesFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    if shutil.which("brew") is None:
++        pytest.skip("Homebrew is required")
++    monkeypatch.setenv("HOMEBREW_NO_AUTO_UPDATE", "1")
++    monkeypatch.setenv("HOMEBREW_NO_ANALYTICS", "1")
++    prefix = subprocess.check_output(["brew", "--prefix"], text=True).strip()
++    command = (
++        "set -e; /usr/bin/xcrun --no-cache --find git; /usr/bin/git --version; "
++        "/usr/bin/make --version; brew --version; brew --prefix"
++    )
++    bash = Path(prefix) / "bin" / "bash"
++    if bash.is_file():
++        command += f"; {shlex.quote(str(bash))} -c 'printf homebrew-bash'"
++    responses.respond(function_call("exec_command", {"cmd": command, "login": False}, "dev-tools"))
++    responses.respond(assistant_output("done"))
++    agent = Agent(
++        instructions="Use the selected tools.",
++        provider=NativeProvider(base_url=responses.url, api_key="synthetic-model-key"),
++    )
++    selected = Environment.local(
++        cwd=tmp_path,
++        tools=["exec_command"],
++        write_policy="trusted_workspace_write",
++        temp_dir=tmp_path,
++    )
++    async with timeout(40), agent.session(environment=selected) as session:
++        turn = await session.submit("Run the developer tools.")
++        assert (await turn.get_result()).final_output == "done"
++    output = tool_output(responses.requests[-1], "dev-tools")
++    assert "Process exited with code 0" in output
++    assert "git version" in output
++    assert "GNU Make" in output
++    assert "Homebrew " in output
++    assert prefix in output.splitlines()
++    if bash.is_file():
++        assert "homebrew-bash" in output
++
++
++@pytest.mark.skipif(sys.platform not in ("linux", "darwin"), reason="requires native Unix")
++@(
++    pytest.mark.requires_native_linux_sandbox
++    if sys.platform == "linux"
++    else pytest.mark.requires_native_macos_sandbox
++)
+ @pytest.mark.usefixtures("isolated_github_cli")
+ @pytest.mark.parametrize("explicit_network", [False, True], ids=["default-deny", "explicit-allow"])
+ async def test_trusted_local_shell_verifies_tls_using_an_inherited_ca(
+@@ -974,17 +1162,7 @@ async def peer(request: web.Request) -> web.Response:
+     if sys.platform == "linux"
+     else pytest.mark.requires_native_macos_sandbox
+ )
+-@pytest.mark.parametrize(
+-    "trusted",
+-    [
+-        pytest.param(False, id="strict"),
+-        pytest.param(
+-            True,
+-            marks=pytest.mark.skipif(sys.platform != "linux", reason="trusted mode requires Linux"),
+-            id="trusted",
+-        ),
+-    ],
+-)
++@pytest.mark.parametrize("trusted", [False, True], ids=["strict", "trusted"])
+ @pytest.mark.usefixtures("isolated_github_cli")
+ async def test_local_write_root_replacement_survives_portable_resume(
+     responses: ResponsesFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trusted: bool
+@@ -1442,8 +1620,11 @@ async def transform(ctx: ExecutorContext[None], result: dict[str, object]) -> di
+ 
+ @pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Seatbelt")
+ @pytest.mark.requires_native_macos_sandbox
++@pytest.mark.parametrize("write_policy", ["strict", "trusted_workspace_write"])
+ async def test_macos_session_close_stops_child_after_command_exit(
+-    responses: ResponsesFixture, tmp_path: Path
++    responses: ResponsesFixture,
++    tmp_path: Path,
++    write_policy: Literal["strict", "trusted_workspace_write"],
+ ) -> None:
+     cwd, extra = tmp_path / "cwd", tmp_path / "extra"
+     cwd.mkdir()
+@@ -1478,7 +1659,9 @@ def child_running(pid: int) -> bool:
+     responses.respond(assistant_output("parent exited"))
+     provider = NativeProvider(base_url=responses.url, api_key="synthetic-model-key")
+     agent = Agent(instructions="Use the selected tools.", provider=provider)
+-    environment = Environment.local(cwd=cwd, writable_roots=[extra], tools=["exec_command"])
++    environment = Environment.local(
++        cwd=cwd, writable_roots=[extra], tools=["exec_command"], write_policy=write_policy
++    )
+     # The fixture's 30-second self-exit must never satisfy this test.
+     async with timeout(25), provider:
+         try:

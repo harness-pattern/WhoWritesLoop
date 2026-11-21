@@ -1,0 +1,144 @@
+diff --git a/packages/cli/src/ui/components/shared/VirtualizedList.test.tsx b/packages/cli/src/ui/components/shared/VirtualizedList.test.tsx
+index a157e851c78..c315d8d3e1d 100644
+--- a/packages/cli/src/ui/components/shared/VirtualizedList.test.tsx
++++ b/packages/cli/src/ui/components/shared/VirtualizedList.test.tsx
+@@ -1409,3 +1409,79 @@ describe('<VirtualizedList /> VP collapsed thought groups', () => {
+     );
+   });
+ });
++
++describe('<VirtualizedList /> zero-height host measurement', () => {
++  // The host derives the viewport as
++  // `Math.max(0, terminalHeight - controlsHeight - tabBarHeight)`, so it can
++  // legitimately hand down 0 for a frame. A host height of 0 must not be
++  // treated as a measured viewport: `rootHeight` would resolve to the content
++  // height, the render window would cover every row and the scroll math would
++  // collapse. The measured box height keeps the row window bounded instead.
++  it('paints no rows when the host has budgeted none', () => {
++    const { lastFrame } = render(
++      <Box height={12} flexDirection="column">
++        <VirtualizedList<Item>
++          data={makeItems(500)}
++          renderItem={renderItem}
++          estimatedItemHeight={estimatedItemHeight}
++          keyExtractor={keyExtractor}
++          containerHeight={0}
++          showScrollbar={false}
++        />
++      </Box>,
++    );
++
++    // A zero budget is a steady state, not only a settling frame: the controls
++    // region can fill a short terminal while it stays open, and any row painted
++    // under it runs the frame past the terminal.
++    expect(lastFrame() ?? '').not.toMatch(/item-\d+/);
++  });
++
++  it('collapses the viewport again when the host drops to 0', () => {
++    const list = (height: number) => (
++      <Box flexDirection="column">
++        <VirtualizedList<Item>
++          data={makeItems(200)}
++          renderItem={renderItem}
++          estimatedItemHeight={estimatedItemHeight}
++          keyExtractor={keyExtractor}
++          containerHeight={height}
++          showScrollbar={false}
++          initialScrollIndex={SCROLL_TO_ITEM_END}
++        />
++      </Box>
++    );
++
++    const { lastFrame, rerender } = render(list(10));
++    expect((lastFrame() ?? '').split('\n').length).toBeLessThanOrEqual(11);
++
++    // The host's live value wins: an open controls region that budgets zero
++    // rows must not be repainted over by the last viewport the host allowed.
++    rerender(list(0));
++    expect(lastFrame() ?? '').not.toMatch(/item-\d+/);
++
++    // Release: the host's live value wins again.
++    rerender(list(3));
++    expect((lastFrame() ?? '').split('\n').length).toBeLessThanOrEqual(4);
++  });
++
++  it('does not resurrect a larger viewport after a legitimate shrink', () => {
++    const list = (height: number) => (
++      <Box flexDirection="column">
++        <VirtualizedList<Item>
++          data={makeItems(200)}
++          renderItem={renderItem}
++          estimatedItemHeight={estimatedItemHeight}
++          keyExtractor={keyExtractor}
++          containerHeight={height}
++          showScrollbar={false}
++        />
++      </Box>
++    );
++
++    const { lastFrame, rerender } = render(list(40));
++    rerender(list(12));
++    rerender(list(0));
++    expect(lastFrame() ?? '').not.toMatch(/item-\d+/);
++  });
++});
+diff --git a/packages/cli/src/ui/components/shared/VirtualizedList.tsx b/packages/cli/src/ui/components/shared/VirtualizedList.tsx
+index fb51320ea05..bbf17e82915 100644
+--- a/packages/cli/src/ui/components/shared/VirtualizedList.tsx
++++ b/packages/cli/src/ui/components/shared/VirtualizedList.tsx
+@@ -37,6 +37,12 @@ export type VirtualizedListProps<T> = {
+   renderStatic?: boolean;
+   isStaticItem?: (item: T, index: number) => boolean;
+   width?: number | string;
++  /**
++   * Maximum viewport height in rows. A host that derives this from the
++   * terminal can pass `0` when the surrounding chrome fills it; `0` means "no
++   * room this frame", not "size to content", so the last positive value keeps
++   * bounding the root box and the scroll math.
++   */
+   containerHeight?: number;
+   showScrollbar?: boolean;
+   measureAtFullHeight?: boolean;
+@@ -245,8 +251,24 @@ function VirtualizedList<T>(
+   const { width: measuredContainerWidth, height: measuredContainerHeight } =
+     useBoxMetrics(containerRef as React.RefObject<DOMElement>);
+ 
++  // A host that derives the viewport from the terminal legitimately hands down
++  // 0: AppContainer computes
++  // `Math.max(0, terminalHeight - controlsHeight - mainContentHeightReservation
++  // - tabBarHeight)`, which MainContent and AgentChatContent forward unchanged.
++  // `0` is a steady state, not only a settling frame: the controls region can
++  // fill a short terminal for as long as it stays open. A held height is not a
++  // substitute for it — repainting the last viewport under an open controls
++  // region runs the frame past the terminal — so 0 stays 0. The component's own
++  // measurement cannot stand in for the viewport either: the root box sits
++  // under auto-height ancestors, so its height is the content's, and feeding
++  // that back would cover every row and collapse `maxScroll` to 0.
+   const containerHeight = props.containerHeight ?? measuredContainerHeight;
+   const containerWidth = measuredContainerWidth;
++  // A host that budgeted zero rows constrains the height just as one that
++  // budgeted twenty-two; the root must collapse with it instead of falling
++  // back to `100%`. An absent host height leaves the root unconstrained.
++  const hostHeight = props.containerHeight;
++  const hostConstrainsHeight = hostHeight !== undefined;
+ 
+   const [heights, setHeights] = useState<Record<string, number>>({});
+   const measureAtFullHeight = props.measureAtFullHeight === true;
+@@ -983,12 +1005,11 @@ function VirtualizedList<T>(
+   // measurement so short content does not leave a gap above the composer.
+   // `scrollableContainerHeight` (the scroll math) still uses the full
+   // `containerHeight`, so scrolling is unaffected.
+-  const rootHeight =
+-    props.containerHeight !== undefined
+-      ? fullHeightMeasurementPending
+-        ? props.containerHeight
+-        : Math.min(props.containerHeight, totalHeight)
+-      : '100%';
++  const rootHeight = hostConstrainsHeight
++    ? fullHeightMeasurementPending
++      ? hostHeight
++      : Math.min(hostHeight, totalHeight)
++    : '100%';
+ 
+   return (
+     <Box ref={rootRef} width="100%" height={rootHeight} flexDirection="row">

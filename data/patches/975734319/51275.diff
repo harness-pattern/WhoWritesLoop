@@ -1,0 +1,106 @@
+diff --git a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
+index 9fe99daf5958..5dbfc4032a5d 100644
+--- a/packages/tui/src/app.tsx
++++ b/packages/tui/src/app.tsx
+@@ -209,11 +209,13 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
+   })
+   const options = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
+   const api = OpenCode.make(options)
+-  const location = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
+-    Effect.map((response) => response.location),
+-    Effect.catch(() => Effect.tryPromise(() => api.location.get())),
++  const launch = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
++    Effect.map((response) => ({ location: response.location, fallback: false })),
++    Effect.catch(() =>
++      Effect.tryPromise(() => api.location.get()).pipe(Effect.map((location) => ({ location, fallback: true }))),
++    ),
+   )
+-  const directory = location.directory
++  const directory = launch.location.directory
+   const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(process.cwd(), global.config))
+   const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
+   const managed = input.server.service
+@@ -403,7 +405,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
+                                                                                 packages={input.packages}
+                                                                                 directories={pluginDirectories}
+                                                                               >
+-                                                                                <App />
++                                                                                <App
++                                                                                  locationFallback={launch.fallback}
++                                                                                />
+                                                                               </PluginProvider>
+                                                                             </PanelProvider>
+                                                                           </UpdateNotificationProvider>
+@@ -456,7 +460,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
+   })
+ })
+ 
+-function App() {
++function App(props: { locationFallback: boolean }) {
+   const log = useLog({ component: "app" })
+   const app = useTuiApp()
+   const startup = useTuiStartup()
+@@ -473,6 +477,15 @@ function App() {
+   const event = useEvent()
+   const client = useClient()
+   const toast = useToast()
++  onMount(() => {
++    if (!props.locationFallback) return
++    toast.show({
++      variant: "warning",
++      title: "Could not open directory",
++      message: "Using the server default instead. Check the requested directory and its OpenCode config.",
++      duration: 12_000,
++    })
++  })
+   const updater = useUpdateNotification()
+   const theme = useTheme()
+   const { mode, supports, setMode, locked, lock, unlock, afterPaint } = useThemes()
+diff --git a/packages/tui/test/app-lifecycle.test.tsx b/packages/tui/test/app-lifecycle.test.tsx
+index c9a0ff44e061..7126ca1d0a02 100644
+--- a/packages/tui/test/app-lifecycle.test.tsx
++++ b/packages/tui/test/app-lifecycle.test.tsx
+@@ -924,6 +924,11 @@ test.each([false, true])("uses the resolved launch directory for new prompts (fa
+ 
+   await setup.ready
+   await setup.waitForFrame((frame) => frame.includes("Build · Remote Model Provider"))
++  if (fallback) {
++    await setup.waitForFrame((frame) => frame.includes("Could not open directory"))
++  } else {
++    expect(setup.captureCharFrame()).not.toContain("Could not open directory")
++  }
+   setup.mockInput.pressKey("F6")
+   await setup.renderOnce()
+   await setup.mockInput.typeText("REMOTE_READY")
+@@ -951,6 +956,31 @@ test.each([false, true])("uses the resolved launch directory for new prompts (fa
+   ).toBe(true)
+ })
+ 
++test.each([100, 44])("shows a failed launch location in the TUI at width %s", async (width) => {
++  await using state = await tmpdir()
++  const requested = process.cwd()
++  const fallback = { directory, project: { id: "project", directory, canonical: directory } }
++  const requests: URL[] = []
++  await using setup = await createAppFixture({
++    width,
++    state: state.path,
++    fetch: (url) => {
++      requests.push(url)
++      if (url.pathname === "/api/fs/list") return new Response(null, { status: 500 })
++      if (url.pathname === "/api/location") return json(fallback)
++      return undefined
++    },
++  })
++  await setup.ready
++  const frame = await setup.waitForFrame((frame) => frame.includes("Could not open directory"))
++  expect(frame).toContain("OpenCode")
++  expect(frame).toContain("config.")
++  expect(requests[0]?.searchParams.get("location[directory]")).toBe(requested)
++  expect(requests.some((url) => url.pathname === "/api/location" && !url.searchParams.has("location[directory]"))).toBe(
++    true,
++  )
++})
++
+ test("error investigations repeatedly seed editable home drafts without creating sessions", async () => {
+   const cwd = process.cwd()
+   const location = { directory: cwd, project: { id: "project", directory: cwd } }

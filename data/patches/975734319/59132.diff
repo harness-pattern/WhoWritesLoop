@@ -1,0 +1,169 @@
+diff --git a/packages/app/e2e/regression/mcp-workspace-toggle.spec.ts b/packages/app/e2e/regression/mcp-workspace-toggle.spec.ts
+index 8b7c8e433fe6..a48c5f8bc0d8 100644
+--- a/packages/app/e2e/regression/mcp-workspace-toggle.spec.ts
++++ b/packages/app/e2e/regression/mcp-workspace-toggle.spec.ts
+@@ -12,11 +12,12 @@ const sessionID = "ses_mcp_workspace"
+ 
+ const title = "Workspace MCP routing"
+ 
+-type Surface = "popover" | "dialog"
++type Surface = "popover" | "dialog" | "settings"
+ 
+ // A session in a worktree of the project. The harness answers the MCP list for each location directory and stores
+ // connect/disconnect results per directory; `requests` records every MCP request and the directory it targeted.
+-// The popover belongs to the summary extension; the dialog (Ctrl+;) is the app's own MCP toggle.
++// The popover belongs to the summary extension; the dialog (Ctrl+;) is the app's own MCP toggle; settings is the
++// Extensions page opened (Ctrl+,) from the session.
+ async function open(page: Page, input: { surface: Surface } & Pick<MockServerConfig, "mcp" | "onMcpAction">) {
+   const requests: { path: string; directory: string }[] = []
+   page.on("request", (request) => {
+@@ -38,16 +39,32 @@ async function open(page: Page, input: { surface: Surface } & Pick<MockServerCon
+   await page.goto(sessionHref(sessionID))
+   await expectSessionTitle(page, title)
+   await expect(page.getByRole("textbox", { name: "Prompt", exact: true })).toBeEditable()
+-  const panel = page.getByRole("dialog", { name: input.surface === "popover" ? "MCP" : "MCPs", exact: true })
++
++  const panel =
++    input.surface === "settings"
++      ? page.getByTestId("settings-screen")
++      : page.getByRole("dialog", { name: input.surface === "popover" ? "MCP" : "MCPs", exact: true })
+ 
+   const show = async () => {
+     if (input.surface === "dialog") return page.keyboard.press("Control+;")
++
++    if (input.surface === "settings") {
++      await page.keyboard.press("Control+,")
++
++      return panel.getByRole("tab", { name: "Extensions", exact: true }).click()
++    }
++
+     await page.getByRole("button", { name: "Session details", exact: true }).click()
+     await page.getByRole("button", { name: "MCP", exact: true }).click()
+   }
+ 
+   await show()
+-  await expect(panel.getByText("figma-desktop", { exact: true })).toBeVisible()
++  // The settings row also names its switch with a visually hidden label.
++  await expect(
++    input.surface === "settings"
++      ? panel.getByRole("switch", { name: "figma-desktop", exact: true })
++      : panel.getByText("figma-desktop", { exact: true }),
++  ).toBeVisible()
+ 
+   return { requests, panel, show, toggle: panel.getByRole("switch") }
+ }
+@@ -93,6 +110,26 @@ for (const shared of [true, false]) {
+   })
+ }
+ 
++test("settings shows and toggles the MCP of the session it was opened from", async ({ page }) => {
++  const actions: Parameters<NonNullable<MockServerConfig["onMcpAction"]>>[0][] = []
++
++  const view = await open(page, {
++    surface: "settings",
++    mcp: (target) => [{ name: "figma-desktop", status: { status: target === workspace ? "connected" : "disabled" } }],
++    onMcpAction: (action) => void actions.push(action),
++  })
++
++  await expect(view.toggle).toBeChecked()
++  await expect(view.toggle).toBeEnabled()
++  view.requests.length = 0
++
++  await view.panel.locator('[data-slot="switch-control"]').click()
++  await expect(view.toggle).not.toBeChecked()
++  await expect(view.toggle).toBeEnabled()
++  expect(actions).toEqual([{ server: "figma-desktop", action: "disconnect", directory: workspace }])
++  expect(view.requests).toContainEqual({ path: "/api/experimental/mcp/figma-desktop/disconnect", directory: workspace })
++})
++
+ for (const surface of ["popover", "dialog"] as const) {
+   test(`shows connection failures from the MCP ${surface} and allows reconnecting`, async ({ page }) => {
+     const error = "Streamable HTTP error: Error POSTing to endpoint: 404 Not Found"
+diff --git a/packages/app/src/settings/providers/extensions.tsx b/packages/app/src/settings/providers/extensions.tsx
+index 9cd6cd422f42..a9fdc7ecafc1 100644
+--- a/packages/app/src/settings/providers/extensions.tsx
++++ b/packages/app/src/settings/providers/extensions.tsx
+@@ -22,6 +22,7 @@ interface PluginRowItem {
+ }
+ 
+ export const SettingsExtensions: Component<{
++  directory?: string
+   subtab?: SettingsView["subtab"]
+   onSubtab: (value: SettingsView["subtab"]) => void
+ }> = (props) => {
+@@ -29,23 +30,17 @@ export const SettingsExtensions: Component<{
+   const serverSdk = useServerSDK()
+   const data = useData()
+ 
+-  // Reading `.latest` rethrows a failed fetch, so these lists fall back to empty instead of crashing the page.
+-  const [mcpList, { refetch: refetchMcp }] = createResource(
+-    () => serverSdk.connection.status() === "connected",
+-    () =>
+-      serverSdk.api.mcp
+-        .list()
+-        .then((result) => result.data)
+-        .catch(() => []),
+-    { initialValue: [] },
+-  )
+-
+-  const toggleMcp = useMcpToggle(() => undefined, refetchMcp)
++  // MCP connections are per Location, so read and toggle them where the active session runs, as the TUI does. The
++  // names come from the default Location so this page lists only the servers available to all projects.
++  const location = () => (props.directory ? { directory: props.directory } : undefined)
++  const toggleMcp = useMcpToggle(() => props.directory)
+ 
+   const mcps = createMemo<McpRowItem[]>(() => {
+-    return (mcpList.latest ?? []).map((server) => ({
+-      name: server.name,
+-      enabled: server.status.status === "connected",
++    const active = data.location.mcp.server.list(location()) ?? []
++
++    return [...new Set((data.location.mcp.server.list() ?? []).map((server) => server.name))].sort().map((name) => ({
++      name,
++      enabled: active.find((server) => server.name === name)?.status.status === "connected",
+     }))
+   })
+ 
+@@ -68,7 +63,11 @@ export const SettingsExtensions: Component<{
+ 
+   createEffect(() => {
+     if (serverSdk.connection.status() !== "connected") return
+-    void data.location.skill.sync().catch(() => undefined)
++    void Promise.all([
++      data.location.skill.sync(),
++      data.location.mcp.server.sync(),
++      data.location.mcp.server.sync(location()),
++    ]).catch(() => undefined)
+   })
+   const skills = () => data.location.skill.list() ?? []
+ 
+diff --git a/packages/app/src/settings/shell.tsx b/packages/app/src/settings/shell.tsx
+index b3cc58bc3513..c2b7f83ab7b3 100644
+--- a/packages/app/src/settings/shell.tsx
++++ b/packages/app/src/settings/shell.tsx
+@@ -419,7 +419,11 @@ function RootSettings() {
+               />
+             </Tabs.Content>
+             <Tabs.Content value="extensions" class="settings-panel">
+-              <SettingsExtensions subtab={surface.view().subtab} onSubtab={(value) => surface.subtab(value)} />
++              <SettingsExtensions
++                directory={sourceServer() === server ? sourceDirectory() : undefined}
++                subtab={surface.view().subtab}
++                onSubtab={(value) => surface.subtab(value)}
++              />
+             </Tabs.Content>
+           </SettingsServerDataScope>
+         )}
+@@ -519,7 +523,11 @@ function ServerSettings(props: { entry: SettingsServer }) {
+               />
+             </Tabs.Content>
+             <Tabs.Content value="extensions" class="settings-panel">
+-              <SettingsExtensions subtab={surface.view().subtab} onSubtab={(value) => surface.subtab(value)} />
++              <SettingsExtensions
++                directory={activeDirectory()}
++                subtab={surface.view().subtab}
++                onSubtab={(value) => surface.subtab(value)}
++              />
+             </Tabs.Content>
+           </SettingsServerDataScope>
+         )}

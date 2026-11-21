@@ -1,0 +1,223 @@
+diff --git a/.changeset/chilly-radios-poke.md b/.changeset/chilly-radios-poke.md
+new file mode 100644
+index 000000000000..c60b49788bd6
+--- /dev/null
++++ b/.changeset/chilly-radios-poke.md
+@@ -0,0 +1,21 @@
++---
++'@mastra/core': minor
++---
++
++Added support for custom processors on `createScorer` judges. You can now pass `inputProcessors`, `outputProcessors`, `errorProcessors`, and `maxProcessorRetries` in a scorer's `judge` config (or per-step judge config) to apply processors to the internal judge agent — for example wiring up `StreamErrorRetryProcessor` to retry transient LLM errors while scoring.
++
++```typescript
++import { createScorer } from '@mastra/core/evals';
++import { StreamErrorRetryProcessor } from '@mastra/core/processors';
++
++const scorer = createScorer({
++  id: 'my-scorer',
++  description: 'Scores responses',
++  judge: {
++    model: myModel,
++    instructions: 'You are an expert evaluator...',
++    errorProcessors: [new StreamErrorRetryProcessor()],
++    maxProcessorRetries: 3,
++  },
++});
++```
+diff --git a/docs/src/content/en/reference/evals/create-scorer.mdx b/docs/src/content/en/reference/evals/create-scorer.mdx
+index 886d07b8756d..1268fd4e410d 100644
+--- a/docs/src/content/en/reference/evals/create-scorer.mdx
++++ b/docs/src/content/en/reference/evals/create-scorer.mdx
+@@ -92,6 +92,34 @@ const scorer = createScorer({
+             description:
+               "When true, inject the JSON schema into the prompt instead of using the provider's native `response_format` API. Set this for models that don't support native structured output (e.g. some Groq Llama models) to avoid a wasted 400 call.",
+           },
++          {
++            name: 'inputProcessors',
++            type: 'Processor[]',
++            isOptional: true,
++            description:
++              'Input processors applied to the internal judge agent before its messages reach the model (e.g. redaction, validation).',
++          },
++          {
++            name: 'outputProcessors',
++            type: 'Processor[]',
++            isOptional: true,
++            description:
++              "Output processors applied to the internal judge agent's output before it is returned (e.g. moderation, transformation).",
++          },
++          {
++            name: 'errorProcessors',
++            type: 'Processor[]',
++            isOptional: true,
++            description:
++              'Error processors for the internal judge agent. These implement `processAPIError` and can inspect LLM API rejections and signal a retry, e.g. `StreamErrorRetryProcessor`. Requires `maxProcessorRetries` to be set for retry-based processors to take effect.',
++          },
++          {
++            name: 'maxProcessorRetries',
++            type: 'number',
++            isOptional: true,
++            description:
++              'Maximum number of times processors can trigger a retry per judge generation. Required for retry-based error processors (e.g. `StreamErrorRetryProcessor`) to take effect.',
++          },
+         ],
+       },
+     ],
+diff --git a/packages/core/src/evals/base.test.ts b/packages/core/src/evals/base.test.ts
+index 105357b6bd60..7935f7c8d4b8 100644
+--- a/packages/core/src/evals/base.test.ts
++++ b/packages/core/src/evals/base.test.ts
+@@ -351,6 +351,86 @@ describe('createScorer', () => {
+       }
+     });
+ 
++    it('forwards scorer-level judge processors to the internal judge agent', async () => {
++      const streamSpy = vi
++        .spyOn(Agent.prototype, 'stream')
++        .mockResolvedValue({ object: Promise.resolve({ score: 1 }) } as any);
++      try {
++        const model = createMockModel({ mockText: { score: 1 }, version: 'v2' });
++        const inputProcessor = { id: 'test-input-processor', processInput: ({ messages }: any) => messages };
++        const outputProcessor = { id: 'test-output-processor', processOutputResult: ({ messages }: any) => messages };
++        const errorProcessor = { id: 'test-error-retry-processor', processAPIError: () => ({ retry: true }) };
++
++        const scorer = createScorer({
++          id: 'judge-processors-scorer',
++          name: 'judge-processors-scorer',
++          description: 'Verifies scorer judge processor plumbing',
++          judge: {
++            model,
++            instructions: 'Test instructions',
++            inputProcessors: [inputProcessor],
++            outputProcessors: [outputProcessor],
++            errorProcessors: [errorProcessor],
++            maxProcessorRetries: 3,
++          },
++        }).generateScore({
++          description: 'score',
++          createPrompt: () => 'score this',
++        });
++
++        await scorer.run(testData.scoringInput);
++
++        const judge = streamSpy.mock.instances[0] as Agent;
++        expect(await judge.listConfiguredInputProcessors()).toContain(inputProcessor);
++        expect(await judge.listConfiguredOutputProcessors()).toContain(outputProcessor);
++        expect(await judge.listErrorProcessors()).toContain(errorProcessor);
++      } finally {
++        streamSpy.mockRestore();
++      }
++    });
++
++    it('lets the per-step judge override the scorer-level error processors', async () => {
++      const streamSpy = vi
++        .spyOn(Agent.prototype, 'stream')
++        .mockResolvedValue({ object: Promise.resolve({ value: 1 }) } as any);
++      try {
++        const model = createMockModel({ mockText: { value: 1 }, version: 'v2' });
++        const scorerLevelErrorProcessor = { id: 'scorer-error-processor', processAPIError: () => ({ retry: true }) };
++        const stepLevelErrorProcessor = { id: 'step-error-processor', processAPIError: () => ({ retry: true }) };
++
++        const scorer = createScorer({
++          id: 'judge-processors-override-scorer',
++          name: 'judge-processors-override-scorer',
++          description: 'Per-step override of judge error processors',
++          judge: {
++            model,
++            instructions: 'Top-level instructions',
++            errorProcessors: [scorerLevelErrorProcessor],
++          },
++        })
++          .analyze({
++            description: 'analyze',
++            outputSchema: z.object({ value: z.number() }),
++            createPrompt: () => 'analyze this',
++            judge: {
++              model,
++              instructions: 'Step instructions',
++              errorProcessors: [stepLevelErrorProcessor],
++            },
++          })
++          .generateScore(({ results }) => results.analyzeStepResult?.value ?? 0);
++
++        await scorer.run(testData.scoringInput);
++
++        const judge = streamSpy.mock.instances[0] as Agent;
++        const errorProcessors = await judge.listErrorProcessors();
++        expect(errorProcessors).toContain(stepLevelErrorProcessor);
++        expect(errorProcessors).not.toContain(scorerLevelErrorProcessor);
++      } finally {
++        streamSpy.mockRestore();
++      }
++    });
++
+     it('lets the per-step judge override the scorer-level jsonPromptInjection', async () => {
+       const streamSpy = vi.spyOn(Agent.prototype, 'stream');
+       try {
+diff --git a/packages/core/src/evals/base.ts b/packages/core/src/evals/base.ts
+index dfda1726f818..0e5d68184b23 100644
+--- a/packages/core/src/evals/base.ts
++++ b/packages/core/src/evals/base.ts
+@@ -28,6 +28,11 @@ import type {
+   Span,
+ } from '../observability';
+ import { executeWithContext } from '../observability/utils';
++import type {
++  ErrorProcessorOrWorkflow,
++  InputProcessorOrWorkflow,
++  OutputProcessorOrWorkflow,
++} from '../processors/index';
+ import { RequestContext } from '../request-context';
+ import type { PublicSchema } from '../schema';
+ import { toStandardSchema, standardSchemaToJSONSchema } from '../schema';
+@@ -82,6 +87,27 @@ export interface ScorerJudgeConfig {
+   onStream?: (stream: Awaited<ReturnType<Agent['stream']>>) => void | Promise<void>;
+   /** Optional maximum number of agentic loop iterations for the internal judge agent. */
+   maxSteps?: number;
++  /**
++   * Optional input processors for the internal judge agent. Run before the judge's
++   * messages reach the model (e.g. redaction, validation).
++   */
++  inputProcessors?: InputProcessorOrWorkflow[];
++  /**
++   * Optional output processors for the internal judge agent. Run on the judge's
++   * output before it is returned (e.g. moderation, transformation).
++   */
++  outputProcessors?: OutputProcessorOrWorkflow[];
++  /**
++   * Optional error processors for the internal judge agent. These implement
++   * `processAPIError` and can inspect LLM API rejections and signal a retry,
++   * e.g. `StreamErrorRetryProcessor`.
++   */
++  errorProcessors?: ErrorProcessorOrWorkflow[];
++  /**
++   * Maximum number of times processors can trigger a retry per judge generation.
++   * Required for retry-based error processors (e.g. `StreamErrorRetryProcessor`) to take effect.
++   */
++  maxProcessorRetries?: number;
+   /**
+    * Optional request context forwarded to the judge agent execution. When the judge
+    * agent has memory with OM observers that read dynamic model config from controller
+@@ -886,6 +912,10 @@ class MastraScorer<
+     const stepMemoryOptions = originalStep.judge?.memory;
+     const onStream = originalStep.judge?.onStream ?? this.config.judge?.onStream;
+     const maxSteps = originalStep.judge?.maxSteps ?? this.config.judge?.maxSteps;
++    const inputProcessors = originalStep.judge?.inputProcessors ?? this.config.judge?.inputProcessors;
++    const outputProcessors = originalStep.judge?.outputProcessors ?? this.config.judge?.outputProcessors;
++    const errorProcessors = originalStep.judge?.errorProcessors ?? this.config.judge?.errorProcessors;
++    const maxProcessorRetries = originalStep.judge?.maxProcessorRetries ?? this.config.judge?.maxProcessorRetries;
+     const memoryOptions = stepMemoryOptions
+       ? {
+           ...defaultMemoryOptions,
+@@ -926,6 +956,10 @@ class MastraScorer<
+       instructions,
+       ...(tools ? { tools } : {}),
+       ...(memory ? { memory } : {}),
++      ...(inputProcessors ? { inputProcessors } : {}),
++      ...(outputProcessors ? { outputProcessors } : {}),
++      ...(errorProcessors ? { errorProcessors } : {}),
++      ...(maxProcessorRetries !== undefined ? { maxProcessorRetries } : {}),
+     });
+     if (this.#mastra) {
+       judge.__registerMastra(this.#mastra);

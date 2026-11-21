@@ -1,0 +1,267 @@
+diff --git a/src/crewai/knowledge/storage/knowledge_storage.py b/src/crewai/knowledge/storage/knowledge_storage.py
+index d49cc98763..21ab1b582a 100644
+--- a/src/crewai/knowledge/storage/knowledge_storage.py
++++ b/src/crewai/knowledge/storage/knowledge_storage.py
+@@ -181,13 +181,10 @@ def save(
+             raise
+ 
+     def _create_default_embedding_function(self):
+-        from chromadb.utils.embedding_functions.openai_embedding_function import (
+-            OpenAIEmbeddingFunction,
+-        )
+-
+-        return OpenAIEmbeddingFunction(
+-            api_key=os.getenv("OPENAI_API_KEY"), model_name="text-embedding-3-small"
+-        )
++        from crewai.utilities.embedding_configurator import EmbeddingConfigurator
++        
++        configurator = EmbeddingConfigurator()
++        return configurator.create_default_embedding_with_fallback()
+ 
+     def _set_embedder_config(self, embedder: Optional[Dict[str, Any]] = None) -> None:
+         """Set the embedding configuration for the knowledge storage.
+diff --git a/src/crewai/memory/storage/rag_storage.py b/src/crewai/memory/storage/rag_storage.py
+index fd4c77838c..5fa10c8630 100644
+--- a/src/crewai/memory/storage/rag_storage.py
++++ b/src/crewai/memory/storage/rag_storage.py
+@@ -1,7 +1,6 @@
+ import contextlib
+ import io
+ import logging
+-import os
+ import shutil
+ import uuid
+ from typing import Any, Dict, List, Optional
+@@ -57,7 +56,10 @@ def __init__(
+ 
+     def _set_embedder_config(self):
+         configurator = EmbeddingConfigurator()
+-        self.embedder_config = configurator.configure_embedder(self.embedder_config)
++        if self.embedder_config:
++            self.embedder_config = configurator.configure_embedder(self.embedder_config)
++        else:
++            self.embedder_config = configurator.create_default_embedding_with_fallback()
+ 
+     def _initialize_app(self):
+         import chromadb
+@@ -165,10 +167,7 @@ def reset(self) -> None:
+                 )
+ 
+     def _create_default_embedding_function(self):
+-        from chromadb.utils.embedding_functions.openai_embedding_function import (
+-            OpenAIEmbeddingFunction,
+-        )
+-
+-        return OpenAIEmbeddingFunction(
+-            api_key=os.getenv("OPENAI_API_KEY"), model_name="text-embedding-3-small"
+-        )
++        from crewai.utilities.embedding_configurator import EmbeddingConfigurator
++        
++        configurator = EmbeddingConfigurator()
++        return configurator.create_default_embedding_with_fallback()
+diff --git a/src/crewai/utilities/embedding_configurator.py b/src/crewai/utilities/embedding_configurator.py
+index e523b60f03..9a9a0a6577 100644
+--- a/src/crewai/utilities/embedding_configurator.py
++++ b/src/crewai/utilities/embedding_configurator.py
+@@ -55,6 +55,40 @@ def _create_default_embedding_function():
+             api_key=os.getenv("OPENAI_API_KEY"), model_name="text-embedding-3-small"
+         )
+ 
++    def create_default_embedding_with_fallback(self) -> EmbeddingFunction:
++        """Create an embedding function with fallback providers when OpenAI API key is not available."""
++        import logging
++        logger = logging.getLogger(__name__)
++        
++        if os.getenv("OPENAI_API_KEY"):
++            logger.info("Using OpenAI embeddings")
++            return self._create_default_embedding_function()
++        
++        logger.warning("OpenAI API key not found, attempting fallback providers")
++        
++        try:
++            logger.info("Attempting Ollama embedding provider")
++            return self.configure_embedder({
++                "provider": "ollama",
++                "config": {"url": "http://localhost:11434/api/embeddings"},
++                "model": "nomic-embed-text"
++            })
++        except (ConnectionError, ImportError, ValueError) as e:
++            logger.warning(f"Ollama fallback failed: {str(e)}, trying HuggingFace")
++            try:
++                logger.info("Attempting HuggingFace embedding provider")
++                return self.configure_embedder({
++                    "provider": "huggingface",
++                    "config": {"api_url": "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"}
++                })
++            except (ConnectionError, ImportError, ValueError) as e:
++                logger.warning(f"HuggingFace fallback failed: {str(e)}, using local SentenceTransformers")
++                from chromadb.utils.embedding_functions.sentence_transformer_embedding_function import (
++                    SentenceTransformerEmbeddingFunction,
++                )
++                logger.info("Using local SentenceTransformers embedding provider")
++                return SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
++
+     @staticmethod
+     def _configure_openai(config, model_name):
+         from chromadb.utils.embedding_functions.openai_embedding_function import (
+diff --git a/tests/crew_test.py b/tests/crew_test.py
+index 62b9348834..37ecea6ac5 100644
+--- a/tests/crew_test.py
++++ b/tests/crew_test.py
+@@ -110,6 +110,40 @@ def test_crew_config_conditional_requirement():
+     with pytest.raises(ValueError):
+         Crew(process=Process.sequential)
+ 
++
++def test_crew_creation_with_memory_true_no_openai_key():
++    """Test that crew can be created with memory=True when no OpenAI API key is available."""
++    import os
++    from unittest.mock import patch
++    
++    with patch.dict(os.environ, {}, clear=True):
++        if 'OPENAI_API_KEY' in os.environ:
++            del os.environ['OPENAI_API_KEY']
++        
++        agent = Agent(
++            role="Test Agent",
++            goal="Test goal",
++            backstory="Test backstory"
++        )
++        
++        task = Task(
++            description="Test task",
++            expected_output="Test output",
++            agent=agent
++        )
++        
++        crew = Crew(
++            agents=[agent],
++            tasks=[task],
++            process=Process.sequential,
++            memory=True
++        )
++        
++        assert crew.memory is True
++        assert crew._short_term_memory is not None
++        assert crew._entity_memory is not None
++        assert crew._long_term_memory is not None
++
+     config = json.dumps(
+         {
+             "agents": [
+diff --git a/tests/test_memory_fallback.py b/tests/test_memory_fallback.py
+new file mode 100644
+index 0000000000..e9c4bdc0f7
+--- /dev/null
++++ b/tests/test_memory_fallback.py
+@@ -0,0 +1,110 @@
++import os
++from unittest.mock import patch
++
++from crewai import Agent, Task, Crew, Process
++from crewai.memory.short_term.short_term_memory import ShortTermMemory
++from crewai.memory.entity.entity_memory import EntityMemory
++from crewai.utilities.embedding_configurator import EmbeddingConfigurator
++
++
++def test_crew_creation_with_memory_true_no_openai_key():
++    """Test that crew can be created with memory=True when no OpenAI API key is available."""
++    with patch.dict(os.environ, {}, clear=True):
++        if 'OPENAI_API_KEY' in os.environ:
++            del os.environ['OPENAI_API_KEY']
++        
++        agent = Agent(
++            role="Test Agent",
++            goal="Test goal",
++            backstory="Test backstory"
++        )
++        
++        task = Task(
++            description="Test task",
++            expected_output="Test output",
++            agent=agent
++        )
++        
++        crew = Crew(
++            agents=[agent],
++            tasks=[task],
++            process=Process.sequential,
++            memory=True
++        )
++        
++        assert crew.memory is True
++        assert crew._short_term_memory is not None
++        assert crew._entity_memory is not None
++        assert crew._long_term_memory is not None
++
++
++def test_short_term_memory_initialization_without_openai():
++    """Test that ShortTermMemory can be initialized without OpenAI API key."""
++    with patch.dict(os.environ, {}, clear=True):
++        if 'OPENAI_API_KEY' in os.environ:
++            del os.environ['OPENAI_API_KEY']
++        
++        memory = ShortTermMemory()
++        assert memory is not None
++        assert memory.storage is not None
++
++
++def test_entity_memory_initialization_without_openai():
++    """Test that EntityMemory can be initialized without OpenAI API key."""
++    with patch.dict(os.environ, {}, clear=True):
++        if 'OPENAI_API_KEY' in os.environ:
++            del os.environ['OPENAI_API_KEY']
++        
++        memory = EntityMemory()
++        assert memory is not None
++        assert memory.storage is not None
++
++
++def test_embedding_configurator_fallback():
++    """Test that EmbeddingConfigurator provides fallback when OpenAI API key is not available."""
++    with patch.dict(os.environ, {}, clear=True):
++        if 'OPENAI_API_KEY' in os.environ:
++            del os.environ['OPENAI_API_KEY']
++        
++        configurator = EmbeddingConfigurator()
++        embedding_function = configurator.create_default_embedding_with_fallback()
++        assert embedding_function is not None
++
++
++def test_embedding_configurator_uses_openai_when_available():
++    """Test that EmbeddingConfigurator uses OpenAI when API key is available."""
++    with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-key'}):
++        configurator = EmbeddingConfigurator()
++        embedding_function = configurator.create_default_embedding_with_fallback()
++        assert embedding_function is not None
++        assert hasattr(embedding_function, '_api_key')
++
++
++def test_crew_memory_functionality_without_openai():
++    """Test that crew memory functionality works without OpenAI API key."""
++    with patch.dict(os.environ, {}, clear=True):
++        if 'OPENAI_API_KEY' in os.environ:
++            del os.environ['OPENAI_API_KEY']
++        
++        agent = Agent(
++            role="Test Agent",
++            goal="Test goal", 
++            backstory="Test backstory"
++        )
++        
++        task = Task(
++            description="Test task",
++            expected_output="Test output",
++            agent=agent
++        )
++        
++        crew = Crew(
++            agents=[agent],
++            tasks=[task],
++            process=Process.sequential,
++            memory=True
++        )
++        
++        crew._short_term_memory.save("test data", {"test": "metadata"})
++        results = crew._short_term_memory.search("test")
++        assert isinstance(results, list)

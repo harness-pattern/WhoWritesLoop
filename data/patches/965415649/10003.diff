@@ -1,0 +1,337 @@
+diff --git a/sdk/typescript/README.md b/sdk/typescript/README.md
+index 09e8a513d3b9..ae87b63fab1d 100644
+--- a/sdk/typescript/README.md
++++ b/sdk/typescript/README.md
+@@ -131,3 +131,19 @@ const codex = new Codex({
+ 
+ The SDK still injects its required variables (such as `OPENAI_BASE_URL` and `CODEX_API_KEY`) on top of the environment you
+ provide.
++
++### Passing `--config` overrides
++
++Use the `config` option to provide additional Codex CLI configuration overrides. The SDK accepts a JSON object, flattens it
++into dotted paths, and serializes values as TOML literals before passing them as repeated `--config key=value` flags.
++
++```typescript
++const codex = new Codex({
++  config: {
++    show_raw_agent_reasoning: true,
++    sandbox_workspace_write: { network_access: true },
++  },
++});
++```
++
++Thread options still take precedence for overlapping settings because they are emitted after these global overrides.
+diff --git a/sdk/typescript/src/codex.ts b/sdk/typescript/src/codex.ts
+index a42159232ef3..e3ce4aa0de97 100644
+--- a/sdk/typescript/src/codex.ts
++++ b/sdk/typescript/src/codex.ts
+@@ -13,7 +13,8 @@ export class Codex {
+   private options: CodexOptions;
+ 
+   constructor(options: CodexOptions = {}) {
+-    this.exec = new CodexExec(options.codexPathOverride, options.env);
++    const { codexPathOverride, env, config } = options;
++    this.exec = new CodexExec(codexPathOverride, env, config);
+     this.options = options;
+   }
+ 
+diff --git a/sdk/typescript/src/codexOptions.ts b/sdk/typescript/src/codexOptions.ts
+index 31fb637d4ce0..b6abb94b79eb 100644
+--- a/sdk/typescript/src/codexOptions.ts
++++ b/sdk/typescript/src/codexOptions.ts
+@@ -1,7 +1,19 @@
++export type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexConfigObject;
++
++export type CodexConfigObject = { [key: string]: CodexConfigValue };
++
+ export type CodexOptions = {
+   codexPathOverride?: string;
+   baseUrl?: string;
+   apiKey?: string;
++  /**
++   * Additional `--config key=value` overrides to pass to the Codex CLI.
++   *
++   * Provide a JSON object and the SDK will flatten it into dotted paths and
++   * serialize values as TOML literals so they are compatible with the CLI's
++   * `--config` parsing.
++   */
++  config?: CodexConfigObject;
+   /**
+    * Environment variables passed to the Codex CLI process. When provided, the SDK
+    * will not inherit variables from `process.env`.
+diff --git a/sdk/typescript/src/exec.ts b/sdk/typescript/src/exec.ts
+index c8e957e1f282..d569106c84f0 100644
+--- a/sdk/typescript/src/exec.ts
++++ b/sdk/typescript/src/exec.ts
+@@ -3,12 +3,8 @@ import path from "node:path";
+ import readline from "node:readline";
+ import { fileURLToPath } from "node:url";
+ 
+-import {
+-  SandboxMode,
+-  ModelReasoningEffort,
+-  ApprovalMode,
+-  WebSearchMode,
+-} from "./threadOptions";
++import type { CodexConfigObject, CodexConfigValue } from "./codexOptions";
++import { SandboxMode, ModelReasoningEffort, ApprovalMode, WebSearchMode } from "./threadOptions";
+ 
+ export type CodexExecArgs = {
+   input: string;
+@@ -49,15 +45,27 @@ const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
+ export class CodexExec {
+   private executablePath: string;
+   private envOverride?: Record<string, string>;
++  private configOverrides?: CodexConfigObject;
+ 
+-  constructor(executablePath: string | null = null, env?: Record<string, string>) {
++  constructor(
++    executablePath: string | null = null,
++    env?: Record<string, string>,
++    configOverrides?: CodexConfigObject,
++  ) {
+     this.executablePath = executablePath || findCodexPath();
+     this.envOverride = env;
++    this.configOverrides = configOverrides;
+   }
+ 
+   async *run(args: CodexExecArgs): AsyncGenerator<string> {
+     const commandArgs: string[] = ["exec", "--experimental-json"];
+ 
++    if (this.configOverrides) {
++      for (const override of serializeConfigOverrides(this.configOverrides)) {
++        commandArgs.push("--config", override);
++      }
++    }
++
+     if (args.model) {
+       commandArgs.push("--model", args.model);
+     }
+@@ -202,6 +210,94 @@ export class CodexExec {
+   }
+ }
+ 
++function serializeConfigOverrides(configOverrides: CodexConfigObject): string[] {
++  const overrides: string[] = [];
++  flattenConfigOverrides(configOverrides, "", overrides);
++  return overrides;
++}
++
++function flattenConfigOverrides(
++  value: CodexConfigValue,
++  prefix: string,
++  overrides: string[],
++): void {
++  if (!isPlainObject(value)) {
++    if (prefix) {
++      overrides.push(`${prefix}=${toTomlValue(value, prefix)}`);
++      return;
++    } else {
++      throw new Error("Codex config overrides must be a plain object");
++    }
++  }
++
++  const entries = Object.entries(value);
++  if (!prefix && entries.length === 0) {
++    return;
++  }
++
++  if (prefix && entries.length === 0) {
++    overrides.push(`${prefix}={}`);
++    return;
++  }
++
++  for (const [key, child] of entries) {
++    if (!key) {
++      throw new Error("Codex config override keys must be non-empty strings");
++    }
++    if (child === undefined) {
++      continue;
++    }
++    const path = prefix ? `${prefix}.${key}` : key;
++    if (isPlainObject(child)) {
++      flattenConfigOverrides(child, path, overrides);
++    } else {
++      overrides.push(`${path}=${toTomlValue(child, path)}`);
++    }
++  }
++}
++
++function toTomlValue(value: CodexConfigValue, path: string): string {
++  if (typeof value === "string") {
++    return JSON.stringify(value);
++  } else if (typeof value === "number") {
++    if (!Number.isFinite(value)) {
++      throw new Error(`Codex config override at ${path} must be a finite number`);
++    }
++    return `${value}`;
++  } else if (typeof value === "boolean") {
++    return value ? "true" : "false";
++  } else if (Array.isArray(value)) {
++    const rendered = value.map((item, index) => toTomlValue(item, `${path}[${index}]`));
++    return `[${rendered.join(", ")}]`;
++  } else if (isPlainObject(value)) {
++    const parts: string[] = [];
++    for (const [key, child] of Object.entries(value)) {
++      if (!key) {
++        throw new Error("Codex config override keys must be non-empty strings");
++      }
++      if (child === undefined) {
++        continue;
++      }
++      parts.push(`${formatTomlKey(key)} = ${toTomlValue(child, `${path}.${key}`)}`);
++    }
++    return `{${parts.join(", ")}}`;
++  } else if (value === null) {
++    throw new Error(`Codex config override at ${path} cannot be null`);
++  } else {
++    const typeName = typeof value;
++    throw new Error(`Unsupported Codex config override value at ${path}: ${typeName}`);
++  }
++}
++
++const TOML_BARE_KEY = /^[A-Za-z0-9_-]+$/;
++function formatTomlKey(key: string): string {
++  return TOML_BARE_KEY.test(key) ? key : JSON.stringify(key);
++}
++
++function isPlainObject(value: unknown): value is CodexConfigObject {
++  return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
+ const scriptFileName = fileURLToPath(import.meta.url);
+ const scriptDirName = path.dirname(scriptFileName);
+ 
+diff --git a/sdk/typescript/tests/run.test.ts b/sdk/typescript/tests/run.test.ts
+index 993b2304d5dc..410bf502672b 100644
+--- a/sdk/typescript/tests/run.test.ts
++++ b/sdk/typescript/tests/run.test.ts
+@@ -410,6 +410,86 @@ describe("Codex", () => {
+     }
+   });
+ 
++  it("passes CodexOptions config overrides as TOML --config flags", async () => {
++    const { url, close } = await startResponsesTestProxy({
++      statusCode: 200,
++      responseBodies: [
++        sse(
++          responseStarted("response_1"),
++          assistantMessage("Config overrides applied", "item_1"),
++          responseCompleted("response_1"),
++        ),
++      ],
++    });
++
++    const { args: spawnArgs, restore } = codexExecSpy();
++
++    try {
++      const client = new Codex({
++        codexPathOverride: codexExecPath,
++        baseUrl: url,
++        apiKey: "test",
++        config: {
++          approval_policy: "never",
++          sandbox_workspace_write: { network_access: true },
++          retry_budget: 3,
++          tool_rules: { allow: ["git status", "git diff"] },
++        },
++      });
++
++      const thread = client.startThread();
++      await thread.run("apply config overrides");
++
++      const commandArgs = spawnArgs[0];
++      expect(commandArgs).toBeDefined();
++      expectPair(commandArgs, ["--config", 'approval_policy="never"']);
++      expectPair(commandArgs, ["--config", "sandbox_workspace_write.network_access=true"]);
++      expectPair(commandArgs, ["--config", "retry_budget=3"]);
++      expectPair(commandArgs, ["--config", 'tool_rules.allow=["git status", "git diff"]']);
++    } finally {
++      restore();
++      await close();
++    }
++  });
++
++  it("lets thread options override CodexOptions config overrides", async () => {
++    const { url, close } = await startResponsesTestProxy({
++      statusCode: 200,
++      responseBodies: [
++        sse(
++          responseStarted("response_1"),
++          assistantMessage("Thread overrides applied", "item_1"),
++          responseCompleted("response_1"),
++        ),
++      ],
++    });
++
++    const { args: spawnArgs, restore } = codexExecSpy();
++
++    try {
++      const client = new Codex({
++        codexPathOverride: codexExecPath,
++        baseUrl: url,
++        apiKey: "test",
++        config: { approval_policy: "never" },
++      });
++
++      const thread = client.startThread({ approvalPolicy: "on-request" });
++      await thread.run("override approval policy");
++
++      const commandArgs = spawnArgs[0];
++      const approvalPolicyOverrides = collectConfigValues(commandArgs, "approval_policy");
++      expect(approvalPolicyOverrides).toEqual([
++        'approval_policy="never"',
++        'approval_policy="on-request"',
++      ]);
++      expect(approvalPolicyOverrides.at(-1)).toBe('approval_policy="on-request"');
++    } finally {
++      restore();
++      await close();
++    }
++  });
++
+   it("allows overriding the env passed to the Codex CLI", async () => {
+     const { url, close } = await startResponsesTestProxy({
+       statusCode: 200,
+@@ -737,13 +817,37 @@ describe("Codex", () => {
+     }
+   }, 10000); // TODO(pakrym): remove timeout
+ });
++
++/**
++ * Given a list of args to `codex` and a `key`, collects all `--config`
++ * overrides for that key.
++ */
++function collectConfigValues(args: string[] | undefined, key: string): string[] {
++  if (!args) {
++    throw new Error("args is undefined");
++  }
++
++  const values: string[] = [];
++  for (let i = 0; i < args.length; i += 1) {
++    if (args[i] !== "--config") {
++      continue;
++    }
++
++    const override = args[i + 1];
++    if (override?.startsWith(`${key}=`)) {
++      values.push(override);
++    }
++  }
++  return values;
++}
++
+ function expectPair(args: string[] | undefined, pair: [string, string]) {
+   if (!args) {
+-    throw new Error("Args is undefined");
++    throw new Error("args is undefined");
+   }
+-  const index = args.indexOf(pair[0]);
++  const index = args.findIndex((arg, i) => arg === pair[0] && args[i + 1] === pair[1]);
+   if (index === -1) {
+-    throw new Error(`Pair ${pair[0]} not found in args`);
++    throw new Error(`Pair ${pair[0]} ${pair[1]} not found in args`);
+   }
+   expect(args[index + 1]).toBe(pair[1]);
+ }

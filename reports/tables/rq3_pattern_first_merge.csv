@@ -1,0 +1,101 @@
+pattern,repo,first_merged,left_censored,n_prs
+MCP 协议接入,OpenHands/OpenHands,2025-05-04,1,258
+MCP 协议接入,OpenHands/software-agent-sdk,2025-09-04,0,201
+MCP 协议接入,QwenLM/qwen-code,2025-08-14,0,808
+MCP 协议接入,RooCodeInc/Roo-Code,2025-05-02,1,121
+MCP 协议接入,aaif-goose/goose,2025-05-06,1,571
+MCP 协议接入,anomalyco/opencode,2025-06-29,0,717
+MCP 协议接入,browser-use/browser-use,2025-07-08,0,67
+MCP 协议接入,cline/cline,2025-05-06,1,255
+MCP 协议接入,continuedev/continue,2025-05-02,1,134
+MCP 协议接入,crewAIInc/crewAI,2025-05-20,1,60
+MCP 协议接入,google-gemini/gemini-cli,2025-05-09,1,432
+MCP 协议接入,google/adk-python,2025-11-18,0,34
+MCP 协议接入,huggingface/smolagents,2025-05-02,1,11
+MCP 协议接入,langchain-ai/langgraph,2025-05-08,1,12
+MCP 协议接入,mastra-ai/mastra,2025-05-02,1,668
+MCP 协议接入,openai/codex,2025-05-02,1,719
+MCP 协议接入,openai/openai-agents-python,2025-05-18,1,261
+上下文压缩,OpenHands/OpenHands,2025-06-11,0,55
+上下文压缩,OpenHands/software-agent-sdk,2025-09-10,0,23
+上下文压缩,QwenLM/qwen-code,2025-08-21,0,552
+上下文压缩,RooCodeInc/Roo-Code,2025-05-14,1,43
+上下文压缩,aaif-goose/goose,2025-05-06,1,169
+上下文压缩,anomalyco/opencode,2025-05-02,1,648
+上下文压缩,browser-use/browser-use,2025-08-31,0,24
+上下文压缩,cline/cline,2025-05-05,1,196
+上下文压缩,continuedev/continue,2025-06-21,0,24
+上下文压缩,crewAIInc/crewAI,2026-02-11,0,19
+上下文压缩,google-gemini/gemini-cli,2025-06-03,0,84
+上下文压缩,google/adk-python,2026-02-26,0,17
+上下文压缩,langchain-ai/langgraph,2026-11-05,0,2
+上下文压缩,mastra-ai/mastra,2025-06-18,0,231
+上下文压缩,openai/codex,2025-05-10,1,296
+上下文压缩,openai/openai-agents-python,2026-01-09,0,106
+Sub-agent 并行,OpenHands/OpenHands,2026-05-08,0,15
+Sub-agent 并行,OpenHands/software-agent-sdk,2025-11-13,0,88
+Sub-agent 并行,QwenLM/qwen-code,2025-08-20,0,576
+Sub-agent 并行,RooCodeInc/Roo-Code,2025-11-13,0,17
+Sub-agent 并行,SWE-agent/mini-swe-agent,2026-02-10,0,1
+Sub-agent 并行,aaif-goose/goose,2025-06-25,0,129
+Sub-agent 并行,anomalyco/opencode,2025-07-19,0,425
+Sub-agent 并行,browser-use/browser-use,2025-05-25,1,6
+Sub-agent 并行,cline/cline,2025-08-25,0,95
+Sub-agent 并行,continuedev/continue,2025-07-15,0,10
+Sub-agent 并行,crewAIInc/crewAI,2026-02-19,0,8
+Sub-agent 并行,google-gemini/gemini-cli,2025-05-13,1,201
+Sub-agent 并行,google/adk-python,2026-04-02,0,18
+Sub-agent 并行,huggingface/smolagents,2025-08-05,0,3
+Sub-agent 并行,langchain-ai/langgraph,2025-05-02,1,23
+Sub-agent 并行,mastra-ai/mastra,2025-09-05,0,312
+Sub-agent 并行,openai/codex,2025-09-04,0,269
+Sub-agent 并行,openai/openai-agents-python,2025-06-27,0,32
+Diff/Patch 应用,OpenHands/OpenHands,2025-05-13,1,13
+Diff/Patch 应用,OpenHands/software-agent-sdk,2025-08-27,0,43
+Diff/Patch 应用,QwenLM/qwen-code,2026-04-19,0,21
+Diff/Patch 应用,RooCodeInc/Roo-Code,2025-05-13,1,79
+Diff/Patch 应用,SWE-agent/SWE-agent,2026-03-16,0,1
+Diff/Patch 应用,aaif-goose/goose,2025-09-09,0,4
+Diff/Patch 应用,anomalyco/opencode,2025-07-03,0,73
+Diff/Patch 应用,browser-use/browser-use,2025-05-01,1,1
+Diff/Patch 应用,cline/cline,2025-06-01,0,56
+Diff/Patch 应用,continuedev/continue,2025-05-02,1,15
+Diff/Patch 应用,google-gemini/gemini-cli,2025-08-06,0,7
+Diff/Patch 应用,langchain-ai/langgraph,2026-04-29,0,2
+Diff/Patch 应用,mastra-ai/mastra,2025-06-04,0,13
+Diff/Patch 应用,openai/codex,2025-05-04,1,175
+Diff/Patch 应用,openai/openai-agents-python,2025-11-18,0,44
+Checkpoint/回滚,OpenHands/OpenHands,2025-09-25,0,15
+Checkpoint/回滚,OpenHands/software-agent-sdk,2026-01-12,0,23
+Checkpoint/回滚,QwenLM/qwen-code,2025-09-11,0,623
+Checkpoint/回滚,RooCodeInc/Roo-Code,2025-05-08,1,65
+Checkpoint/回滚,aaif-goose/goose,2025-06-27,0,17
+Checkpoint/回滚,anomalyco/opencode,2026-01-08,0,190
+Checkpoint/回滚,browser-use/browser-use,2025-08-13,0,4
+Checkpoint/回滚,cline/cline,2025-05-02,1,197
+Checkpoint/回滚,continuedev/continue,2025-08-18,0,5
+Checkpoint/回滚,crewAIInc/crewAI,2025-08-13,0,87
+Checkpoint/回滚,google-gemini/gemini-cli,2025-06-10,0,82
+Checkpoint/回滚,google/adk-python,2026-07-30,0,5
+Checkpoint/回滚,langchain-ai/langgraph,2025-05-02,1,229
+Checkpoint/回滚,mastra-ai/mastra,2025-09-16,0,208
+Checkpoint/回滚,openai/codex,2025-12-19,0,74
+Checkpoint/回滚,openai/openai-agents-python,2025-10-17,0,148
+Skills/Rules 机制,OpenHands/OpenHands,2025-08-13,0,334
+Skills/Rules 机制,OpenHands/software-agent-sdk,2025-10-21,0,370
+Skills/Rules 机制,QwenLM/qwen-code,2025-11-21,0,948
+Skills/Rules 机制,RooCodeInc/Roo-Code,2025-05-14,1,60
+Skills/Rules 机制,SWE-agent/mini-swe-agent,2025-07-26,0,3
+Skills/Rules 机制,aaif-goose/goose,2025-07-15,0,162
+Skills/Rules 机制,anomalyco/opencode,2025-06-16,0,524
+Skills/Rules 机制,browser-use/browser-use,2025-08-31,0,69
+Skills/Rules 机制,cline/cline,2025-05-02,1,199
+Skills/Rules 机制,continuedev/continue,2025-05-02,1,28
+Skills/Rules 机制,crewAIInc/crewAI,2026-02-11,0,101
+Skills/Rules 机制,google-gemini/gemini-cli,2025-06-21,0,168
+Skills/Rules 机制,google/adk-python,2026-02-26,0,31
+Skills/Rules 机制,huggingface/smolagents,2025-08-20,0,9
+Skills/Rules 机制,langchain-ai/langgraph,2025-06-10,0,8
+Skills/Rules 机制,mastra-ai/mastra,2025-06-23,0,582
+Skills/Rules 机制,openai/codex,2025-05-11,1,452
+Skills/Rules 机制,openai/openai-agents-python,2025-05-18,1,660

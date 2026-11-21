@@ -1,0 +1,675 @@
+diff --git a/.changeset/curly-turtles-talk.md b/.changeset/curly-turtles-talk.md
+new file mode 100644
+index 000000000000..0f80c25a5f89
+--- /dev/null
++++ b/.changeset/curly-turtles-talk.md
+@@ -0,0 +1,26 @@
++---
++'@mastra/core': minor
++'mastracode': patch
++---
++
++Moved the observational-memory model accessors off the Harness onto `session.om`. Reading and switching the observer/reflector models and reading observation/reflection thresholds now live on the session, next to the state they read and write.
++
++**Before**
++
++```typescript
++const observer = harness.getObserverModelId();
++await harness.switchObserverModel({ modelId: 'openai/gpt-4o' });
++```
++
++**After**
++
++```typescript
++const observer = harness.session.om.observer.modelId();
++await harness.session.om.observer.switchModel({ modelId: 'openai/gpt-4o' });
++```
++
++The accessors are grouped by role under `session.om.observer` and `session.om.reflector`, each exposing `modelId()`, `threshold()`, `resolvedModel()`, and `switchModel({ modelId })`.
++
++Removed `Harness.getObserverModelId`, `getReflectorModelId`, `getObservationThreshold`, `getReflectionThreshold`, `getResolvedObserverModel`, `getResolvedReflectorModel`, `switchObserverModel`, and `switchReflectorModel`.
++
++`mastracode` is updated to consume the new API: the `/om` command and status line now read and switch observer/reflector models via `session.om`.
+diff --git a/docs/src/content/en/reference/harness/harness-class.mdx b/docs/src/content/en/reference/harness/harness-class.mdx
+index 480e6ce34bca..d9bfb3768a5d 100644
+--- a/docs/src/content/en/reference/harness/harness-class.mdx
++++ b/docs/src/content/en/reference/harness/harness-class.mdx
+@@ -804,53 +804,7 @@ if (record) {
+ }
+ ```
+ 
+-#### `getObserverModelId()`
+-
+-Return the observer model ID from state or the default from `omConfig`.
+-
+-```typescript
+-const modelId = harness.getObserverModelId()
+-```
+-
+-#### `getReflectorModelId()`
+-
+-Return the reflector model ID from state or the default from `omConfig`.
+-
+-```typescript
+-const modelId = harness.getReflectorModelId()
+-```
+-
+-#### `switchObserverModel({ modelId })`
+-
+-Switch the observer model. Persists the setting to thread metadata and emits an `om_model_changed` event.
+-
+-```typescript
+-await harness.switchObserverModel({ modelId: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__' })
+-```
+-
+-#### `switchReflectorModel({ modelId })`
+-
+-Switch the reflector model. Persists the setting to thread metadata and emits an `om_model_changed` event.
+-
+-```typescript
+-await harness.switchReflectorModel({ modelId: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__' })
+-```
+-
+-#### `getObservationThreshold()`
+-
+-Return the observation threshold in tokens from state or the default from `omConfig`.
+-
+-```typescript
+-const threshold = harness.getObservationThreshold()
+-```
+-
+-#### `getReflectionThreshold()`
+-
+-Return the reflection threshold in tokens from state or the default from `omConfig`.
+-
+-```typescript
+-const threshold = harness.getReflectionThreshold()
+-```
++The observer/reflector model selection and observation/reflection thresholds live on the Session under [`session.om`](/reference/harness/session#observational-memory), grouped by role. Read them with `session.om.observer.modelId()` / `session.om.reflector.modelId()` and `session.om.observer.threshold()` / `session.om.reflector.threshold()`, and change a role's model with `session.om.observer.switchModel()` / `session.om.reflector.switchModel()`.
+ 
+ ### Subagents
+ 
+diff --git a/docs/src/content/en/reference/harness/session.mdx b/docs/src/content/en/reference/harness/session.mdx
+index 76e9a4f524af..52b266187428 100644
+--- a/docs/src/content/en/reference/harness/session.mdx
++++ b/docs/src/content/en/reference/harness/session.mdx
+@@ -341,6 +341,45 @@ await harness.session.model.switch({
+ await harness.session.model.switch({ modelId: '__GATEWAY_ANTHROPIC_MODEL_SONNET__' })
+ ```
+ 
++## Observational Memory
++
++The observational-memory model selection, grouped by role under `session.om.observer` and `session.om.reflector`. Both roles expose the same methods. Reads return the value from session state when set, falling back to the harness's `omConfig` defaults.
++
++### `session.om.observer.modelId()` / `session.om.reflector.modelId()`
++
++Return the role's model ID, or `undefined` when neither session state nor `omConfig` provides one.
++
++```typescript
++const observer = harness.session.om.observer.modelId()
++const reflector = harness.session.om.reflector.modelId()
++```
++
++### `session.om.observer.threshold()` / `session.om.reflector.threshold()`
++
++Return the role's threshold in tokens (observation threshold for the observer, reflection threshold for the reflector), or `undefined` when unset.
++
++```typescript
++const observationThreshold = harness.session.om.observer.threshold()
++const reflectionThreshold = harness.session.om.reflector.threshold()
++```
++
++### `session.om.observer.switchModel({ modelId })` / `session.om.reflector.switchModel({ modelId })`
++
++Switch the role's model. Persists the setting to thread metadata and emits an `om_model_changed` event.
++
++```typescript
++await harness.session.om.observer.switchModel({ modelId: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__' })
++await harness.session.om.reflector.switchModel({ modelId: '__GATEWAY_ANTHROPIC_MODEL_HAIKU__' })
++```
++
++### `session.om.observer.resolvedModel()` / `session.om.reflector.resolvedModel()`
++
++Resolve the role's model ID to a model instance via the harness's `resolveModel`, or `undefined` when no model ID is set or no resolver is configured.
++
++```typescript
++const observerModel = harness.session.om.observer.resolvedModel()
++```
++
+ ## Run
+ 
+ `session.run` owns run and trace identity plus abort state for the in-flight run.
+diff --git a/mastracode/src/tui/__tests__/status-line.test.ts b/mastracode/src/tui/__tests__/status-line.test.ts
+index c0a9490a95b5..ab7b800299bb 100644
+--- a/mastracode/src/tui/__tests__/status-line.test.ts
++++ b/mastracode/src/tui/__tests__/status-line.test.ts
+@@ -83,9 +83,6 @@ function createState() {
+     },
+     harness: {
+       listModes: vi.fn(() => [{ id: 'build', name: 'build', metadata: { color: '#00ff00' } }]),
+-      getObserverModelId: vi.fn(() => 'openai/gpt-4o'),
+-      getReflectorModelId: vi.fn(() => 'openai/gpt-4o-mini'),
+-      getFullModelId: vi.fn(() => 'anthropic/claude-sonnet-4-20250514'),
+       session: {
+         displayState: {
+           get: vi.fn(() => ({
+@@ -101,6 +98,13 @@ function createState() {
+           get: vi.fn(() => 'build'),
+           resolve: vi.fn(() => ({ id: 'build', name: 'build', metadata: { color: '#00ff00' } })),
+         },
++        model: {
++          get: vi.fn(() => 'anthropic/claude-sonnet-4-20250514'),
++        },
++        om: {
++          observer: { modelId: vi.fn(() => 'openai/gpt-4o') },
++          reflector: { modelId: vi.fn(() => 'openai/gpt-4o-mini') },
++        },
+       },
+     },
+     statusLine: { setText },
+@@ -224,7 +228,7 @@ describe('updateStatusLine', () => {
+ 
+   it('preserves the gateway prefix when compacting gateway-backed model ids', () => {
+     const state = createState();
+-    state.harness.getFullModelId.mockReturnValue('mastra/anthropic/claude-opus-4.6');
++    state.harness.session.model.get.mockReturnValue('mastra/anthropic/claude-opus-4.6');
+     process.stdout.columns = 25;
+ 
+     updateStatusLine(state);
+@@ -236,7 +240,7 @@ describe('updateStatusLine', () => {
+ 
+   it('rewrites fireworks-ai long paths and kimi version separator at full width', () => {
+     const state = createState();
+-    state.harness.getFullModelId.mockReturnValue('fireworks-ai/accounts/fireworks/models/kimi-k2p6');
++    state.harness.session.model.get.mockReturnValue('fireworks-ai/accounts/fireworks/models/kimi-k2p6');
+     process.stdout.columns = 200;
+ 
+     updateStatusLine(state);
+@@ -249,7 +253,7 @@ describe('updateStatusLine', () => {
+ 
+   it('rewrites fireworks-ai long paths and kimi version separator when compacted', () => {
+     const state = createState();
+-    state.harness.getFullModelId.mockReturnValue('fireworks-ai/accounts/fireworks/models/kimi-k2p6');
++    state.harness.session.model.get.mockReturnValue('fireworks-ai/accounts/fireworks/models/kimi-k2p6');
+     process.stdout.columns = 25;
+ 
+     updateStatusLine(state);
+@@ -262,7 +266,7 @@ describe('updateStatusLine', () => {
+ 
+   it('rewrites kimi version separator for non-fireworks models', () => {
+     const state = createState();
+-    state.harness.getFullModelId.mockReturnValue('moonshot/kimi-k1p5');
++    state.harness.session.model.get.mockReturnValue('moonshot/kimi-k1p5');
+     process.stdout.columns = 200;
+ 
+     updateStatusLine(state);
+@@ -274,7 +278,7 @@ describe('updateStatusLine', () => {
+ 
+   it('rewrites minimax-m2p7 version separator', () => {
+     const state = createState();
+-    state.harness.getFullModelId.mockReturnValue('fireworks-ai/accounts/fireworks/models/minimax-m2p7');
++    state.harness.session.model.get.mockReturnValue('fireworks-ai/accounts/fireworks/models/minimax-m2p7');
+     process.stdout.columns = 200;
+ 
+     updateStatusLine(state);
+diff --git a/mastracode/src/tui/commands/om.ts b/mastracode/src/tui/commands/om.ts
+index f7847bbe90e9..1f51d6ea8602 100644
+--- a/mastracode/src/tui/commands/om.ts
++++ b/mastracode/src/tui/commands/om.ts
+@@ -83,10 +83,10 @@ export async function handleOMCommand(ctx: SlashCommandContext): Promise<void> {
+ 
+   const harnessState = ctx.state.session.state.get() as Record<string, unknown> | undefined;
+   const config = {
+-    observerModelId: ctx.state.harness.getObserverModelId() ?? '',
+-    reflectorModelId: ctx.state.harness.getReflectorModelId() ?? '',
+-    observationThreshold: ctx.state.harness.getObservationThreshold() ?? 30_000,
+-    reflectionThreshold: ctx.state.harness.getReflectionThreshold() ?? 40_000,
++    observerModelId: ctx.state.session.om.observer.modelId() ?? '',
++    reflectorModelId: ctx.state.session.om.reflector.modelId() ?? '',
++    observationThreshold: ctx.state.session.om.observer.threshold() ?? 30_000,
++    reflectionThreshold: ctx.state.session.om.reflector.threshold() ?? 40_000,
+     cavemanObservations: (harnessState?.cavemanObservations as boolean | undefined) ?? false,
+     observeAttachments: (harnessState?.observeAttachments as 'auto' | boolean | undefined) ?? 'auto',
+   };
+@@ -97,15 +97,15 @@ export async function handleOMCommand(ctx: SlashCommandContext): Promise<void> {
+       {
+         onObserverModelChange: async model => {
+           await promptForApiKeyIfNeeded(ctx.state.ui, model, ctx.authStorage);
+-          const currentReflector = ctx.state.harness.getReflectorModelId() ?? null;
+-          await ctx.state.harness.switchObserverModel({ modelId: model.id });
++          const currentReflector = ctx.state.session.om.reflector.modelId() ?? null;
++          await ctx.state.session.om.observer.switchModel({ modelId: model.id });
+           persistOmRoleOverride('observer', model.id, currentReflector);
+           ctx.showInfo(`Observer model → ${model.id}`);
+         },
+         onReflectorModelChange: async model => {
+           await promptForApiKeyIfNeeded(ctx.state.ui, model, ctx.authStorage);
+-          const currentObserver = ctx.state.harness.getObserverModelId() ?? null;
+-          await ctx.state.harness.switchReflectorModel({ modelId: model.id });
++          const currentObserver = ctx.state.session.om.observer.modelId() ?? null;
++          await ctx.state.session.om.reflector.switchModel({ modelId: model.id });
+           persistOmRoleOverride('reflector', model.id, currentObserver);
+           ctx.showInfo(`Reflector model → ${model.id}`);
+         },
+diff --git a/mastracode/src/tui/status-line.ts b/mastracode/src/tui/status-line.ts
+index 9f6c355b9298..74b4c983a3c8 100644
+--- a/mastracode/src/tui/status-line.ts
++++ b/mastracode/src/tui/status-line.ts
+@@ -141,8 +141,8 @@ export function updateStatusLine(state: TUIState): void {
+       ? state.activeGoalJudge?.modelId
+       : showOMMode
+         ? isObserving
+-          ? state.harness.getObserverModelId()
+-          : state.harness.getReflectorModelId()
++          ? state.harness.session.om.observer.modelId()
++          : state.harness.session.om.reflector.modelId()
+         : state.harness.session.model.get()) ?? '';
+   // Rewrite Fireworks AI long paths: fireworks-ai/accounts/fireworks/models/<name> → fireworks/<name>
+   let fullModelId = rawModelId.startsWith('fireworks-ai/accounts/fireworks/models/')
+diff --git a/packages/core/src/harness/harness.ts b/packages/core/src/harness/harness.ts
+index a6a6e34e9d95..0e4debaa1e9e 100644
+--- a/packages/core/src/harness/harness.ts
++++ b/packages/core/src/harness/harness.ts
+@@ -506,6 +506,14 @@ export class Harness<TState = {}> {
+       emit: event => this.emit(event),
+       trackModelUse: this.config.modelUseCountTracker,
+     });
++    this.#session.om.setResolver({
++      getState: () => this.#session.state.get() as Record<string, unknown>,
++      setState: updates => void this.#session.state.set(updates as Partial<TState>),
++      setSetting: ({ key, value }) => this.#session.thread.setSetting({ key, value }),
++      emit: event => this.emit(event),
++      omConfig: this.config.omConfig,
++      resolveModel: this.config.resolveModel,
++    });
+     this.#session.thread.connect(this.createThreadDataStore());
+ 
+     // Store workspace: pre-built instance, dynamic factory, or config (constructed in init())
+@@ -1449,13 +1457,13 @@ export class Harness<TState = {}> {
+       }
+ 
+       if (!hasObservationThreshold) {
+-        const observationThreshold = this.getObservationThreshold();
++        const observationThreshold = this.#session.om.observer.threshold();
+         if (observationThreshold !== undefined) {
+           await this.#session.thread.setSetting({ key: 'observationThreshold', value: observationThreshold });
+         }
+       }
+       if (!hasReflectionThreshold) {
+-        const reflectionThreshold = this.getReflectionThreshold();
++        const reflectionThreshold = this.#session.om.reflector.threshold();
+         if (reflectionThreshold !== undefined) {
+           await this.#session.thread.setSetting({ key: 'reflectionThreshold', value: reflectionThreshold });
+         }
+@@ -1600,70 +1608,6 @@ export class Harness<TState = {}> {
+     }
+   }
+ 
+-  /**
+-   * Returns the observer model ID from state, falling back to omConfig defaults.
+-   */
+-  getObserverModelId(): string | undefined {
+-    return (this.#session.state.get() as any).observerModelId ?? this.config.omConfig?.defaultObserverModelId;
+-  }
+-
+-  /**
+-   * Returns the reflector model ID from state, falling back to omConfig defaults.
+-   */
+-  getReflectorModelId(): string | undefined {
+-    return (this.#session.state.get() as any).reflectorModelId ?? this.config.omConfig?.defaultReflectorModelId;
+-  }
+-
+-  /**
+-   * Returns the observation threshold from state, falling back to omConfig defaults.
+-   */
+-  getObservationThreshold(): number | undefined {
+-    return (this.#session.state.get() as any).observationThreshold ?? this.config.omConfig?.defaultObservationThreshold;
+-  }
+-
+-  /**
+-   * Returns the reflection threshold from state, falling back to omConfig defaults.
+-   */
+-  getReflectionThreshold(): number | undefined {
+-    return (this.#session.state.get() as any).reflectionThreshold ?? this.config.omConfig?.defaultReflectionThreshold;
+-  }
+-
+-  /**
+-   * Resolves the observer model ID to a language model instance via the configured resolver.
+-   */
+-  getResolvedObserverModel() {
+-    const modelId = this.getObserverModelId();
+-    if (!modelId || !this.config.resolveModel) return undefined;
+-    return this.config.resolveModel(modelId);
+-  }
+-
+-  /**
+-   * Resolves the reflector model ID to a language model instance via the configured resolver.
+-   */
+-  getResolvedReflectorModel() {
+-    const modelId = this.getReflectorModelId();
+-    if (!modelId || !this.config.resolveModel) return undefined;
+-    return this.config.resolveModel(modelId);
+-  }
+-
+-  /**
+-   * Switch the Observer model.
+-   */
+-  async switchObserverModel({ modelId }: { modelId: string }): Promise<void> {
+-    void this.setState({ observerModelId: modelId } as unknown as Partial<TState>);
+-    await this.#session.thread.setSetting({ key: 'observerModelId', value: modelId });
+-    this.emit({ type: 'om_model_changed', role: 'observer', modelId } as HarnessEvent);
+-  }
+-
+-  /**
+-   * Switch the Reflector model.
+-   */
+-  async switchReflectorModel({ modelId }: { modelId: string }): Promise<void> {
+-    void this.setState({ reflectorModelId: modelId } as unknown as Partial<TState>);
+-    await this.#session.thread.setSetting({ key: 'reflectorModelId', value: modelId });
+-    this.emit({ type: 'om_model_changed', role: 'reflector', modelId } as HarnessEvent);
+-  }
+-
+   // ===========================================================================
+   // Subagent Model Management
+   // ===========================================================================
+diff --git a/packages/core/src/harness/list-available-models.test.ts b/packages/core/src/harness/list-available-models.test.ts
+index 4057f6d26ae2..9198bb83c52f 100644
+--- a/packages/core/src/harness/list-available-models.test.ts
++++ b/packages/core/src/harness/list-available-models.test.ts
+@@ -122,7 +122,7 @@ describe('Harness.listAvailableModels', () => {
+       },
+     });
+ 
+-    const observerModel = harness.getResolvedObserverModel() as { modelId?: string };
++    const observerModel = harness.session.om.observer.resolvedModel() as { modelId?: string };
+     expect(observerModel).toMatchObject({ modelId: 'test-gateway/acme/sonic-fast' });
+     expect(resolveModel).toHaveBeenCalledWith('test-gateway/acme/sonic-fast');
+ 
+diff --git a/packages/core/src/harness/session-om.test.ts b/packages/core/src/harness/session-om.test.ts
+new file mode 100644
+index 000000000000..fab8ae940f34
+--- /dev/null
++++ b/packages/core/src/harness/session-om.test.ts
+@@ -0,0 +1,129 @@
++import { describe, it, expect, beforeEach, vi } from 'vitest';
++
++import { Agent } from '../agent';
++import { InMemoryStore } from '../storage/mock';
++import { Harness } from './harness';
++import type { HarnessEvent, HarnessOMConfig } from './types';
++
++function createHarness(options: {
++  storage: InMemoryStore;
++  omConfig?: HarnessOMConfig;
++  resolveModel?: (modelId: string) => any;
++  onEvent?: (event: HarnessEvent) => void;
++}) {
++  const agent = new Agent({
++    name: 'test-agent',
++    instructions: 'You are a test agent.',
++    model: { provider: 'openai', name: 'gpt-4o', toolChoice: 'auto' },
++  });
++
++  const harness = new Harness({
++    id: 'test-harness',
++    storage: options.storage,
++    modes: [{ id: 'default', name: 'Default', default: true, agent }],
++    omConfig: options.omConfig,
++    resolveModel: options.resolveModel,
++  });
++
++  if (options.onEvent) harness.subscribe(options.onEvent);
++
++  return harness;
++}
++
++describe('session.om', () => {
++  let storage: InMemoryStore;
++
++  beforeEach(() => {
++    storage = new InMemoryStore();
++  });
++
++  it('falls back to omConfig defaults for model ids and thresholds', () => {
++    const harness = createHarness({
++      storage,
++      omConfig: {
++        defaultObserverModelId: 'openai/gpt-4o',
++        defaultReflectorModelId: 'openai/gpt-4o-mini',
++        defaultObservationThreshold: 30_000,
++        defaultReflectionThreshold: 40_000,
++      },
++    });
++
++    expect(harness.session.om.observer.modelId()).toBe('openai/gpt-4o');
++    expect(harness.session.om.reflector.modelId()).toBe('openai/gpt-4o-mini');
++    expect(harness.session.om.observer.threshold()).toBe(30_000);
++    expect(harness.session.om.reflector.threshold()).toBe(40_000);
++  });
++
++  it('returns undefined when no state value and no omConfig default exist', () => {
++    const harness = createHarness({ storage });
++
++    expect(harness.session.om.observer.modelId()).toBeUndefined();
++    expect(harness.session.om.reflector.modelId()).toBeUndefined();
++    expect(harness.session.om.observer.threshold()).toBeUndefined();
++    expect(harness.session.om.reflector.threshold()).toBeUndefined();
++  });
++
++  it('prefers session-state values over omConfig defaults', async () => {
++    const harness = createHarness({
++      storage,
++      omConfig: { defaultObserverModelId: 'openai/gpt-4o' },
++    });
++    await harness.session.state.set({ observerModelId: 'anthropic/claude-sonnet-4' } as any);
++
++    expect(harness.session.om.observer.modelId()).toBe('anthropic/claude-sonnet-4');
++  });
++
++  it('observer.switchModel persists to thread settings and emits om_model_changed', async () => {
++    const events: HarnessEvent[] = [];
++    const harness = createHarness({ storage, onEvent: event => events.push(event) });
++    await harness.init();
++    await harness.createThread();
++
++    await harness.session.om.observer.switchModel({ modelId: 'anthropic/claude-sonnet-4' });
++
++    expect(harness.session.om.observer.modelId()).toBe('anthropic/claude-sonnet-4');
++    expect(await harness.session.thread.getSetting({ key: 'observerModelId' })).toBe('anthropic/claude-sonnet-4');
++    expect(events).toContainEqual({
++      type: 'om_model_changed',
++      role: 'observer',
++      modelId: 'anthropic/claude-sonnet-4',
++    });
++  });
++
++  it('reflector.switchModel persists to thread settings and emits om_model_changed', async () => {
++    const events: HarnessEvent[] = [];
++    const harness = createHarness({ storage, onEvent: event => events.push(event) });
++    await harness.init();
++    await harness.createThread();
++
++    await harness.session.om.reflector.switchModel({ modelId: 'openai/gpt-4o-mini' });
++
++    expect(harness.session.om.reflector.modelId()).toBe('openai/gpt-4o-mini');
++    expect(await harness.session.thread.getSetting({ key: 'reflectorModelId' })).toBe('openai/gpt-4o-mini');
++    expect(events).toContainEqual({
++      type: 'om_model_changed',
++      role: 'reflector',
++      modelId: 'openai/gpt-4o-mini',
++    });
++  });
++
++  it('resolves the observer model via the configured resolver', () => {
++    const resolveModel = vi.fn((modelId: string) => ({ modelId }));
++    const harness = createHarness({
++      storage,
++      omConfig: { defaultObserverModelId: 'openai/gpt-4o' },
++      resolveModel,
++    });
++
++    expect(harness.session.om.observer.resolvedModel()).toMatchObject({ modelId: 'openai/gpt-4o' });
++    expect(resolveModel).toHaveBeenCalledWith('openai/gpt-4o');
++  });
++
++  it('returns undefined resolved model when no model id is set', () => {
++    const resolveModel = vi.fn((modelId: string) => ({ modelId }));
++    const harness = createHarness({ storage, resolveModel });
++
++    expect(harness.session.om.observer.resolvedModel()).toBeUndefined();
++    expect(resolveModel).not.toHaveBeenCalled();
++  });
++});
+diff --git a/packages/core/src/harness/session.ts b/packages/core/src/harness/session.ts
+index 0eb13e52a017..28ce222cf31f 100644
+--- a/packages/core/src/harness/session.ts
++++ b/packages/core/src/harness/session.ts
+@@ -1,5 +1,6 @@
+ import type { Agent } from '../agent';
+ import type { AgentThreadSubscription } from '../agent/types';
++import type { MastraModelConfig } from '../llm/model/shared.types';
+ import type { RequestContext } from '../request-context';
+ import { toStandardSchema } from '../schema';
+ import type { PublicSchema, StandardSchemaWithJSON } from '../schema';
+@@ -11,6 +12,7 @@ import type {
+   HarnessEvent,
+   HarnessMessage,
+   HarnessMode,
++  HarnessOMConfig,
+   HarnessRequestState,
+   HarnessRequestStateUpdater,
+   HarnessThread,
+@@ -891,6 +893,124 @@ export class SessionMode {
+   }
+ }
+ 
++/** Per-role wiring + state/config keys a {@link SessionOMRole} reads and writes. */
++interface SessionOMRoleConfig {
++  /** The event `role` and `om_model_changed` discriminator for this role. */
++  role: 'observer' | 'reflector';
++  /** Session-state / thread-settings key holding this role's model id. */
++  modelIdKey: 'observerModelId' | 'reflectorModelId';
++  /** Session-state key holding this role's threshold. */
++  thresholdKey: 'observationThreshold' | 'reflectionThreshold';
++  /** Resolve this role's default model id from `omConfig`. */
++  defaultModelId: (omConfig: HarnessOMConfig | undefined) => string | undefined;
++  /** Resolve this role's default threshold from `omConfig`. */
++  defaultThreshold: (omConfig: HarnessOMConfig | undefined) => number | undefined;
++}
++
++/**
++ * One observational-memory role (observer or reflector): its model id, resolved
++ * model instance, threshold, and model switch. Reads return the session-state
++ * value when set, falling back to the Harness's `omConfig` defaults. The shared
++ * wiring is injected by {@link SessionOM.setResolver}.
++ */
++class SessionOMRole {
++  readonly #config: SessionOMRoleConfig;
++  #getState: (() => Record<string, unknown>) | undefined;
++  #setState: ((updates: Record<string, unknown>) => void) | undefined;
++  #setSetting: ((args: { key: string; value: unknown }) => Promise<void>) | undefined;
++  #emit: ((event: HarnessEvent) => void) | undefined;
++  #omConfig: HarnessOMConfig | undefined;
++  #resolveModel: ((modelId: string) => MastraModelConfig) | undefined;
++
++  constructor(config: SessionOMRoleConfig) {
++    this.#config = config;
++  }
++
++  /** @internal Injected by {@link SessionOM.setResolver}. */
++  setWiring(wiring: {
++    getState: () => Record<string, unknown>;
++    setState: (updates: Record<string, unknown>) => void;
++    setSetting: (args: { key: string; value: unknown }) => Promise<void>;
++    emit: (event: HarnessEvent) => void;
++    omConfig?: HarnessOMConfig;
++    resolveModel?: (modelId: string) => MastraModelConfig;
++  }): void {
++    this.#getState = wiring.getState;
++    this.#setState = wiring.setState;
++    this.#setSetting = wiring.setSetting;
++    this.#emit = wiring.emit;
++    this.#omConfig = wiring.omConfig;
++    this.#resolveModel = wiring.resolveModel;
++  }
++
++  /** This role's model id from session state, falling back to `omConfig`. */
++  modelId(): string | undefined {
++    const fromState = this.#getState?.()[this.#config.modelIdKey];
++    return (typeof fromState === 'string' ? fromState : undefined) ?? this.#config.defaultModelId(this.#omConfig);
++  }
++
++  /** This role's threshold from session state, falling back to `omConfig`. */
++  threshold(): number | undefined {
++    const fromState = this.#getState?.()[this.#config.thresholdKey];
++    return (typeof fromState === 'number' ? fromState : undefined) ?? this.#config.defaultThreshold(this.#omConfig);
++  }
++
++  /** Resolve this role's model id to a model instance, or undefined when unset. */
++  resolvedModel(): MastraModelConfig | undefined {
++    const modelId = this.modelId();
++    if (!modelId || !this.#resolveModel) return undefined;
++    return this.#resolveModel(modelId);
++  }
++
++  /** Switch this role's model: update session state, persist, and emit. */
++  async switchModel({ modelId }: { modelId: string }): Promise<void> {
++    this.#setState?.({ [this.#config.modelIdKey]: modelId });
++    await this.#setSetting?.({ key: this.#config.modelIdKey, value: modelId });
++    this.#emit?.({ type: 'om_model_changed', role: this.#config.role, modelId });
++  }
++}
++
++/**
++ * Owns the session's observational-memory model selection, grouped by role:
++ * {@link SessionOM.observer} and {@link SessionOM.reflector}. The Harness owns
++ * `omConfig` and the model resolver, so it injects them — plus the session-state
++ * read/write and thread-settings persistence — once via {@link setResolver},
++ * which fans the wiring out to both roles.
++ */
++class SessionOM {
++  readonly observer = new SessionOMRole({
++    role: 'observer',
++    modelIdKey: 'observerModelId',
++    thresholdKey: 'observationThreshold',
++    defaultModelId: omConfig => omConfig?.defaultObserverModelId,
++    defaultThreshold: omConfig => omConfig?.defaultObservationThreshold,
++  });
++  readonly reflector = new SessionOMRole({
++    role: 'reflector',
++    modelIdKey: 'reflectorModelId',
++    thresholdKey: 'reflectionThreshold',
++    defaultModelId: omConfig => omConfig?.defaultReflectorModelId,
++    defaultThreshold: omConfig => omConfig?.defaultReflectionThreshold,
++  });
++
++  /**
++   * Attach the session-state read/write, thread-settings persistence, event
++   * emitter, and the Harness-owned `omConfig` defaults plus model resolver. The
++   * Harness injects these once; the wiring is shared by both roles.
++   */
++  setResolver(options: {
++    getState: () => Record<string, unknown>;
++    setState: (updates: Record<string, unknown>) => void;
++    setSetting: (args: { key: string; value: unknown }) => Promise<void>;
++    emit: (event: HarnessEvent) => void;
++    omConfig?: HarnessOMConfig;
++    resolveModel?: (modelId: string) => MastraModelConfig;
++  }): void {
++    this.observer.setWiring(options);
++    this.reflector.setWiring(options);
++  }
++}
++
+ type SessionStateUpdater<TState, TResult> = HarnessRequestStateUpdater<TState, TResult>;
+ 
+ interface SessionStateOptions<TState> {
+@@ -1537,6 +1657,8 @@ export class Session<TState = unknown> {
+   readonly model = new SessionModel(() => this.#store);
+   /** The session's currently-selected mode and switch sequence. */
+   readonly mode = new SessionMode(() => this.#store, this.model);
++  /** The session's observational-memory model selection (observer/reflector). */
++  readonly om = new SessionOM();
+   /** Transient run identity (run id, trace id, operation counter) for the active run. */
+   readonly run = new SessionRun();
+   /** Live subscription to the active thread's agent event stream. */

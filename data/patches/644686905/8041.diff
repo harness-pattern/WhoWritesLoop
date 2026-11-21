@@ -1,0 +1,169 @@
+diff --git a/extensions/cli/src/ui/IntroMessage.test.tsx b/extensions/cli/src/ui/IntroMessage.test.tsx
+index a21d6f79cea..6f024b96e1a 100644
+--- a/extensions/cli/src/ui/IntroMessage.test.tsx
++++ b/extensions/cli/src/ui/IntroMessage.test.tsx
+@@ -81,4 +81,19 @@ describe("IntroMessage", () => {
+     expect(lastFrame()).toContain("Model:");
+     expect(lastFrame()).toContain("Loading...");
+   });
++
++  it("renders organization name when provided", () => {
++    const { lastFrame } = render(
++      <IntroMessage organizationName="Test Organization" />,
++    );
++
++    expect(lastFrame()).toContain("Org:");
++    expect(lastFrame()).toContain("Test Organization");
++  });
++
++  it("does not render organization section when not provided", () => {
++    const { lastFrame } = render(<IntroMessage />);
++
++    expect(lastFrame()).not.toContain("Org:");
++  });
+ });
+diff --git a/extensions/cli/src/ui/IntroMessage.tsx b/extensions/cli/src/ui/IntroMessage.tsx
+index e2644847935..139db3e8b38 100644
+--- a/extensions/cli/src/ui/IntroMessage.tsx
++++ b/extensions/cli/src/ui/IntroMessage.tsx
+@@ -13,6 +13,7 @@ interface IntroMessageProps {
+   config?: AssistantUnrolled;
+   model?: ModelConfig;
+   mcpService?: MCPService;
++  organizationName?: string;
+ }
+ 
+ // Helper function to extract rule names
+@@ -26,6 +27,7 @@ const IntroMessage: React.FC<IntroMessageProps> = ({
+   config,
+   model,
+   mcpService,
++  organizationName,
+ }) => {
+   // Get MCP prompts directly (not memoized since they can change after first render)
+   const mcpPrompts = mcpService?.getState().prompts ?? [];
+@@ -98,6 +100,13 @@ const IntroMessage: React.FC<IntroMessageProps> = ({
+       {/* Tips Display - shown randomly 1 in 5 times */}
+       {showTip && <TipsDisplay />}
+ 
++      {/* Organization name */}
++      {organizationName && (
++        <Text color="blue">
++          <Text bold>Org:</Text> <Text color="white">{organizationName}</Text>
++        </Text>
++      )}
++
+       {/* Agent name */}
+       {config && (
+         <Text color="blue">
+diff --git a/extensions/cli/src/ui/TUIChat.tsx b/extensions/cli/src/ui/TUIChat.tsx
+index 555c328291a..aea25bc1917 100644
+--- a/extensions/cli/src/ui/TUIChat.tsx
++++ b/extensions/cli/src/ui/TUIChat.tsx
+@@ -9,6 +9,7 @@ import React, {
+ 
+ import { ToolPermissionServiceState } from "src/services/ToolPermissionService.js";
+ 
++import { listUserOrganizations } from "../auth/workos.js";
+ import { useServices } from "../hooks/useService.js";
+ import {
+   ApiClientServiceState,
+@@ -110,6 +111,44 @@ function useTUIChatServices(remoteUrl?: string) {
+   return { services, allServicesReady, isRemoteMode };
+ }
+ 
++// Custom hook to fetch organization name
++function useOrganizationName(organizationId?: string): string | undefined {
++  const [organizationName, setOrganizationName] = useState<string | undefined>(
++    undefined,
++  );
++
++  useEffect(() => {
++    if (!organizationId) {
++      setOrganizationName(undefined);
++      return;
++    }
++
++    let isMounted = true;
++
++    async function fetchOrgName() {
++      try {
++        const orgs = await listUserOrganizations();
++        if (!isMounted) return;
++
++        const org = orgs?.find((o) => o.id === organizationId);
++        if (org) {
++          setOrganizationName(org.name);
++        }
++      } catch (error) {
++        logger.debug("Failed to fetch organization name", { error });
++      }
++    }
++
++    fetchOrgName();
++
++    return () => {
++      isMounted = false;
++    };
++  }, [organizationId]);
++
++  return organizationName;
++}
++
+ // Custom hook for chat handlers
+ function useChatHandlers(
+   setShowIntroMessage: (show: boolean) => void,
+@@ -298,6 +337,9 @@ const TUIChat: React.FC<TUIChatProps> = ({
+   // State for image in clipboard status
+   const [hasImageInClipboard, setHasImageInClipboard] = useState(false);
+ 
++  // Fetch organization name based on auth state
++  const organizationName = useOrganizationName(services.auth?.organizationId);
++
+   return (
+     <Box flexDirection="column" height="100%">
+       {/* Chat history - takes up all available space above input */}
+@@ -320,6 +362,7 @@ const TUIChat: React.FC<TUIChatProps> = ({
+           config={services.config?.config || undefined}
+           model={services.model?.model || undefined}
+           mcpService={services.mcp?.mcpService || undefined}
++          organizationName={organizationName}
+           chatHistory={chatHistory}
+           queuedMessages={queuedMessages}
+           renderMessage={renderMessage}
+diff --git a/extensions/cli/src/ui/components/StaticChatContent.tsx b/extensions/cli/src/ui/components/StaticChatContent.tsx
+index 5cb5537628c..09f9d8bf55a 100644
+--- a/extensions/cli/src/ui/components/StaticChatContent.tsx
++++ b/extensions/cli/src/ui/components/StaticChatContent.tsx
+@@ -14,6 +14,7 @@ interface StaticChatContentProps {
+   config?: AssistantUnrolled;
+   model?: ModelConfig;
+   mcpService?: MCPService;
++  organizationName?: string;
+   chatHistory: ChatHistoryItem[];
+   queuedMessages?: QueuedMessage[];
+   renderMessage: (
+@@ -29,6 +30,7 @@ export const StaticChatContent: React.FC<StaticChatContentProps> = ({
+   config,
+   model,
+   mcpService,
++  organizationName,
+   chatHistory,
+   queuedMessages = [],
+   renderMessage,
+@@ -96,6 +98,7 @@ export const StaticChatContent: React.FC<StaticChatContentProps> = ({
+           config={config}
+           model={model}
+           mcpService={mcpService}
++          organizationName={organizationName}
+         />,
+       );
+     }
+@@ -129,6 +132,7 @@ export const StaticChatContent: React.FC<StaticChatContentProps> = ({
+     config,
+     model,
+     mcpService,
++    organizationName,
+     processedChatHistory,
+     renderMessage,
+   ]);

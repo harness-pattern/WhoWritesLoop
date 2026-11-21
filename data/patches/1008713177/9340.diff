@@ -1,0 +1,1708 @@
+diff --git a/docs/design/2026-08-17-review-approach-signal.md b/docs/design/2026-08-17-review-approach-signal.md
+new file mode 100644
+index 00000000000..0e96c5f4603
+--- /dev/null
++++ b/docs/design/2026-08-17-review-approach-signal.md
+@@ -0,0 +1,111 @@
++# Review approach signal — saying when the approach, not the patch, is the open question
++
++## The problem, as measured
++
++One change to `extractAndStripMeta` took three attempts across two pull
++requests before it landed:
++
++| PR    | approach                                                  | rounds | findings         | source diff |
++| ----- | --------------------------------------------------------- | ------ | ---------------- | ----------- |
++| #9097 | add a `timeout` to the vm call                            | 3      | 18 (9 Critical)  | grew ~5x    |
++| #9136 | run the walk inside the vm, then a child process per call | 6      | 56 (12 Critical) | grew ~4x    |
++| #9325 | stop evaluating; parse the literal                        | 1      | —                | —           |
++
++Every one of those 74 findings was individually correct. Each round found a
++real hole the previous patch did not cover: a getter deferring its work to the
++host, a serializer sharing a lexical scope with the literal it walked, a
++promise reaction under `microtaskMode`, unbounded allocation. The review was
++not wrong at any point.
++
++It was, however, structurally unable to reach the conclusion that mattered.
++Every finding is anchored to a `file:line` inside the current diff — that is
++what a finding _is_. So the review could say where an approach leaks, but never
++that a different approach would retire all of the leaks at once. The fix that
++worked deleted the mechanism, and all 74 findings went with it.
++
++The signal that something was structurally wrong did exist. `did not converge
++within the reverse-audit round cap` was emitted four times across the two PRs.
++It is filed as a coverage gap — "we did not finish looking" — rather than as a
++conclusion about the change. Nothing was responsible for reading it as "stop
++patching".
++
++## What this adds
++
++One advisory paragraph, and one clause on the terminal verdict line, when a PR
++has taken enough rounds _and_ grown enough since the review first measured it.
++
++It fires when all of:
++
++- this round confirmed at least one finding (the pre-cap verdict, `baseEvent`, is not `APPROVE`)
++- the round is at or past the threshold (default 5; `review.approachRounds`)
++- a baseline exists from an earlier round
++- the source diff is past the module's existing non-trivial floor (100 lines)
++- the diff has grown by at least `APPROACH_GROWTH_FACTOR` (3x) since the baseline
++
++This round's reverse-audit round-cap stop rides along as a corroborating
++clause when present. It is never a trigger on its own.
++
++## Design decisions
++
++**It is not a finding.** Findings are what the autofix loop consumes, and the
++loop patching each finding in turn is the pattern being interrupted. A finding
++here would be fixed rather than read. This addresses the human deciding what
++happens next, so it is a body paragraph and a verdict-line clause.
++
++**It never moves the verdict.** No cap, no event change, no blocker. A PR that
++is legitimately large and legitimately iterated must pay nothing for a false
++positive beyond one paragraph. This mirrors `lowSignal`, the existing
++disclosure-only field it is modelled on.
++
++**It never fires on `APPROVE`.** An approve is convergence. The convergence
++posture composes a deferrals-only late Approve deliberately, as the loop's stop
++signal; telling that PR to reconsider itself would contradict the outcome the
++loop is steering toward, in the same body.
++
++**The baseline is a baseline, not the previous round's size.** #9136 went 228 →
++920 source lines across six rounds — about 1.3x per round, which no per-round
++delta would notice, but 4.0x cumulatively. `Ledger.src0` records the first
++round's measurement and is carried forward unchanged, so a diff that shrinks
++cannot rewrite its own baseline and erase the growth already on record.
++
++**One setting, not two.** `review.approachRounds` is the knob an operator would
++reach for — it maps to a policy number the repo already uses, and raising it far
++enough silences the signal. The growth factor stays a module constant beside
++`LOW_SIGNAL_SRC_DIFF_LINES`, which is exactly how the sibling disclosure's own
++threshold is expressed.
++
++## What this does not do
++
++**It cannot see across pull requests.** Every cross-round mechanism is keyed to
++one PR: the marker rides that PR's review bodies, the side file is named for its
++number, and recovery walks only its reviews. #9097 → #9136 → #9325 as three
++attempts at one fix is not detectable by any extension of this machinery. Of the
++motivating incident, only #9136's own six rounds and 4x growth would have fired.
++#9097, at three rounds, would not have.
++
++**It does not count repeated non-convergence.** The round-cap marker is written
++per run and fenced to that run's plan epoch, precisely so a stale stop cannot cap
++a verdict that did not stop. Summing it across rounds needs a second persisted
++counter — a forgeable monotone tally with no code to re-assert it against. The
++paragraph therefore claims only what is true of _this_ round.
++
++**It is retroactively blank.** No PR in flight carries a baseline, and unknown
++marker keys are dropped on read. The signal stays silent until a PR has posted
++two rounds after this ships. The `src0 > 0` arm is what makes the absent case
++degrade to silence rather than to a false "no growth".
++
++**The round counter fails open.** Any failure recovering the side file reads as
++round 1, so a force-push or an account switch silently disarms the signal. That
++direction is deliberate: an advisory signal should fail toward silence.
++
++**Growth is measured in source lines, excluding tests.** This is consistent with
++`lowSignal` and the topology metric, and it means a PR that balloons purely in
++test code will not trip the growth arm. This is the one genuinely contestable
++metric choice here; `diffLines` would catch more and also fire more often.
++
++## Trust
++
++`src0` is untrusted body data, like every other marker field. Unlike a finding,
++a bare number has nothing to re-assert it against: a forged small value fires
++the paragraph, a forged large one silences it. The entire blast radius is one
++advisory paragraph — it never reaches a verdict, a cap, or an event.
+diff --git a/packages/cli/src/commands/review/compose-review.test.ts b/packages/cli/src/commands/review/compose-review.test.ts
+index 7b409bbdab7..aef8caea793 100644
+--- a/packages/cli/src/commands/review/compose-review.test.ts
++++ b/packages/cli/src/commands/review/compose-review.test.ts
+@@ -157,6 +157,7 @@ function plan(
+     effort?: 'low' | 'medium' | 'high';
+     /** Override the fixture's 5000 — the low-signal floor reads this. */
+     srcDiffLines?: number;
++    fullSrcDiffLines?: number;
+     repositoryContext?: unknown;
+     /** The PR identity fetch-pr records — anchors and bilingual recovery. */
+     ownerRepo?: string;
+@@ -164,6 +165,7 @@ function plan(
+     host?: string;
+     /** The head fetch-pr resolved — the ledger marker's incremental anchor. */
+     fetchedSha?: string;
++    incremental?: { since: string; effective: boolean };
+     reviewModelId?: string;
+   } = {},
+ ): string {
+@@ -188,7 +190,13 @@ function plan(
+       ...(opts.ownerRepo === undefined ? {} : { ownerRepo: opts.ownerRepo }),
+       ...(opts.prNumber === undefined ? {} : { prNumber: opts.prNumber }),
+       ...(opts.host === undefined ? {} : { host: opts.host }),
++      ...(opts.incremental === undefined
++        ? {}
++        : { incremental: opts.incremental }),
+       srcDiffLines: opts.srcDiffLines ?? 5000,
++      ...(opts.fullSrcDiffLines === undefined
++        ? {}
++        : { fullSrcDiffLines: opts.fullSrcDiffLines }),
+       diffLines: 5000,
+       files: [{ path: 'a.ts', kind: 'source', removedLines: 0, heavy: false }],
+       // Real plans carry each chunk's files (`DiffChunk.files`) — the body
+@@ -454,11 +462,13 @@ function coveredPlan(
+     han?: boolean;
+     effort?: 'low' | 'medium' | 'high';
+     srcDiffLines?: number;
++    fullSrcDiffLines?: number;
+     repositoryContext?: unknown;
+     ownerRepo?: string;
+     prNumber?: string | number;
+     host?: string;
+     fetchedSha?: string;
++    incremental?: { since: string; effective: boolean };
+     reviewModelId?: string;
+   } = {},
+ ): string {
+@@ -5638,6 +5648,7 @@ describe('verdictLine — the terminal verdict, and its dangling colon', () => {
+         truncated: false,
+       },
+       lowSignal: null,
++      approachSignal: null,
+       ...over,
+     });
+ 
+@@ -10101,6 +10112,521 @@ describe('composeReview — continuity renders on every verdict', () => {
+   });
+ });
+ 
++// Every finding this review emits is anchored to a `file:line` inside the
++// current diff, so it can report where an approach leaks but never that a
++// different approach would retire all of the leaks at once. When a change has
++// taken many rounds AND grown several times over, that limit is worth saying
++// to the human deciding what happens next. Measured: one change took three
++// attempts across two PRs and 74 individually-correct findings, growing 4x,
++// before the mechanism was replaced and every finding went away with it.
++describe('composeReview — approach signal', () => {
++  const prevLedger = (planPath: string, ledger: Record<string, unknown>) =>
++    writeFileSync(
++      join(dirname(planPath), 'qwen-review-pr-8255-prev-ledger.json'),
++      JSON.stringify(ledger),
++    );
++
++  /** Round 6 over a 4x-grown diff, composing a REQUEST_CHANGES. */
++  const ballooned = (over: Record<string, unknown> = {}) => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 920,
++      ...over,
++    });
++    prevLedger(planPath, { v: 1, round: 5, findings: [], src0: 228 });
++    return planPath;
++  };
++
++  it('says the approach is the open question, on the body and the verdict line', () => {
++    const planPath = ballooned();
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.event).toBe('REQUEST_CHANGES');
++    expect(r.approachSignal).toMatchObject({
++      round: 6,
++      src0: 228,
++      srcDiffLines: 920,
++    });
++    expect(r.body).toContain('⚠️ Round 6');
++    expect(r.body).toContain('4.0x');
++    expect(r.body).toContain('228 → 920 source diff lines');
++    expect(r.body).toContain('a human should decide whether the shape');
++    expect(r.body).toContain('Advisory only');
++    expect(verdictLine(r)).toContain(
++      'reconsider the approach, not only the findings',
++    );
++  });
++
++  // The signal is disclosure, exactly like `lowSignal`. If it ever moves an
++  // event or adds a cap it has become a blocker, which is the one thing it
++  // must not be.
++  it('moves no verdict: event, baseEvent and caps are identical without it', () => {
++    const withSignal = composeReview({
++      planPath: ballooned(),
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    const withoutPlan = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 920,
++    });
++    prevLedger(withoutPlan, { v: 1, round: 5, findings: [] }); // no src0
++    const without = composeReview({
++      planPath: withoutPlan,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(without.approachSignal).toBeNull();
++    expect(withSignal.event).toBe(without.event);
++    expect(withSignal.baseEvent).toBe(without.baseEvent);
++    expect(withSignal.cappedBy).toEqual(without.cappedBy);
++  });
++
++  // An APPROVE is convergence. The posture composes a deferrals-only late
++  // Approve on purpose; telling that PR to reconsider itself would contradict
++  // the very outcome the loop is steering toward.
++  it('never fires on an APPROVE, however many rounds and however much growth', () => {
++    const planPath = ballooned();
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 0,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.event).toBe('APPROVE');
++    expect(r.approachSignal).toBeNull();
++    expect(r.body).not.toContain('⚠️ Round');
++    expect(verdictLine(r)).not.toContain('reconsider the approach');
++  });
++
++  it('never fires when an APPROVE is downgraded to COMMENT', () => {
++    const r = composeReview({
++      planPath: ballooned(),
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 0,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++      presubmit: {
++        downgradeApprove: true,
++        downgradeReasons: ['self-PR'],
++      },
++    });
++    expect(r.baseEvent).toBe('APPROVE');
++    expect(r.event).toBe('COMMENT');
++    expect(r.approachSignal).toBeNull();
++    expect(r.body).not.toContain('⚠️ Round');
++    expect(verdictLine(r)).not.toContain('reconsider the approach');
++  });
++
++  // No baseline on record means UNKNOWN growth, which must read as silence.
++  // Every PR already in flight when this ships is in exactly that state, so
++  // degrading to "no growth" instead would be silent-but-wrong at scale.
++  it('stays silent when the previous round recorded no baseline', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 920,
++    });
++    prevLedger(planPath, { v: 1, round: 9, findings: [] });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++    expect(r.body).not.toContain('⚠️ Round');
++  });
++
++  it('stays silent on an early round, even with large growth', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 2000,
++    });
++    prevLedger(planPath, { v: 1, round: 2, findings: [], src0: 100 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++  });
++
++  // A long review is not the same thing as a ballooning one. A PR that took
++  // ten rounds without growing is converging slowly, not diverging.
++  it('stays silent on a late round that did not grow', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 250,
++    });
++    prevLedger(planPath, { v: 1, round: 9, findings: [], src0: 228 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++  });
++
++  // Tripling a tiny diff is not the shape this describes. Reuses the module's
++  // existing "non-trivial diff" floor rather than inventing a second one.
++  it('stays silent below the absolute source-diff floor', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 60,
++    });
++    prevLedger(planPath, { v: 1, round: 9, findings: [], src0: 5 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++  });
++
++  it('honours the operator round threshold, and falls back to the built-in on 0', () => {
++    reviewSettingsMock.mockReturnValue({ approachRounds: 8 });
++    expect(
++      composeReview({
++        planPath: ballooned(),
++        env: ENV,
++        modelId: MODEL,
++        criticalsInline: 1,
++        suggestionsInline: 0,
++        severityFloor: 'auto',
++      }).approachSignal,
++    ).toBeNull();
++
++    reviewSettingsMock.mockReturnValue({ approachRounds: 0 });
++    expect(
++      composeReview({
++        planPath: ballooned(),
++        env: ENV,
++        modelId: MODEL,
++        criticalsInline: 1,
++        suggestionsInline: 0,
++        severityFloor: 'auto',
++      }).approachSignal,
++    ).not.toBeNull();
++    reviewSettingsMock.mockReturnValue({});
++  });
++
++  // The baseline is a BASELINE. #9136 grew 228 -> 920 over six rounds, which
++  // is only ~1.3x per round — a per-round delta would never have noticed it.
++  // Re-measuring each round would also let a diff that shrinks rewrite its own
++  // baseline and erase the growth already on record.
++  it('carries the baseline forward unchanged, even when the diff shrinks', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 150,
++    });
++    prevLedger(planPath, { v: 1, round: 3, findings: [], src0: 228 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.body).toMatch(/"src0":228/);
++  });
++
++  it('compares the full-range size on an incremental round', () => {
++    const planPath = ballooned({
++      srcDiffLines: 138,
++      fullSrcDiffLines: 920,
++      incremental: { since: 'a'.repeat(40), effective: true },
++    });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toMatchObject({
++      src0: 228,
++      srcDiffLines: 920,
++    });
++    // The marker the NEXT round reads keeps the previous baseline — a
++    // same-round assertion cannot see a rewrite of it.
++    expect(r.body).toMatch(/"src0":228/);
++  });
++
++  it('baselines from the full-range size on an incremental round', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 80,
++      fullSrcDiffLines: 950,
++      incremental: { since: 'a'.repeat(40), effective: true },
++    });
++    prevLedger(planPath, { v: 1, round: 1, findings: [] });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.body).toMatch(/"src0":950/);
++    expect(r.body).not.toMatch(/"src0":80/);
++  });
++
++  it('does not compare a large incremental delta as cumulative growth', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 350,
++      fullSrcDiffLines: 120,
++      incremental: { since: 'a'.repeat(40), effective: true },
++    });
++    prevLedger(planPath, { v: 1, round: 5, findings: [], src0: 100 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++  });
++
++  it('stays silent for a legacy incremental plan with no full-range size', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 350,
++      incremental: { since: 'a'.repeat(40), effective: true },
++    });
++    prevLedger(planPath, { v: 1, round: 5, findings: [] });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++    expect(r.body).not.toContain('"src0"');
++  });
++
++  it('baselines from this round when the previous ledger carries none', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 340,
++    });
++    prevLedger(planPath, { v: 1, round: 1, findings: [] });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.body).toMatch(/"src0":340/);
++  });
++
++  // The gate is `round >= rounds`: an off-by-one there makes every PR at
++  // exactly the threshold wait one more round, and nothing else notices.
++  it('fires at exactly the round threshold', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 920,
++    });
++    prevLedger(planPath, { v: 1, round: 4, findings: [], src0: 228 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toMatchObject({ round: 5, src0: 228 });
++  });
++
++  // `prevRound` can BE the cap (parseLedger accepts round == LEDGER_MAX_ROUND
++  // and a side file at the cap carries forward), so the signal clamps exactly
++  // as the marker stamp and the deferred-suggestions clause do. Unclamped, one
++  // body announced "Round 10001" beside a marker stamping round 10000 — the
++  // three consumers of this round disagreeing about which round this is.
++  it('names the round AT the ledger cap — the signal and the marker agree', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 920,
++    });
++    prevLedger(planPath, {
++      v: 1,
++      round: LEDGER_MAX_ROUND,
++      findings: [],
++      src0: 228,
++    });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toMatchObject({
++      round: LEDGER_MAX_ROUND,
++      src0: 228,
++    });
++    expect(r.body).toContain(`⚠️ Round ${LEDGER_MAX_ROUND}, `);
++    expect(r.body).not.toContain(`Round ${LEDGER_MAX_ROUND + 1}`);
++    // The signal and the marker must name the SAME round — at the cap too.
++    expect(parseLedger(r.body)?.round).toBe(LEDGER_MAX_ROUND);
++  });
++
++  // `growth >= APPROACH_GROWTH_FACTOR` — exactly the documented "grown by
++  // at least 3x" must fire.
++  it('fires at exactly the growth factor', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 300,
++    });
++    prevLedger(planPath, { v: 1, round: 5, findings: [], src0: 100 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toMatchObject({
++      src0: 100,
++      srcDiffLines: 300,
++      growth: 3,
++    });
++  });
++
++  // The floor is STRICT — "past the floor": exactly 100 source diff lines
++  // stays silent even at 20x growth.
++  it('stays silent at exactly the source-diff floor', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 100,
++    });
++    prevLedger(planPath, { v: 1, round: 5, findings: [], src0: 5 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++  });
++
++  // The corroborating clause: the incident that motivated this feature was
++  // a round-cap stop beside a ballooned diff, the exact shape no other test
++  // composes — every other firing case has no stop file.
++  it('names a round-cap stop in the paragraph when one happened', () => {
++    const planPath = ballooned();
++    writeRoundCapStop(planPath, 5, 6);
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal?.nonConverged).toBe(true);
++    expect(r.body).toContain(
++      'the reverse audit also stopped at its round cap without converging',
++    );
++  });
++
++  // The zh half of the paragraph, rendered for a Han-character description
++  // like every other bilingual clause in this module — a broken or
++  // truncated translation would otherwise ship unseen.
++  it('renders the zh half of the paragraph for a Han-character description', () => {
++    const planPath = ballooned({ han: true });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.body).toContain('⚠️ 第 6 轮');
++    expect(r.body).toContain('228 → 920');
++    expect(r.body).toContain('仅供参考');
++  });
++
++  // A legacy incremental plan carries no full-range size, so the signal
++  // stays silent — but a baseline already on record must still ride the
++  // marker forward, or the next round loses the growth record.
++  it('keeps the previous baseline on a silent legacy incremental round', () => {
++    const planPath = coveredPlan(['verify', 'reverse-audit'], {
++      prNumber: 8255,
++      ownerRepo: 'QwenLM/qwen-code',
++      srcDiffLines: 350,
++      incremental: { since: 'a'.repeat(40), effective: true },
++    });
++    prevLedger(planPath, { v: 1, round: 5, findings: [], src0: 228 });
++    const r = composeReview({
++      planPath,
++      env: ENV,
++      modelId: MODEL,
++      criticalsInline: 1,
++      suggestionsInline: 0,
++      severityFloor: 'auto',
++    });
++    expect(r.approachSignal).toBeNull();
++    expect(r.body).toMatch(/"src0":228/);
++  });
++});
++
+ describe('floor enforcement — the posture, as code', () => {
+   // SKILL Step 6 resolves the posting floor in prose and tells the MODEL to
+   // defer; six live PRs measured 2026-08-16 posted double-digit Suggestions
+diff --git a/packages/cli/src/commands/review/compose-review.ts b/packages/cli/src/commands/review/compose-review.ts
+index b359d0e903e..4efd4bf1aae 100644
+--- a/packages/cli/src/commands/review/compose-review.ts
++++ b/packages/cli/src/commands/review/compose-review.ts
+@@ -141,6 +141,23 @@ export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+  */
+ export const LOW_SIGNAL_SRC_DIFF_LINES = 100;
+ 
++/**
++ * How much a source diff must have grown since the review first measured it
++ * before the approach signal fires. A module constant rather than a setting,
++ * matching `LOW_SIGNAL_SRC_DIFF_LINES` beside it: the round threshold is the
++ * knob an operator would reach for, and a second one buys nothing but a second
++ * thing to get wrong. 3x is below the 4x the measured incident reached and
++ * well above the drift a normal review round produces.
++ */
++export const APPROACH_GROWTH_FACTOR = 3;
++
++/**
++ * Rounds before the approach signal can fire, when no operator setting
++ * overrides it. Five is the repo's own number for "this has gone on long
++ * enough" — AGENTS.md uses it for the review round budget.
++ */
++export const APPROACH_ROUNDS_DEFAULT = 5;
++
+ /**
+  * GitHub's hard limit on a review body. A POST over it is rejected whole —
+  * the review's blockers included — which is the worst failure this module
+@@ -982,6 +999,32 @@ export interface ComposeReviewResult {
+    * the orchestrator's prose ever reports it.
+    */
+   dimensionGapsAreDepthOnly?: boolean;
++  /**
++   * Set when a PR has taken enough rounds AND grown enough since the review
++   * first measured it that the shape of the change, not the current patch, is
++   * the open question. Disclosure only — the event never moves on it, exactly
++   * as `lowSignal` above.
++   *
++   * It exists because every finding this review emits is anchored to a
++   * `file:line` inside the current diff, so the review can say where an
++   * approach leaks but never that a different approach would retire all of the
++   * leaks at once. Measured: one change took three attempts across two PRs and
++   * 74 individually-correct findings, growing 4x, before the mechanism itself
++   * was replaced and every finding went away with it.
++   *
++   * Never fires on APPROVE: an approve IS convergence, and telling a
++   * converging PR to reconsider itself is the loudest possible false positive.
++   * `nonConverged` reports only THIS round's reverse-audit round-cap stop, as
++   * corroborating text — there is no cross-round tally of it, and the sentence
++   * does not claim one.
++   */
++  approachSignal: {
++    round: number;
++    src0: number;
++    srcDiffLines: number;
++    growth: number;
++    nonConverged: boolean;
++  } | null;
+ }
+ 
+ /**
+@@ -1354,9 +1397,9 @@ export function composeReview(
+   // One read, one round: the deferred-suggestions clause and the ledger
+   // marker both name this round, and each reading the side file for itself
+   // would let a mid-compose update publish two different round numbers in
+-  // one review. The previous volume rides out of the same read for the
+-  // same reason — a marker pairing one round's number with another's count
+-  // is a trend nobody can read back.
++  // one review. The approach baseline and the previous volume ride out of
++  // the same read for the same reason — a marker pairing one round's number
++  // with another's baseline or count is a record nobody can read back.
+   const prevFacts = prevLedgerFacts(input.planPath);
+   const prevRound = prevFacts.round;
+   // The convergence verdict, decided HERE — beside the one side-file read
+@@ -1506,6 +1549,7 @@ export function composeReview(
+     cliVersion,
+     attribution,
+     prevRound,
++    prevFacts.src0,
+     reroute,
+     {
+       prev: {
+@@ -1560,6 +1604,7 @@ export function composeReview(
+     attribution,
+     runtimeModelId,
+     prevRound,
++    prevFacts.src0,
+     postedInline,
+     result.postedFresh,
+     prevFacts.posted,
+@@ -1733,6 +1778,7 @@ function ordinalSuffix(n: number): string {
+  */
+ const EMPTY_PREV_FACTS = {
+   round: 0,
++  src0: 0,
+   churnRounds: 0,
+   findings: [] as LedgerFinding[],
+   truncated: false,
+@@ -1742,25 +1788,33 @@ const EMPTY_PREV_FACTS = {
+ };
+ 
+ /**
+- * The previous posted round's number AND its posting volume, recovered from
+- * the side file `pr-context` wrote — never from the model.
++ * The previous posted round's number, its approach baseline AND its posting
++ * volume, recovered from the side file `pr-context` wrote — never from the
++ * model.
+  *
+  * The round is 0 when the plan names no PR or no previous round was
+  * recovered: this is round 1. It is shared by the marker (which stamps
+- * `Math.min(prevRound + 1, LEDGER_MAX_ROUND)`) and the deferred-suggestions
++ * `Math.min(prevRound + 1, LEDGER_MAX_ROUND)`), the deferred-suggestions
+  * clause (which names the round the posture engaged on, clamped
+- * identically), so the two cannot disagree about which round this is — at
+- * the cap included, where an unclamped `prevRound + 1` on either side would
+- * name round 10001 beside a round-10000 marker.
++ * identically), and the approach signal, so none of the three can disagree
++ * about which round this is — at the cap included, where an unclamped
++ * `prevRound + 1` on either side would name round 10001 beside a
++ * round-10000 marker.
+  *
+- * Two facts, one read, on purpose: reading the file twice would let a
+- * mid-compose rewrite pair round N's number with round N+1's volume in a
+- * single marker. They degrade independently — the side file is a
+- * best-effort recovery, and a round with no volume recorded (every round
++ * Three facts, one read, on purpose: reading the file twice would let a
++ * mid-compose rewrite pair round N's number with round N+1's baseline or
++ * volume in a single marker. They degrade independently — the side file is
++ * a best-effort recovery, and a round with no volume recorded (every round
+  * before the field shipped) is not a round that posted nothing.
++ *
++ * `src0` is 0 on every failure path — see `Ledger.src0`. A force-push or an
++ * account switch that loses the side file therefore reads as round 1 and
++ * disarms the approach signal rather than misreporting it. That direction is
++ * deliberate: the signal is advisory, so its failure mode should be silence.
+  */
+ function prevLedgerFacts(planPath: string | undefined): {
+   round: number;
++  src0: number;
+   posted?: number;
+   /**
+    * The previous round's work list, for the recurrence join. Empty when
+@@ -1805,6 +1859,10 @@ function prevLedgerFacts(planPath: string | undefined): {
+     ) as Ledger & { foreign?: unknown; merged?: unknown };
+     const round =
+       Number.isInteger(prev.round) && prev.round > 0 ? prev.round : 0;
++    const src0 =
++      Number.isInteger(prev.src0) && (prev.src0 as number) > 0
++        ? (prev.src0 as number)
++        : 0;
+     // Read through the ledger's own volume reader rather than a local
+     // restatement: the side file is a JSON `pr-context` wrote, not a marker
+     // `parseLedger` already normalised, and a boundary that checked the
+@@ -1854,6 +1912,7 @@ function prevLedgerFacts(planPath: string | undefined): {
+ 
+     return {
+       round,
++      src0,
+       churnRounds,
+       ...(posted === undefined || round === 0 ? {} : { posted }),
+       // Gated on the round for the same reason the volume is: a work list
+@@ -1940,6 +1999,7 @@ function ledgerMarkerFor(
+   attribution: boolean,
+   runtimeModelId: string | undefined,
+   prevRound: number,
++  prevSrc0: number,
+   postedInline: number,
+   freshInline: number,
+   prevPostedInline: number | undefined,
+@@ -1952,6 +2012,9 @@ function ledgerMarkerFor(
+     if (!planNamesPr(input.planPath)) return null;
+     const plan = JSON.parse(readFileSync(input.planPath, 'utf8')) as {
+       fetchedSha?: unknown;
++      srcDiffLines?: unknown;
++      fullSrcDiffLines?: unknown;
++      incremental?: { effective?: unknown };
+       reviewModelId?: unknown;
+     };
+     // The anchor rides only when this round's SCOPE was clean. An anchor
+@@ -1992,6 +2055,16 @@ function ledgerMarkerFor(
+       !failClosed && typeof plan.fetchedSha === 'string'
+         ? plan.fetchedSha
+         : undefined;
++    const measured = Number(
++      plan.fullSrcDiffLines ??
++        (plan.incremental?.effective === true ? 0 : (plan.srcDiffLines ?? 0)),
++    );
++    const src0 =
++      prevSrc0 > 0
++        ? prevSrc0
++        : Number.isFinite(measured) && measured > 0
++          ? Math.round(measured)
++          : 0;
+     // The anchor's same-model qualifier: "clean up to `sha`" is THIS model's
+     // verdict, and Step 1's recovered-anchor gate refuses to scope another
+     // model's round to it. The identity is the one the RUNTIME published —
+@@ -2096,6 +2169,11 @@ function ledgerMarkerFor(
+       // round as a pre-field marker rather than as "nobody certified this".
+       ...(shaCandidate && !identityDrifted ? { sha: shaCandidate } : {}),
+       ...(model ? { model } : {}),
++      // Carry the baseline forward unchanged once one exists; only measure a
++      // full-range diff when there is none. Re-measuring every round would let
++      // a diff that shrinks rewrite its own baseline and erase the growth it
++      // already accumulated.
++      ...(src0 > 0 ? { src0 } : {}),
+       // Volume telemetry: unconditional, unlike everything above it. The
+       // anchor pair is withheld whenever the round could not certify its
+       // scope, but "how many comments did this round post" stays true on a
+@@ -2250,6 +2328,7 @@ function composeReviewBody(
+   cliVersion: string,
+   attribution: boolean,
+   prevRound: number,
++  prevSrc0: number,
+   reroute: { indices: number[]; entries: DeferredEntry[] } = {
+     indices: [],
+     entries: [],
+@@ -2456,6 +2535,7 @@ function composeReviewBody(
+    *  nothing. */
+   let canonicalStopEntries: Set<string> | null = null;
+   let budgetEntry: (typeof coverageEntries)[number] | undefined;
++  let roundCapStopped = false;
+   if (input.planPath) {
+     const stop = readBudgetStop(input.planPath);
+     if (stop !== null) {
+@@ -2482,6 +2562,11 @@ function composeReviewBody(
+       // entries exists; an absent cause is a time stop, for markers written
+       // before the cause field existed.
+       const isRoundCap = stop.cause === 'round-cap';
++      // Corroborating text for the approach signal below. Read-only: the
++      // entry keeps its existing coverage cap untouched, and this flag is
++      // never a trigger on its own — only a clause appended when the signal
++      // has already fired on rounds and growth.
++      roundCapStopped = isRoundCap;
+       // Spliced on the FULL canonical entry text (both languages: the
+       // exemption admits the Chinese pair as a compliant relay, so the
+       // splice must retire it too, or the same gap renders twice beside the
+@@ -3437,6 +3522,63 @@ function composeReviewBody(
+     }
+   }
+ 
++  // Every finding this review emits is anchored to a `file:line` inside the
++  // current diff, so it can report where an approach leaks but never that a
++  // different approach would retire all of the leaks at once. When a change
++  // has taken many rounds AND grown several times over while doing so, that
++  // limit is worth stating out loud to the human deciding what happens next —
++  // otherwise the only reading available is "keep patching".
++  //
++  // Advisory by construction: it is not a finding (findings are what the
++  // autofix loop consumes, which is the pattern this exists to interrupt), it
++  // adds no cap, and it never moves the event.
++  let approachSignal: ComposeReviewResult['approachSignal'] = null;
++  // An APPROVE is convergence. Telling a converging PR to reconsider itself is
++  // the loudest false positive available, and it would contradict the posture
++  // that composes a deferrals-only late Approve on purpose.
++  if (baseEvent !== 'APPROVE' && prevSrc0 > 0 && input.planPath) {
++    // Same clamp as the ledger marker stamp and the deferred-suggestions
++    // clause: a side file at the cap is representable and carries forward, so
++    // an unclamped +1 would print a round the marker in the same body denies.
++    const round = Math.min(prevRound + 1, LEDGER_MAX_ROUND);
++    const rounds =
++      operatorReviewSettings().approachRounds ?? APPROACH_ROUNDS_DEFAULT;
++    if (round >= rounds) {
++      let src = 0;
++      try {
++        const plan = JSON.parse(readFileSync(input.planPath, 'utf8')) as {
++          srcDiffLines?: unknown;
++          fullSrcDiffLines?: unknown;
++          incremental?: { effective?: unknown };
++        };
++        src = Number(
++          plan.fullSrcDiffLines ??
++            (plan.incremental?.effective === true
++              ? 0
++              : (plan.srcDiffLines ?? 0)),
++        );
++      } catch {
++        // Unreadable plan, no disclosure — same posture as `lowSignal`.
++      }
++      const growth = src / prevSrc0;
++      // The absolute floor reuses the module's existing "non-trivial diff"
++      // threshold: tripling a 12-line diff is not the shape this describes.
++      if (
++        Number.isFinite(src) &&
++        src > LOW_SIGNAL_SRC_DIFF_LINES &&
++        growth >= APPROACH_GROWTH_FACTOR
++      ) {
++        approachSignal = {
++          round,
++          src0: prevSrc0,
++          srcDiffLines: src,
++          growth,
++          nonConverged: roundCapStopped,
++        };
++      }
++    }
++  }
++
+   // Bilingual rendering: when the plan (fetch-pr's report) says the PR
+   // description contains Han characters, the posted body carries the complete
+   // Chinese version collapsed under the English one — the shape this repo's
+@@ -4439,6 +4581,39 @@ function composeReviewBody(
+       ]
+     : [];
+ 
++  // Addressed to the human deciding what happens next, not to the model that
++  // will fix the findings — which is why it is a body paragraph and not a
++  // finding. Built from `approachSignal` rather than re-evaluating the
++  // predicate, so the paragraph and the verdict-line clause cannot disagree.
++  const approachBlock: Bi[] = approachSignal
++    ? [
++        {
++          en:
++            `⚠️ Round ${approachSignal.round}, and the diff has grown ` +
++            `${approachSignal.growth.toFixed(1)}x since this review first measured it ` +
++            `(${approachSignal.src0} → ${approachSignal.srcDiffLines} source diff lines)` +
++            (approachSignal.nonConverged
++              ? '; the reverse audit also stopped at its round cap without converging'
++              : '') +
++            `. The findings below are anchored to the current patch, so they can only say ` +
++            `where this approach leaks — never that a different approach would retire all ` +
++            `of them at once. Before fixing them, a human should decide whether the shape ` +
++            `of the change is still right. Advisory only: this does not affect the verdict, ` +
++            `and nothing here is a blocker.`,
++          zh:
++            `⚠️ 第 ${approachSignal.round} 轮，且自本审查首次测量以来 diff 已增长 ` +
++            `${approachSignal.growth.toFixed(1)} 倍（源码 diff 行数 ` +
++            `${approachSignal.src0} → ${approachSignal.srcDiffLines}）` +
++            (approachSignal.nonConverged
++              ? '；反向审计也在轮数上限处停止且未收敛'
++              : '') +
++            `。下方的发现都锚定在当前这版补丁上，因此它们只能指出这个方案在哪里漏了，` +
++            `而无法说明换一个方案就能一次性消除全部问题。在动手修复之前，应由人来判断这次` +
++            `改动的整体形态是否仍然正确。仅供参考：本段不影响判定结论，其中也没有任何阻断项。`,
++        },
++      ]
++    : [];
++
+   if (event === 'REQUEST_CHANGES') {
+     // Empty body, except the disclosures: every clause whose state holds
+     // appears on every event — a confirmed blocker must not squeeze out the
+@@ -4447,6 +4622,7 @@ function composeReviewBody(
+     const parts = [
+       ...(coverageOpener ? [coverageOpener] : []),
+       ...(contextUnavailable ? [contextUnavailableClause] : []),
++      ...approachBlock,
+       ...duplicatesBlock,
+       ...cannotTellBlock,
+       ...notReviewedForBody,
+@@ -4488,6 +4664,7 @@ function composeReviewBody(
+       lowSignal,
+       scopeUnproven,
+       dimensionGapsAreDepthOnly,
++      approachSignal,
+       ...(residualRisk ? { residualRisk } : {}),
+     };
+   }
+@@ -4576,6 +4753,7 @@ function composeReviewBody(
+       lowSignal,
+       scopeUnproven,
+       dimensionGapsAreDepthOnly,
++      approachSignal,
+       ...(residualRisk ? { residualRisk } : {}),
+     };
+   }
+@@ -4710,6 +4888,12 @@ function composeReviewBody(
+   // single unreadable wall.
+   const openerCount = clauses.length;
+ 
++  // 4-. Approach signal — pushed FIRST after the opener count so it becomes a
++  //     standalone paragraph rather than being swallowed into the opener's
++  //     space-joined run. It is the one clause addressed to a human rather
++  //     than to the next round's work list, so it reads before the findings.
++  clauses.push(...approachBlock);
++
+   // 4a. Duplicate-dropped Suggestions — built above with the other body
+   //     blocks; it renders on every event, RC included.
+   clauses.push(...duplicatesBlock);
+@@ -4819,6 +5003,7 @@ function composeReviewBody(
+     lowSignal,
+     scopeUnproven,
+     dimensionGapsAreDepthOnly,
++    approachSignal,
+     ...(residualRisk ? { residualRisk } : {}),
+   };
+ }
+@@ -6037,5 +6222,15 @@ export function verdictLine(r: ComposeReviewResult): string {
+     // critical floor exists in the invocation — the round resolved to one.
+     line += ` — ${r.floorEnforced.length} of those moved by CLI floor enforcement (drafted inline past the resolved critical floor)`;
+   }
++  // Last, and phrased so the terminal line alone carries the ask: this is the
++  // line the orchestrator prints verbatim, and on a CI-triggered review it may
++  // be all a human reads before opening the PR.
++  if (r.approachSignal) {
++    line +=
++      ` — round ${r.approachSignal.round}, diff grown ` +
++      `${r.approachSignal.growth.toFixed(1)}x since first measured ` +
++      `(${r.approachSignal.src0} → ${r.approachSignal.srcDiffLines} source diff lines); ` +
++      `reconsider the approach, not only the findings`;
++  }
+   return line;
+ }
+diff --git a/packages/cli/src/commands/review/fetch-pr.test.ts b/packages/cli/src/commands/review/fetch-pr.test.ts
+index 758578e3161..d5006528008 100644
+--- a/packages/cli/src/commands/review/fetch-pr.test.ts
++++ b/packages/cli/src/commands/review/fetch-pr.test.ts
+@@ -1448,6 +1448,10 @@ describe('fetch-pr report assembly', () => {
+     // …and the PLAN is the delta's, not the full range's: a re-plan over
+     // fullText would pair a 200-line plan with an 8-line published diff.
+     expect(report.diffLines).toBe(NARROWED.trimEnd().split('\n').length);
++    const narrowedSrcDiffLines = buildDiffPlan(NARROWED).srcDiffLines;
++    const fullSrcDiffLines = buildDiffPlan(FULL_DIFF).srcDiffLines;
++    expect(fullSrcDiffLines).toBeGreaterThan(narrowedSrcDiffLines);
++    expect(report.fullSrcDiffLines).toBe(fullSrcDiffLines);
+     expect(report.emptyDiff).toBeUndefined();
+     expect(report.collapsedFromUpstream).toBeUndefined();
+     // The probe wiring, pinned by invocation shape: a transposed
+diff --git a/packages/cli/src/commands/review/fetch-pr.ts b/packages/cli/src/commands/review/fetch-pr.ts
+index be6cea97c13..dbd52f20200 100644
+--- a/packages/cli/src/commands/review/fetch-pr.ts
++++ b/packages/cli/src/commands/review/fetch-pr.ts
+@@ -224,6 +224,8 @@ type FetchPrResult = PlanReport & {
+    * local review's plan has no such field: nothing is posted there.
+    */
+   prDescriptionHasHan: boolean;
++  /** Source diff lines in the full merge-base range, including on an incremental round. */
++  fullSrcDiffLines?: number;
+   /**
+    * The model this ROUND started under — the runtime identity at capture
+    * time, stamped here because nothing else in the flow remembers it.
+@@ -1499,6 +1501,22 @@ async function runFetchPr(args: FetchPrArgs): Promise<void> {
+       );
+     }
+ 
++    let fullSrcDiffLines: number | undefined;
++    if (fullText !== null) {
++      if (!scopedDelta) {
++        fullSrcDiffLines = plan.srcDiffLines;
++      } else {
++        try {
++          fullSrcDiffLines = buildDiffPlan(
++            fullText,
++            args.maxChunkLines,
++          ).srcDiffLines;
++        } catch {
++          // Advisory measurement only; compose-review stays silent without it.
++        }
++      }
++    }
++
+     // Aone does not advertise diff stats — fill them from the captured diff
+     // so the report's diffStat and the stderr summary carry real numbers.
+     // Runs AFTER the plan/rescue above, where `diffText` is FINAL: the
+@@ -1664,6 +1682,7 @@ async function runFetchPr(args: FetchPrArgs): Promise<void> {
+       diffPathAbsolute,
+       diffSha256,
+       prDescriptionHasHan: /\p{Script=Han}/u.test(meta.body ?? ''),
++      ...(fullSrcDiffLines === undefined ? {} : { fullSrcDiffLines }),
+       ...(roundModelId ? { reviewModelId: roundModelId } : {}),
+       ...(anchor ? { incremental: anchor.incremental } : {}),
+       ...buildPlanReport(plan, (path) => fileLineCount(fetchedSha, path), {
+diff --git a/packages/cli/src/commands/review/lib/ledger.test.ts b/packages/cli/src/commands/review/lib/ledger.test.ts
+index 948d4fa2eaf..9f22c2a27e4 100644
+--- a/packages/cli/src/commands/review/lib/ledger.test.ts
++++ b/packages/cli/src/commands/review/lib/ledger.test.ts
+@@ -710,6 +710,78 @@ describe('LEDGER_ID_READBACK', () => {
+   });
+ });
+ 
++// `src0` is the approach signal's baseline — see `Ledger.src0`. It is the one
++// field that survives truncation, because the ruling that withholds an anchor
++// from a partial finding list does not extend to a measurement of the diff.
++describe('ledger src0 — the approach-signal baseline', () => {
++  it('serializes a positive baseline and omits a missing or zero one', () => {
++    expect(
++      serializeLedger({ v: 1, round: 2, findings: [], src0: 228 }),
++    ).toContain('"src0":228');
++    expect(serializeLedger({ v: 1, round: 2, findings: [] })).not.toContain(
++      'src0',
++    );
++    expect(
++      serializeLedger({ v: 1, round: 2, findings: [], src0: 0 }),
++    ).not.toContain('src0');
++  });
++
++  // The explicit ruling the schema demands of any new field: `sha` is dropped
++  // on a truncated list because a partial work list must not certify a commit
++  // range; `src0` certifies nothing, so it rides.
++  it('survives truncation where the anchor does not', () => {
++    const findings = Array.from({ length: 400 }, (_, i) => ({
++      id: `R1-${i}`,
++      sev: 'S' as const,
++      file: `src/some/reasonably/long/path/to/file-${i}.ts`,
++      line: i,
++      title: `a finding title long enough to push the marker past its byte cap ${i}`,
++    }));
++    const parsed = parseLedger(
++      serializeLedger({
++        v: 1,
++        round: 3,
++        findings,
++        sha: 'deadbeef00112233445566778899aabbccddeeff',
++        src0: 228,
++      }),
++    );
++    expect(parsed?.dropped).toBeGreaterThan(0);
++    expect(parsed?.sha).toBeUndefined();
++    expect(parsed?.src0).toBe(228);
++  });
++
++  // A garbled baseline must degrade to "unknown" — which the consumer reads as
++  // silence — rather than to a number that would read as no growth.
++  it.each([0, -5, 1.5, '228', null, undefined])(
++    'drops a non-positive-integer baseline (%p)',
++    (bad) => {
++      const marker = `<!-- qwen-review-ledger ${JSON.stringify({
++        v: 1,
++        round: 2,
++        findings: [],
++        src0: bad,
++      })} -->`;
++      expect(parseLedger(marker)?.src0).toBeUndefined();
++    },
++  );
++
++  it('round-trips a baseline alongside the -- escaping', () => {
++    const parsed = parseLedger(
++      serializeLedger({
++        v: 1,
++        round: 4,
++        findings: [
++          { id: 'R1-1', sev: 'C', file: 'a.ts', title: 'rejects --unsafe' },
++        ],
++        src0: 512,
++      }),
++    );
++    expect(parsed?.src0).toBe(512);
++    expect(parsed?.findings[0].title).toBe('rejects --unsafe');
++  });
++});
++
+ describe('the volume fields — telemetry across the untrusted boundary', () => {
+   // This suite is the marker's untrusted-input boundary: `parseLedger` reads
+   // PR bodies any account can write, so the volume fields are pinned here
+diff --git a/packages/cli/src/commands/review/lib/ledger.ts b/packages/cli/src/commands/review/lib/ledger.ts
+index 3ce73ae97f0..e5aaa40cb0d 100644
+--- a/packages/cli/src/commands/review/lib/ledger.ts
++++ b/packages/cli/src/commands/review/lib/ledger.ts
+@@ -104,6 +104,26 @@ export interface Ledger {
+    * model naming no range qualifies nothing.
+    */
+   model?: string;
++  /**
++   * Source-diff line count as of the FIRST round that recorded one, carried
++   * forward unchanged. A baseline, never re-measured: growth is only legible
++   * cumulatively. A change that arrives at 228 source lines and leaves at 920
++   * grew 4x, yet only ~1.3x per round across six rounds — a per-round delta
++   * would never notice, which is why this is a baseline and not "last round's
++   * size".
++   *
++   * Its only consumer is one advisory paragraph telling a human that the shape
++   * of the change, rather than the current patch, may be the open question.
++   * Like every other marker field this is untrusted body data, but unlike a
++   * finding there is no code to re-assert a bare number against: a forged small
++   * value fires the paragraph, a forged large one silences it. That is the
++   * entire blast radius — it never reaches a verdict, a cap, or an event.
++   *
++   * Unlike `sha`, this survives truncation. A partial finding list must not
++   * certify a commit range, but it says nothing about how big the diff is, and
++   * the measurement is true either way.
++   */
++  src0?: number;
+   /**
+    * How many inline comments this round posted — convergence telemetry, and
+    * the ONLY field here that decides nothing.
+@@ -494,6 +514,13 @@ export function serializeLedger(ledger: Ledger): string {
+         if (model) payload.model = model;
+       }
+     }
++    // Unconditional, unlike `sha` above: the ruling that withholds an anchor
++    // from a partial list does not extend to a measurement of the diff. ~12
++    // bytes against LEDGER_MAX_BYTES, and losing it would silently reset a
++    // baseline the next round cannot recompute.
++    if (Number.isInteger(ledger.src0) && (ledger.src0 as number) > 0) {
++      payload.src0 = ledger.src0;
++    }
+     return `${OPEN}${JSON.stringify(payload).replace(/--/g, '-\\u002d')}${CLOSE}`;
+   };
+   // Drop from the END until the whole marker fits. Trailing entries are the
+@@ -705,6 +732,14 @@ export function parseLedger(body: string | undefined): Ledger | null {
+       sha && rawModel !== '' && rawModel.length <= LEDGER_MAX_MODEL
+         ? rawModel
+         : undefined;
++    // Survives truncation on read as it does on write — a partial list still
++    // measured the same diff. Anything that is not a positive integer is
++    // dropped, so a garbled baseline degrades to "unknown" (silence) rather
++    // than to a number that would read as no growth.
++    const src0 =
++      Number.isInteger(raw.src0) && (raw.src0 as number) > 0
++        ? (raw.src0 as number)
++        : undefined;
+     // The volume fields are normalised on READ exactly as they are bounded
+     // on write, and independently of `dropped`: they qualify no range, so a
+     // truncated work list has no bearing on them. A shape the serializer
+@@ -748,6 +783,7 @@ export function parseLedger(body: string | undefined): Ledger | null {
+       ...(dropped ? { dropped } : {}),
+       ...(sha ? { sha } : {}),
+       ...(model ? { model } : {}),
++      ...(src0 ? { src0 } : {}),
+       ...(posted === undefined ? {} : { posted }),
+       ...(prevPosted === undefined ? {} : { prevPosted }),
+       ...(churnRounds === 0 ? {} : { churnRounds }),
+diff --git a/packages/cli/src/commands/review/lib/review-settings.test.ts b/packages/cli/src/commands/review/lib/review-settings.test.ts
+index b2d02d61031..ab06e061544 100644
+--- a/packages/cli/src/commands/review/lib/review-settings.test.ts
++++ b/packages/cli/src/commands/review/lib/review-settings.test.ts
+@@ -140,6 +140,7 @@ describe('operatorReviewSettings', () => {
+       comment: false,
+       effort: undefined,
+       reverseAuditRounds: undefined,
++      approachRounds: undefined,
+     });
+     // Every default is the conservative side: a review that loses its operator
+     // policy loses it toward doing more work and writing nothing public.
+@@ -167,9 +168,29 @@ describe('operatorReviewSettings', () => {
+       comment: false,
+       effort: undefined,
+       reverseAuditRounds: undefined,
++      approachRounds: undefined,
+     });
+   });
+ 
++  // Same re-validation as the ceiling above: a settings file is hand-edited,
++  // and a threshold that is not a positive integer must read as absent so the
++  // built-in default applies rather than a nonsense number silencing or
++  // spamming the signal.
++  it('passes a real approach-round threshold through as a number', () => {
++    for (const rounds of [1, 5, 8, 40]) {
++      setReview({ approachRounds: rounds });
++      expect(operatorReviewSettings().approachRounds).toBe(rounds);
++    }
++  });
++
++  it.each([0, -1, 1.5, '5', NaN, null, true])(
++    'reads a non-positive-integer approach threshold as absent (%p)',
++    (bad) => {
++      setReview({ approachRounds: bad });
++      expect(operatorReviewSettings().approachRounds).toBeUndefined();
++    },
++  );
++
+   it('passes a real reverse-audit ceiling through as a number', () => {
+     for (const rounds of [3, 4, 9, 100]) {
+       setReview({ reverseAuditRounds: rounds });
+@@ -205,7 +226,7 @@ describe('operatorReviewSettings', () => {
+ });
+ 
+ describe('review settings in the /settings dialog', () => {
+-  it('exposes all four settings for toggling', () => {
++  it('exposes every review setting for toggling', () => {
+     // Maintainer A/B verification of this PR caught the description claiming
+     // dialog membership while the schema shipped showInDialog: false. Pin the
+     // membership so the claim and the schema cannot drift again.
+@@ -215,5 +236,6 @@ describe('review settings in the /settings dialog', () => {
+     expect(dialogKeys).toContain('review.comment');
+     expect(dialogKeys).toContain('review.severityFloor');
+     expect(dialogKeys).toContain('review.reverseAuditRounds');
++    expect(dialogKeys).toContain('review.approachRounds');
+   });
+ });
+diff --git a/packages/cli/src/commands/review/lib/review-settings.ts b/packages/cli/src/commands/review/lib/review-settings.ts
+index f100c24937d..94bada0d84e 100644
+--- a/packages/cli/src/commands/review/lib/review-settings.ts
++++ b/packages/cli/src/commands/review/lib/review-settings.ts
+@@ -13,6 +13,7 @@ const SAFE_DEFAULTS: OperatorReviewSettings = {
+   comment: false,
+   effort: undefined,
+   reverseAuditRounds: undefined,
++  approachRounds: undefined,
+ };
+ 
+ export interface OperatorReviewSettings {
+@@ -41,6 +42,15 @@ export interface OperatorReviewSettings {
+    * topology can honour (it may only lower a tier, never raise it).
+    */
+   reverseAuditRounds?: number;
++  /**
++   * How many rounds a PR must reach before the review may say the approach
++   * itself is the open question, when the operator sets a real number.
++   *
++   * Only a positive integer survives re-validation; anything else reads as
++   * absent and the built-in default applies. Raising it makes the signal
++   * later; a large value effectively silences it.
++   */
++  approachRounds?: number;
+ }
+ 
+ /**
+@@ -88,6 +98,7 @@ export function operatorReviewSettings(): OperatorReviewSettings {
+   // non-boolean `attribution` falls back to the schema default (on); a
+   // non-boolean `comment` never enables auto-posting.
+   const rounds = review?.reverseAuditRounds;
++  const approach = review?.approachRounds;
+   return {
+     attribution:
+       typeof review?.attribution === 'boolean' ? review.attribution : true,
+@@ -101,5 +112,9 @@ export function operatorReviewSettings(): OperatorReviewSettings {
+       typeof rounds === 'number' && Number.isInteger(rounds) && rounds > 0
+         ? rounds
+         : undefined,
++    approachRounds:
++      typeof approach === 'number' && Number.isInteger(approach) && approach > 0
++        ? approach
++        : undefined,
+   };
+ }
+diff --git a/packages/cli/src/commands/review/pr-context-persist.test.ts b/packages/cli/src/commands/review/pr-context-persist.test.ts
+index a939cde3058..29b5e5ca185 100644
+--- a/packages/cli/src/commands/review/pr-context-persist.test.ts
++++ b/packages/cli/src/commands/review/pr-context-persist.test.ts
+@@ -1039,6 +1039,65 @@ describe('persistRecoveredLedger', () => {
+       rmSync(dir, { recursive: true, force: true });
+     }
+   });
++
++  it('keeps the src0 baseline through the recovered write', () => {
++    // compose-review's approach signal reads src0 from this side file; this
++    // writer is the joint in the marker→parse→persist→read chain the
++    // compose tests cannot reach (they write the file directly).
++    const dir = mkdtempSync(join(tmpdir(), 'prev-ledger-'));
++    const side = join(dir, 'side.json');
++    try {
++      persistRecoveredLedger(
++        side,
++        {
++          ledger: { ...ledger, src0: 228 },
++          commitId: 'a'.repeat(40),
++          reviewId: 42,
++          foreign: false,
++          merged: false,
++        },
++        { noOwnReview: true, identityKnown: true },
++      );
++      expect(JSON.parse(readFileSync(side, 'utf8')).src0).toBe(228);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++
++  it('keeps the src0 baseline across an anonymous higher-round advance', () => {
++    // The advance rebuilds the file by explicit field selection (existing
++    // minus sha/commitId, plus the new round and review id) — a swap to
++    // named fields there must not drop the baseline compose-review reads
++    // next round.
++    const dir = mkdtempSync(join(tmpdir(), 'prev-ledger-'));
++    const side = join(dir, 'side.json');
++    try {
++      writeFileSync(
++        side,
++        JSON.stringify({ ...ledger, round: 7, reviewId: 100, src0: 228 }),
++      );
++      persistRecoveredLedger(
++        side,
++        {
++          ledger: {
++            v: 1,
++            round: 8,
++            findings: [{ id: 'R8-1', sev: 'S', file: 'x.ts', title: 'theirs' }],
++          },
++          commitId: 'c'.repeat(40),
++          reviewId: 200,
++          foreign: false,
++          merged: false,
++        },
++        { noOwnReview: true, identityKnown: false },
++      );
++      const written = JSON.parse(readFileSync(side, 'utf8'));
++      expect(written.round).toBe(8);
++      expect(written.src0).toBe(228);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
+ });
+ 
+ describe('persistedAnchorSha', () => {
+diff --git a/packages/cli/src/commands/review/save-artifact.test.ts b/packages/cli/src/commands/review/save-artifact.test.ts
+index 326c911265f..f20c01fe4ac 100644
+--- a/packages/cli/src/commands/review/save-artifact.test.ts
++++ b/packages/cli/src/commands/review/save-artifact.test.ts
+@@ -82,6 +82,15 @@ const verdict = {
+   // `save-artifact.ts` does.
+   bodyTrim: { sections: 2, deferralList: true, fold: true, truncated: true },
+   lowSignal: { agents: 4, srcDiffLines: 120 },
++  // Populated on purpose, like `deferredCount` above: the copy test then
++  // proves passthrough rather than only the validator's absent-means-null.
++  approachSignal: {
++    round: 6,
++    src0: 228,
++    srcDiffLines: 920,
++    growth: 920 / 228,
++    nonConverged: true,
++  },
+   verdictLine: 'Verdict: Comment — Request changes was downgraded',
+ };
+ 
+@@ -680,6 +689,77 @@ describe('saveReviewArtifact', () => {
+     }
+   });
+ 
++  it.each(['round', 'src0', 'srcDiffLines'] as const)(
++    'refuses a zero-valued approachSignal.%s',
++    (key) => {
++      const paths = fixture();
++      writeJson(paths.composed, {
++        ...verdict,
++        approachSignal: { ...verdict.approachSignal, [key]: 0 },
++      });
++
++      expect(() =>
++        saveReviewArtifact({
++          ...paths,
++          target: 'local',
++          effort: 'medium',
++        }),
++      ).toThrow(new RegExp(`approachSignal\\.${key}`));
++      expect(existsSync(paths.out)).toBe(false);
++    },
++  );
++
++  it.each([
++    ['a negative round', { round: -1 }],
++    ['a fractional round', { round: 1.5 }],
++    ['a non-numeric round', { round: 'six' }],
++    ['a negative growth', { growth: -1 }],
++    ['a non-numeric growth', { growth: 'big' }],
++    ['a non-boolean nonConverged', { nonConverged: 'yes' }],
++  ] as Array<[string, Record<string, unknown>]>)(
++    'refuses a present approachSignal carrying %s',
++    (_label, bad) => {
++      // Same discipline as deferredCount: the absent-means-null default
++      // must not swallow a PRESENT malformed value into the durable artifact.
++      const paths = fixture();
++      writeJson(paths.composed, {
++        ...verdict,
++        approachSignal: { ...verdict.approachSignal, ...bad },
++      });
++
++      expect(() =>
++        saveReviewArtifact({ ...paths, target: 'local', effort: 'medium' }),
++      ).toThrow(/approachSignal/);
++      expect(existsSync(paths.out)).toBe(false);
++    },
++  );
++
++  it('refuses a present approachSignal that is not an object', () => {
++    const paths = fixture();
++    writeJson(paths.composed, { ...verdict, approachSignal: 'junk' });
++
++    expect(() =>
++      saveReviewArtifact({ ...paths, target: 'local', effort: 'medium' }),
++    ).toThrow(/approachSignal/);
++    expect(existsSync(paths.out)).toBe(false);
++  });
++
++  it('reads an absent or null approachSignal as null — a pre-signal composed file must still save', () => {
++    // Null rides the same absence semantics as the sibling deferredCount:
++    // a presence-required read would refuse every composed file written
++    // before this field existed.
++    const paths = fixture();
++    const { approachSignal: _absent, ...preSignal } = verdict;
++    for (const composed of [preSignal, { ...verdict, approachSignal: null }]) {
++      writeJson(paths.composed, composed);
++      saveReviewArtifact({ ...paths, target: 'local', effort: 'medium' });
++      expect(
++        JSON.parse(readFileSync(paths.out, 'utf8')).verdict.approachSignal,
++      ).toBeNull();
++      rmSync(paths.out, { force: true });
++    }
++  });
++
+   it.each(['findings', 'composed', 'report'] as const)(
+     'refuses to overwrite the %s input',
+     (input) => {
+diff --git a/packages/cli/src/commands/review/save-artifact.ts b/packages/cli/src/commands/review/save-artifact.ts
+index 29cd5a98846..cbd2dcf6edb 100644
+--- a/packages/cli/src/commands/review/save-artifact.ts
++++ b/packages/cli/src/commands/review/save-artifact.ts
+@@ -284,6 +284,35 @@ function validateVerdict(value: unknown): PersistedVerdict {
+   // carries no deferredCount, and a mid-upgrade save must not fail over a
+   // count that only affects display. A PRESENT value of any other wrong
+   // shape is refused like every other field here.
++  // Same absence semantics as `deferredCount` below: a composed JSON written
++  // by a build predating the approach signal carries no field at all, and a
++  // mid-upgrade load must not fail over one that only affects display. A
++  // PRESENT value of the wrong shape is refused like every other field here.
++  const approachRaw = verdict['approachSignal'] ?? null;
++  if (approachRaw !== null) {
++    const signal = object(approachRaw, 'Composed verdict.approachSignal');
++    for (const key of ['round', 'src0', 'srcDiffLines'] as const) {
++      if (
++        typeof signal[key] !== 'number' ||
++        !Number.isInteger(signal[key]) ||
++        (signal[key] as number) <= 0
++      ) {
++        throw new Error(
++          `Composed verdict.approachSignal.${key} must be a positive integer.`,
++        );
++      }
++    }
++    if (typeof signal['growth'] !== 'number' || !(signal['growth'] >= 0)) {
++      throw new Error(
++        'Composed verdict.approachSignal.growth must be a non-negative number.',
++      );
++    }
++    if (typeof signal['nonConverged'] !== 'boolean') {
++      throw new Error(
++        'Composed verdict.approachSignal.nonConverged must be a boolean.',
++      );
++    }
++  }
+   const deferredCount = verdict['deferredCount'] ?? 0;
+   if (
+     typeof deferredCount !== 'number' ||
+@@ -506,6 +535,20 @@ function validateVerdict(value: unknown): PersistedVerdict {
+               'srcDiffLines'
+             ]!,
+           },
++    approachSignal:
++      approachRaw === null
++        ? null
++        : {
++            round: (approachRaw as Record<string, number>)['round']!,
++            src0: (approachRaw as Record<string, number>)['src0']!,
++            srcDiffLines: (approachRaw as Record<string, number>)[
++              'srcDiffLines'
++            ]!,
++            growth: (approachRaw as Record<string, number>)['growth']!,
++            nonConverged: (approachRaw as Record<string, unknown>)[
++              'nonConverged'
++            ] as boolean,
++          },
+     verdictLine: nonEmptyString(
+       verdict['verdictLine'],
+       'Composed verdict.verdictLine',
+diff --git a/packages/cli/src/config/settingsSchema.ts b/packages/cli/src/config/settingsSchema.ts
+index 1674348844e..d9812ff651c 100644
+--- a/packages/cli/src/config/settingsSchema.ts
++++ b/packages/cli/src/config/settingsSchema.ts
+@@ -777,6 +777,16 @@ const SETTINGS_SCHEMA = {
+           'Lower the reverse-audit loop\'s round cap for every high-effort review. The cap is normally chosen from the diff topology (10 small / 5 chunked; a huge diff is 3 when the run has a review deadline and 5 when it does not, because that reduction answers a CI ceiling and applies only where one exists) because a round costs one agent on a small diff and ~90 minutes on a huge one; this setting can only LOWER whichever tier applies, never raise it — a value that is not a whole number above zero, or that is out of range (below 3, or above the plan\'s own tier), is ignored and leaves the tier alone — JSON Schema has no integer type here, so a fraction validates in an editor and is then discarded at runtime. Understand what it buys before enabling: the loop ends on two consecutive dry rounds, so cutting the cap does not make reviews converge sooner, it makes them stop before converging more often — and every such stop is disclosed as unreviewed scope and caps the verdict at Comment, so a cheaper review is also one that can no longer Approve. To spend LESS on reviews generally, prefer "effort". Nothing here makes a loop run LONGER: a review deadline bounds a run rather than extending it, and on a huge diff setting one lowers the cap from 5 to 3 rather than raising it. Only honored from User, System, and SystemDefaults settings scopes; values set in Workspace settings are ignored, so a repository cannot set review policy for its reviewers.',
+         showInDialog: true,
+       },
++      approachRounds: {
++        type: 'number',
++        label: 'Approach-signal round threshold: review',
++        category: 'General',
++        requiresRestart: false,
++        default: 0,
++        description:
++          'How many rounds a pull request must reach before the review may add one advisory paragraph saying the shape of the change, rather than the current patch, looks like the open question. It appears only when the diff has also grown several times over since the review first measured it, and never on an Approve. It is disclosure only: it adds no finding, changes no verdict, and blocks nothing — it exists because every finding is anchored to a line in the current diff, so the review can report where an approach leaks but never that a different approach would retire all of the leaks at once. Leave at 0 to keep the built-in threshold of 5 rounds; raise it to make the paragraph appear later, and set it very high to silence it. A value that is not a whole number above zero is ignored. Only honored from User, System, and SystemDefaults settings scopes; values set in Workspace settings are ignored, so a repository cannot set review policy for its reviewers.',
++        showInDialog: true,
++      },
+     },
+   },
+   output: {
+diff --git a/packages/core/src/skills/bundled/review/DESIGN.md b/packages/core/src/skills/bundled/review/DESIGN.md
+index 67e3cde6614..aeee52877b6 100644
+--- a/packages/core/src/skills/bundled/review/DESIGN.md
++++ b/packages/core/src/skills/bundled/review/DESIGN.md
+@@ -832,6 +832,14 @@ With Fork + prompt cache sharing:
+ 
+ The blocks below are incident narratives moved out of SKILL.md (which is loaded into the orchestrator's context on every run). Each one is the story behind a rule that still lives there; the rule references it as `(measured; DESIGN.md — <title>)`.
+ 
++### The approach that no finding could name
++
++One change to `extractAndStripMeta` took three attempts across two PRs. #9097 (3 rounds, 18 findings) added a timeout to the vm call; #9136 (6 rounds, 56 findings) moved the walk inside the vm and ended up spawning a child process per call, growing 228 → 920 source diff lines. #9325 landed it in one commit by deleting the evaluation entirely and parsing the literal instead.
++
++All 74 findings were individually correct. Each round found a real hole the previous patch did not cover. But every finding is anchored to a `file:line` in the current diff — so the review could say where the approach leaked, never that a different approach would retire all of the leaks at once. The fix that worked took all 74 findings with it.
++
++`did not converge within the reverse-audit round cap` was emitted four times across the two PRs, filed as a coverage gap rather than as a conclusion about the change. The approach signal exists to state that conclusion to a human instead. See `docs/design/2026-08-17-review-approach-signal.md`.
++
+ ### The todo-call latency
+ 
+ Measured on real small-PR runs from the harness's own records, the todo calls in one review cost **377 seconds**, in another **179** — minutes spent restating steps that were already written down.
+diff --git a/packages/core/src/skills/bundled/review/SKILL.md b/packages/core/src/skills/bundled/review/SKILL.md
+index fe65d4c4ec5..9972c4c1ef5 100644
+--- a/packages/core/src/skills/bundled/review/SKILL.md
++++ b/packages/core/src/skills/bundled/review/SKILL.md
+@@ -824,6 +824,8 @@ Render the rulings as a short table at the top of the Findings section — id, o
+ 
+ The posture binds the posting path; low and medium never post, so for them it changes only the terminal grouping. It is also why a braked or human-fatigued PR can converge: a clean late round with only deferrals composes an APPROVE that ends the loop, with the deferred list on the record for a follow-up.
+ 
++**The posture brakes posting; it cannot question the approach.** Every finding is anchored to a `file:line` in the current diff, so a review can report where an approach leaks but never that a different approach would retire all of the leaks at once — one change took three attempts and 74 individually-correct findings before the mechanism itself was replaced and every finding went away with it (measured; DESIGN.md — The approach that no finding could name). `compose-review` therefore adds one advisory paragraph, on a non-Approve round past the round threshold whose diff has also grown several times over since the review first measured it, addressed to the human rather than to the next round's work list. It is deterministic and CLI-computed: you neither write it nor act on it.
++
+ ### Before an Approve or a zero-Critical verdict: re-check the open Criticals
+ 
+ A `C=0` outcome — Approve, or a Comment with no Critical — is a claim that nothing blocks the merge. It is not the default you fall back to when your own agents surfaced nothing. **If Step 1 set the context-unavailable state** (`pr-context` failed — lightweight or same-repo), there is no context file to read: skip the walk below, record every existing Critical as `cannot tell` by construction, and carry that into the verdict — which the Step 7 invariant already caps at `COMMENT`. Otherwise, take **each live blocker already on the PR — from every comment-bearing section of the context file: "Open inline comments", "Blockers to re-check", "Review summaries", and "Already discussed" (both its inline threads and its issue-level comments)** — and check it against the code as it stands at the reviewed commit. Select **semantically, not by the literal marker**: a `**[Critical]**` prefix qualifies, but so does any body that asserts a blocking defect in other words — a "Critical findings could not be anchored" preamble, an explicit must-fix claim (legacy body-only blockers were emitted markerless, and one such review is exactly what a marker filter once discarded). When unsure whether a body asserts a blocker, re-check it — the cost is one ruling; the alternative is certifying a merge past it. ("Already discussed" stays in scope even though `pr-context` now promotes blocker-bearing bodies out of it: `carriesBlockerSignal` is a **fail-safe floor, not a ceiling** — it recognises the phrasings we have seen, not every phrasing that exists, and a blocker worded around all of them still settles there. That section's "do NOT re-report" header governs duplicate-_reporting_ by the finder agents; it does not exempt a body from this re-check. Read it with the same eyes you bring to the promoted section.) Review-level bodies matter because an unmappable or 422-relocated blocker lives **only** there — and the context file now carries them **in full**: `pr-context` renders every meaningful review body whole under "Review summaries" (no more 240-character snippets), and pulls every blocker-bearing body — replied inline thread or issue comment, marker or no marker — into the "Blockers to re-check" section, rendered in full, because a reply alone never settles a blocker. So the re-check usually needs no separate fetch: read those sections under the file's untrusted-data preamble, paging with `offset`/`limit` until `isTruncated` is false. **For the status half of each INLINE-thread ruling — is the anchor outdated, did the anchored file change since the blocker was filed, which commits touched it — read Step 1's `comment-status` report instead of fetching per-comment metadata**: its `code.touchedBy` list is the candidate "fixed by" commits to read, and `changedSinceComment: false` (with no head drift) tells you the anchored file is untouched since the blocker — so a claimed fix, if any, must live in some OTHER file, and the mechanism-read below is still owed either way. Two scope limits, both deliberate: the report exists only **when Step 1 wrote it** (worktree mode, fetch succeeded — on an Aone target it runs a1-backed, with the thread-shape notes in `references/aone.md`), and it indexes **inline threads only** on GitHub — an issue-level or review-level blocker (the #6486 shape) has no entry there and keeps the context-file walk as its sole source; an Aone index also carries pathless MR-level threads (`listMrComments` returns every MR comment) — another account's pathless blocker keeps its entry (path `""`, file-level anchor, code facts `unknown`, never outdated) and is ruled from its body and the code exactly like the #6486 shape, never as an inline thread whose anchored code vanished. A run with no report because one was never written (lightweight mode) has no per-thread status routing at all and no hand-derived substitute: each blocker is ruled from the code at the reviewed commit (the diff itself, in lightweight mode), and a ruling that would rest on facts only the report could supply is `cannot tell`, never a guess. A run where the command RAN and FAILED keeps its Step 1 fallback — statuses become "re-derive if needed", exactly as the comment-status section above prescribes. The report never substitutes for reading the code: it routes the read, it does not rule. Review summaries and blocker bodies are rendered in full; the Open and Already-discussed sections use one-line snippets, and **every snippet the renderer cut carries its own `_(truncated — run …)_` note naming the exact, already-filled-in `review comment-body` command for the rest** — a candidate blocker whose snippet was cut is ruled on only after running that command; ruling on the visible prefix alone is the fail-closed violation. Run it **with `--out` writing to a file, never bare into the terminal** (Shell returns only an approximately 4 000-character model preview for output beyond its 30 000-character persistence trigger, which would re-truncate the very body being completed): add `--out .qwen/tmp/qwen-review-{target}-body-<id>.md` to the command the note names, then `read_file` that file, paging until `isTruncated` is false, before ruling. **Fail closed either way:** a body you could not read whole — the capped tail unfetched, or the single-object fetch failing (auth, rate limit, network) — is `cannot tell`, not "no Critical in it": it goes to compose-review's `cannotTellCriticals` input, which serializes it and caps the event at `COMMENT`; a blocker you could not read is never approved past. A reply alone does not retire a blocker — "I disagree" or "wontfix" is a reply, which is exactly why `pr-context` quarantines blocker-bearing threads in their own section instead of letting them settle into "Already discussed". Only the code decides: a blocker counts as closed exactly when the re-check below lands on "fixed by this diff", never because the thread has an answer. Record one verdict per blocker:
+diff --git a/packages/vscode-ide-companion/schemas/settings.schema.json b/packages/vscode-ide-companion/schemas/settings.schema.json
+index eee2c06280e..d38b75b609f 100644
+--- a/packages/vscode-ide-companion/schemas/settings.schema.json
++++ b/packages/vscode-ide-companion/schemas/settings.schema.json
+@@ -259,6 +259,11 @@
+           "description": "Lower the reverse-audit loop's round cap for every high-effort review. The cap is normally chosen from the diff topology (10 small / 5 chunked; a huge diff is 3 when the run has a review deadline and 5 when it does not, because that reduction answers a CI ceiling and applies only where one exists) because a round costs one agent on a small diff and ~90 minutes on a huge one; this setting can only LOWER whichever tier applies, never raise it — a value that is not a whole number above zero, or that is out of range (below 3, or above the plan's own tier), is ignored and leaves the tier alone — JSON Schema has no integer type here, so a fraction validates in an editor and is then discarded at runtime. Understand what it buys before enabling: the loop ends on two consecutive dry rounds, so cutting the cap does not make reviews converge sooner, it makes them stop before converging more often — and every such stop is disclosed as unreviewed scope and caps the verdict at Comment, so a cheaper review is also one that can no longer Approve. To spend LESS on reviews generally, prefer \"effort\". Nothing here makes a loop run LONGER: a review deadline bounds a run rather than extending it, and on a huge diff setting one lowers the cap from 5 to 3 rather than raising it. Only honored from User, System, and SystemDefaults settings scopes; values set in Workspace settings are ignored, so a repository cannot set review policy for its reviewers.",
+           "type": "number",
+           "default": 0
++        },
++        "approachRounds": {
++          "description": "How many rounds a pull request must reach before the review may add one advisory paragraph saying the shape of the change, rather than the current patch, looks like the open question. It appears only when the diff has also grown several times over since the review first measured it, and never on an Approve. It is disclosure only: it adds no finding, changes no verdict, and blocks nothing — it exists because every finding is anchored to a line in the current diff, so the review can report where an approach leaks but never that a different approach would retire all of the leaks at once. Leave at 0 to keep the built-in threshold of 5 rounds; raise it to make the paragraph appear later, and set it very high to silence it. A value that is not a whole number above zero is ignored. Only honored from User, System, and SystemDefaults settings scopes; values set in Workspace settings are ignored, so a repository cannot set review policy for its reviewers.",
++          "type": "number",
++          "default": 0
+         }
+       }
+     },

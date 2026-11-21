@@ -1,0 +1,361 @@
+diff --git a/packages/desktop/src/main/background-cli.ts b/packages/desktop/src/main/background-cli.ts
+index ec37429a4b79..485395206e49 100644
+--- a/packages/desktop/src/main/background-cli.ts
++++ b/packages/desktop/src/main/background-cli.ts
+@@ -37,6 +37,7 @@ export async function startBackgroundCli(logger: Logger) {
+     url: service.url,
+     username: service.auth.username,
+     password: service.auth.password,
++    version,
+   }
+ }
+ 
+diff --git a/packages/desktop/src/main/index.ts b/packages/desktop/src/main/index.ts
+index 3dd31571268c..2b4abe259145 100644
+--- a/packages/desktop/src/main/index.ts
++++ b/packages/desktop/src/main/index.ts
+@@ -134,10 +134,10 @@ const main = Effect.gen(function* () {
+   initCrashReporter()
+ 
+   const wslServers = createWslServersController(
+-    app.getVersion(),
+-    async (distro) => {
++    CHANNEL === "beta" ? null : app.getVersion(),
++    async (distro, version, channel) => {
+       logger.log("spawning wsl sidecar", { distro })
+-      return spawnWslSidecar(distro, {
++      return spawnWslSidecar(distro, version, channel, {
+         onLine: (line) => logger.log("wsl sidecar", { distro, stream: line.stream, text: line.text }),
+       })
+     },
+@@ -146,6 +146,7 @@ const main = Effect.gen(function* () {
+         log: (message, meta) => logger.log(message, meta),
+         error: (message, meta) => logger.error(message, meta),
+       },
++      channel: CHANNEL,
+     },
+   )
+   const stopSidecars = async () => wslServers.stopAll()
+@@ -311,6 +312,7 @@ const main = Effect.gen(function* () {
+ 
+     logger.log("starting v2 background service")
+     const sidecar = yield* Effect.promise(() => startBackgroundCli(logger))
++    if (CHANNEL === "beta") wslServers.setCliVersion(sidecar.version)
+     yield* Deferred.succeed(serverReady, {
+       url: sidecar.url,
+       username: sidecar.username,
+diff --git a/packages/desktop/src/main/wsl/runtime.ts b/packages/desktop/src/main/wsl/runtime.ts
+index ffbc91fa3089..dcc626f46213 100644
+--- a/packages/desktop/src/main/wsl/runtime.ts
++++ b/packages/desktop/src/main/wsl/runtime.ts
+@@ -264,18 +264,22 @@ export async function installWslDistro(name: string, opts?: RunWslOptions) {
+   )
+ }
+ 
+-export async function installWslOpencode(version: string, distro: string, opts?: RunWslOptions) {
++export async function installWslOpencode(version: string, channel: string, distro: string, opts?: RunWslOptions) {
+   return runInteractiveCommand(
+     resolveSystem32Command("wsl.exe"),
+-    wslArgs(
+-      ["bash", "-lc", `curl -fsSL https://opencode.ai/install | bash -s -- --version ${shellEscape(version)}`],
+-      distro,
+-    ),
++    wslArgs(["bash", "-lc", wslOpencodeInstallCommand(version, channel)], distro),
+     withTimeout(opts, DEFAULT_WSL_INSTALL_TIMEOUT_MS),
+     DEFAULT_WSL_INSTALL_TIMEOUT_MS,
+   )
+ }
+ 
++export function wslOpencodeInstallCommand(version: string, channel: string) {
++  if (channel === "beta") {
++    return `npm install --global --no-audit --no-fund ${shellEscape(`@opencode-ai/cli@${version}`)}`
++  }
++  return `curl -fsSL https://opencode.ai/install | bash -s -- --version ${shellEscape(version)}`
++}
++
+ export async function probeWslDistro(name: string, opts?: RunWslOptions): Promise<WslDistroProbe> {
+   const executable = await runWslInDistro(["/bin/true"], name, opts).catch((error) => ({
+     code: 1,
+@@ -307,11 +311,22 @@ export async function probeWslDistro(name: string, opts?: RunWslOptions): Promis
+   }
+ }
+ 
+-export async function resolveWslOpencode(distro: string, opts?: RunWslOptions) {
++export async function resolveWslOpencode(distro: string, channel: string, opts?: RunWslOptions) {
++  if (channel !== "beta") {
++    return firstLine(
++      (
++        await runWslSh(
++          'if [ -x "$HOME/.opencode/bin/opencode" ]; then printf "%s\\n" "$HOME/.opencode/bin/opencode"; fi',
++          distro,
++          opts,
++        )
++      ).stdout,
++    )
++  }
+   return firstLine(
+     (
+       await runWslSh(
+-        'if [ -x "$HOME/.opencode/bin/opencode" ]; then printf "%s\\n" "$HOME/.opencode/bin/opencode"; fi',
++        'PATH=$(awk -v RS=: -v ORS=: \'$0 !~ /^\\/mnt\\//\' <<<"$PATH" | sed "s/:$//"); export PATH; command -v opencode2 || true',
+         distro,
+         opts,
+       )
+@@ -321,7 +336,13 @@ export async function resolveWslOpencode(distro: string, opts?: RunWslOptions) {
+ 
+ export async function readWslCommandVersion(command: string, distro: string, opts?: RunWslOptions) {
+   const result = await runWslSh(`${shellEscape(command)} --version 2>/dev/null || true`, distro, opts)
+-  return firstLine(result.stdout)
++  return parseWslOpencodeVersion(firstLine(result.stdout))
++}
++
++export function parseWslOpencodeVersion(output: string | null) {
++  if (!output) return null
++  const marker = output.lastIndexOf(" v")
++  return marker === -1 ? output : output.slice(marker + 2)
+ }
+ 
+ export function openWslTerminal(distro?: string | null) {
+diff --git a/packages/desktop/src/main/wsl/servers.test.ts b/packages/desktop/src/main/wsl/servers.test.ts
+index 35b688d3c868..e72fb919fc28 100644
+--- a/packages/desktop/src/main/wsl/servers.test.ts
++++ b/packages/desktop/src/main/wsl/servers.test.ts
+@@ -13,6 +13,10 @@ import {
+   wslServerIdsToStartOnInitialize,
+ } from "./startup"
+ import { createWslServersController, type WslServerConfig } from "./servers"
++import {
++  parseWslOpencodeVersion,
++  wslOpencodeInstallCommand,
++} from "./runtime"
+ 
+ let persistedServers: WslServerConfig[] = []
+ let releaseOpencodeResolve: (() => void) | undefined
+@@ -33,6 +37,51 @@ test("rejects an update that did not install the desktop version", () => {
+   )
+ })
+ 
++test("installs the exact V2 CLI package through npm", () => {
++  const version = "0.0.0-next-17181"
++  const command = wslOpencodeInstallCommand(version, "beta")
++
++  expect(command).toBe("npm install --global --no-audit --no-fund '@opencode-ai/cli@0.0.0-next-17181'")
++  expect(command).not.toContain("@next")
++  expect(command).not.toContain("https://opencode.ai/install")
++})
++
++test("keeps the curl installer outside the beta channel", () => {
++  expect(wslOpencodeInstallCommand("1.18.16", "prod")).toBe(
++    "curl -fsSL https://opencode.ai/install | bash -s -- --version '1.18.16'",
++  )
++  expect(wslOpencodeInstallCommand("1.18.16", "dev")).toBe(
++    "curl -fsSL https://opencode.ai/install | bash -s -- --version '1.18.16'",
++  )
++})
++
++test("reads the version reported by the V2 binary", () => {
++  expect(parseWslOpencodeVersion("opencode2 v0.0.0-next-17181")).toBe("0.0.0-next-17181")
++  expect(parseWslOpencodeVersion("1.18.16")).toBe("1.18.16")
++})
++
++test("installs the bundled CLI version instead of the Desktop release version", async () => {
++  persistedServers = []
++  let requested: { version: string; channel: string; distro: string } | undefined
++  const controller = createWslServersController(null, async () => new Promise<never>(() => undefined), {
++    channel: "beta",
++    readServers: () => persistedServers,
++    writeServers: () => undefined,
++    resolveOpencode: async () => "/home/me/.npm/bin/opencode2",
++    readCommandVersion: async () => "0.0.0-next-17181",
++    installOpencode: async (version, channel, distro) => {
++      requested = { version, channel, distro }
++      return { code: 0, signal: null, stdout: "", stderr: "" }
++    },
++  })
++  controller.setCliVersion("0.0.0-next-17181")
++
++  await controller.installOpencode("Debian")
++
++  expect(requested).toEqual({ version: "0.0.0-next-17181", channel: "beta", distro: "Debian" })
++  expect(controller.getState().opencodeChecks.Debian?.matchesDesktop).toBe(true)
++})
++
+ test("restarts an existing distro server after updating OpenCode", () => {
+   expect(
+     wslServerIdToRestart(
+@@ -55,7 +104,7 @@ test("clears cached distro probes when removing a WSL server", () => {
+       {
+         Debian: {
+           distro: "Debian",
+-          resolvedPath: "/home/luke/.opencode/bin/opencode",
++          resolvedPath: "/home/luke/.local/share/opencode/desktop/beta/1.16.2/opencode2",
+           version: "1.16.2",
+           expectedVersion: "1.16.2",
+           matchesDesktop: true,
+@@ -164,7 +213,7 @@ test("probes addable distros in parallel before checking OpenCode", async () =>
+     },
+     resolveOpencode: async (distro) => {
+       opencode.push(distro)
+-      return "/home/me/.opencode/bin/opencode"
++      return "/home/me/.local/share/opencode/desktop/dev/1.16.2/opencode2"
+     },
+   })
+ 
+@@ -195,7 +244,7 @@ test("does not check OpenCode in addable distros that cannot execute commands",
+     }),
+     resolveOpencode: async (distro) => {
+       opencode.push(distro)
+-      return "/home/me/.opencode/bin/opencode"
++      return "/home/me/.local/share/opencode/desktop/dev/1.16.2/opencode2"
+     },
+   })
+ 
+@@ -225,7 +274,7 @@ function testControllerOptions() {
+       await new Promise<void>((resolve) => {
+         releaseOpencodeResolve = resolve
+       })
+-      return "/home/me/.opencode/bin/opencode"
++      return "/home/me/.local/share/opencode/desktop/dev/1.16.2/opencode2"
+     },
+   }
+ }
+diff --git a/packages/desktop/src/main/wsl/servers.ts b/packages/desktop/src/main/wsl/servers.ts
+index 749f51431f49..f1dc22d1b140 100644
+--- a/packages/desktop/src/main/wsl/servers.ts
++++ b/packages/desktop/src/main/wsl/servers.ts
+@@ -37,7 +37,7 @@ type RunningSidecar = {
+   password: string
+ }
+ 
+-type SpawnSidecar = (distro: string) => Promise<RunningSidecar>
++type SpawnSidecar = (distro: string, version: string, channel: string) => Promise<RunningSidecar>
+ 
+ type ControllerLogger = {
+   log: (message: string, meta?: unknown) => void
+@@ -51,6 +51,8 @@ type WslServersControllerOptions = {
+   probeDistro?: typeof probeWslDistro
+   resolveOpencode?: typeof resolveWslOpencode
+   readCommandVersion?: typeof readWslCommandVersion
++  installOpencode?: typeof installWslOpencode
++  channel?: string
+ }
+ 
+ export type WslServersController = ReturnType<typeof createWslServersController>
+@@ -60,7 +62,7 @@ export function wslServerIdForDistro(distro: string) {
+ }
+ 
+ export function createWslServersController(
+-  appVersion: string,
++  initialCliVersion: string | null,
+   spawnSidecar: SpawnSidecar,
+   options?: WslServersControllerOptions,
+ ) {
+@@ -69,10 +71,17 @@ export function createWslServersController(
+   const sidecars = new Map<string, RunningSidecar>()
+   const startAttempts = new Map<string, number>()
+   let jobAbort: AbortController | undefined
++  let cliVersion = initialCliVersion
+   const logger = options?.logger
+   const readServers = options?.readServers ?? readPersistedServers
+   const writeServers = options?.writeServers ?? writePersistedServers
+   const probeDistro = options?.probeDistro ?? probeWslDistro
++  const channel = options?.channel ?? "dev"
++
++  const expectedVersion = () => {
++    if (cliVersion) return cliVersion
++    throw new Error(nativeT("desktop.wsl.error.opencodeCannotRun"))
++  }
+ 
+   const emit = () => {
+     for (const listener of listeners) listener({ type: "state", state })
+@@ -132,11 +141,12 @@ export function createWslServersController(
+   }
+ 
+   const checkOpencode = async (distro: string, opts?: { signal?: AbortSignal }) => {
+-    const resolved = await (options?.resolveOpencode ?? resolveWslOpencode)(distro, opts)
+-    const version = resolved
++    const version = expectedVersion()
++    const resolved = await (options?.resolveOpencode ?? resolveWslOpencode)(distro, channel, opts)
++    const installed = resolved
+       ? await (options?.readCommandVersion ?? readWslCommandVersion)(resolved, distro, opts)
+       : null
+-    return opencodeCheck(distro, resolved, version, appVersion)
++    return opencodeCheck(distro, resolved, installed, version)
+   }
+ 
+   const refreshOpencodeCheck = async (distro: string, opts?: { signal?: AbortSignal }) => {
+@@ -229,7 +239,7 @@ export function createWslServersController(
+     setRuntime(id, { kind: "starting" })
+     logger?.log("wsl sidecar starting", { id, distro: item.config.distro })
+     try {
+-      const sidecar = await spawnSidecar(item.config.distro)
++      const sidecar = await spawnSidecar(item.config.distro, expectedVersion(), channel)
+       if (!isCurrentStartAttempt(id, attempt)) {
+         try {
+           sidecar.listener.stop()
+@@ -294,6 +304,10 @@ export function createWslServersController(
+   }
+ 
+   return {
++    setCliVersion(version: string) {
++      cliVersion = version
++    },
++
+     getState() {
+       return state
+     },
+@@ -362,12 +376,15 @@ export function createWslServersController(
+ 
+     async installOpencode(name: string) {
+       await runJob({ kind: "install-opencode", distro: name, startedAt: Date.now() }, async (abort) => {
+-        const result = await installWslOpencode(appVersion, name, { signal: abort.signal })
++        const version = expectedVersion()
++        const result = await (options?.installOpencode ?? installWslOpencode)(version, channel, name, {
++          signal: abort.signal,
++        })
+         if (result.code !== 0) {
+           throw new Error(summarize(result.stderr || result.stdout) || nativeT("desktop.wsl.error.installOpencode"))
+         }
+         await refreshOpencodeCheck(name, { signal: abort.signal })
+-        expectOpencodeVersion(state.opencodeChecks[name]?.version ?? null, appVersion, name)
++        expectOpencodeVersion(state.opencodeChecks[name]?.version ?? null, version, name)
+         const id = wslServerIdToRestart(state.servers, name)
+         if (id) await startServer(id)
+       })
+diff --git a/packages/desktop/src/main/wsl/sidecar.ts b/packages/desktop/src/main/wsl/sidecar.ts
+index bd052dd84648..93b295a2a0dd 100644
+--- a/packages/desktop/src/main/wsl/sidecar.ts
++++ b/packages/desktop/src/main/wsl/sidecar.ts
+@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
+ import { createServer } from "node:net"
+ import { app } from "electron"
+ import { checkHealth } from "../server"
+-import { type WslCommandLine, resolveWslOpencode, shellEscape, wslArgs } from "./runtime"
++import { type WslCommandLine, readWslCommandVersion, resolveWslOpencode, shellEscape, wslArgs } from "./runtime"
+ import { pollWslHealth } from "./startup"
+ import { nativeT } from "../native-translations"
+ 
+@@ -16,10 +16,22 @@ export type WslSidecar = {
+ 
+ export async function spawnWslSidecar(
+   distro: string,
++  version: string,
++  channel: string,
+   opts: { onLine?: (line: WslCommandLine) => void; healthTimeoutMs?: number } = {},
+ ): Promise<WslSidecar> {
+-  const opencode = await resolveWslOpencode(distro)
++  const opencode = await resolveWslOpencode(distro, channel)
+   if (!opencode) throw new Error(nativeT("desktop.wsl.error.opencodeNotInstalled", { distro }))
++  const installed = await readWslCommandVersion(opencode, distro)
++  if (installed !== version) {
++    throw new Error(
++      nativeT("desktop.wsl.error.updateVersion", {
++        distro,
++        installed: installed ?? nativeT("desktop.wsl.error.noVersion"),
++        expected: version,
++      }),
++    )
++  }
+ 
+   const port = await allocatePort()
+   const password = randomUUID()

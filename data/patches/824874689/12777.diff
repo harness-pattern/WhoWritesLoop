@@ -1,0 +1,168 @@
+diff --git a/apps/vscode/src/core/controller/state/getStateToPostToWebview.ts b/apps/vscode/src/core/controller/state/getStateToPostToWebview.ts
+index 58c030b5b77..637de367ec6 100644
+--- a/apps/vscode/src/core/controller/state/getStateToPostToWebview.ts
++++ b/apps/vscode/src/core/controller/state/getStateToPostToWebview.ts
+@@ -12,6 +12,7 @@ import { ExtensionRegistryInfo } from "@/registry"
+ import { BannerService } from "@/services/banner/BannerService"
+ import { featureFlagsService } from "@/services/feature-flags"
+ import { getDistinctId } from "@/services/logging/distinctId"
++import { getExtensionVariant } from "@/services/telemetry/rollout-metadata"
+ import { getLatestAnnouncementId } from "@/utils/announcements"
+ import { getClineOnboardingModels } from "../models/getClineOnboardingModels"
+ 
+@@ -109,6 +110,7 @@ export async function getStateToPostToWebview(controller: {
+ 
+ 	return {
+ 		version,
++		extensionVariant: getExtensionVariant(),
+ 		apiConfiguration,
+ 		currentTaskItem,
+ 		clineMessages,
+diff --git a/apps/vscode/src/services/telemetry/rollout-metadata.test.ts b/apps/vscode/src/services/telemetry/rollout-metadata.test.ts
+index c47cedaf213..1cde2f3c677 100644
+--- a/apps/vscode/src/services/telemetry/rollout-metadata.test.ts
++++ b/apps/vscode/src/services/telemetry/rollout-metadata.test.ts
+@@ -1,5 +1,10 @@
+ import { afterEach, describe, expect, it } from "bun:test"
+-import { getRolloutErrorProperties, getRolloutTelemetryMetadata, ROLLOUT_ERROR_MESSAGE_LIMIT } from "./rollout-metadata"
++import {
++	getExtensionVariant,
++	getRolloutErrorProperties,
++	getRolloutTelemetryMetadata,
++	ROLLOUT_ERROR_MESSAGE_LIMIT,
++} from "./rollout-metadata"
+ 
+ const originalVariant = process.env.CLINE_ROLLOUT_VARIANT
+ 
+@@ -24,6 +29,20 @@ describe("rollout telemetry metadata", () => {
+ 		expect(getRolloutTelemetryMetadata()).toEqual({})
+ 	})
+ 
++	it("exposes the variant for rollout builds only", () => {
++		process.env.CLINE_ROLLOUT_VARIANT = "legacy"
++		expect(getExtensionVariant()).toBe("legacy")
++
++		process.env.CLINE_ROLLOUT_VARIANT = "next"
++		expect(getExtensionVariant()).toBe("next")
++
++		delete process.env.CLINE_ROLLOUT_VARIANT
++		expect(getExtensionVariant()).toBeUndefined()
++
++		process.env.CLINE_ROLLOUT_VARIANT = "invalid"
++		expect(getExtensionVariant()).toBeUndefined()
++	})
++
+ 	it("bounds fallback errors without including stacks", () => {
+ 		const error = new TypeError("x".repeat(ROLLOUT_ERROR_MESSAGE_LIMIT + 20))
+ 		const properties = getRolloutErrorProperties(error)
+diff --git a/apps/vscode/src/services/telemetry/rollout-metadata.ts b/apps/vscode/src/services/telemetry/rollout-metadata.ts
+index a304d04c2e8..27939c8acd0 100644
+--- a/apps/vscode/src/services/telemetry/rollout-metadata.ts
++++ b/apps/vscode/src/services/telemetry/rollout-metadata.ts
+@@ -14,15 +14,19 @@ export interface RolloutBundleActivation {
+ export const ROLLOUT_BUNDLE_ACTIVATED_EVENT = "extension.rollout.bundle_activated"
+ export const ROLLOUT_ERROR_MESSAGE_LIMIT = 500
+ 
+-/** Return rollout metadata only for bundles built by the combined rollout workflow. */
+-export function getRolloutTelemetryMetadata(): Partial<RolloutTelemetryMetadata> {
++/**
++ * The rollout variant this bundle was built as, or undefined for ordinary builds.
++ * CLINE_ROLLOUT_VARIANT is inlined at build time by the combined rollout workflow only.
++ */
++export function getExtensionVariant(): ExtensionVariant | undefined {
+ 	const variant = process.env.CLINE_ROLLOUT_VARIANT
++	return variant === "legacy" || variant === "next" ? variant : undefined
++}
+ 
+-	if (variant !== "legacy" && variant !== "next") {
+-		return {}
+-	}
+-
+-	return { extension_variant: variant }
++/** Return rollout metadata only for bundles built by the combined rollout workflow. */
++export function getRolloutTelemetryMetadata(): Partial<RolloutTelemetryMetadata> {
++	const variant = getExtensionVariant()
++	return variant ? { extension_variant: variant } : {}
+ }
+ 
+ export function getRolloutErrorProperties(error: unknown): {
+diff --git a/apps/vscode/src/shared/ExtensionMessage.ts b/apps/vscode/src/shared/ExtensionMessage.ts
+index 247200887d2..904e20503af 100644
+--- a/apps/vscode/src/shared/ExtensionMessage.ts
++++ b/apps/vscode/src/shared/ExtensionMessage.ts
+@@ -100,6 +100,11 @@ export interface ExtensionState {
+ 	lastCompletedCommandTs?: number
+ 	userInfo?: UserInfo
+ 	version: string
++	/**
++	 * Which rollout bundle this build is ("legacy" or "next"). Only present for
++	 * bundles built by the combined rollout workflow; undefined for ordinary builds.
++	 */
++	extensionVariant?: "legacy" | "next"
+ 	distinctId: string
+ 	globalClineRulesToggles: ClineRulesToggles
+ 	localClineRulesToggles: ClineRulesToggles
+diff --git a/apps/vscode/webview-ui/src/components/settings/SettingsView.tsx b/apps/vscode/webview-ui/src/components/settings/SettingsView.tsx
+index a292f3d3c0a..7355079ecba 100644
+--- a/apps/vscode/webview-ui/src/components/settings/SettingsView.tsx
++++ b/apps/vscode/webview-ui/src/components/settings/SettingsView.tsx
+@@ -137,7 +137,7 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
+ 		[],
+ 	) // Empty deps - these imports never change
+ 
+-	const { version, environment, settingsInitialModelTab } = useExtensionState()
++	const { version, extensionVariant, environment, settingsInitialModelTab } = useExtensionState()
+ 	const { activeOrganization, clineUser } = useClineAuth()
+ 
+ 	const [activeTab, setActiveTab] = useState<string>(targetSection || SETTINGS_TABS[0].id)
+@@ -240,12 +240,13 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
+ 			props.onResetState = handleResetState
+ 		} else if (activeTab === "about") {
+ 			props.version = version
++			props.extensionVariant = extensionVariant
+ 		} else if (activeTab === "api-config") {
+ 			props.initialModelTab = settingsInitialModelTab
+ 		}
+ 
+ 		return <Component {...props} />
+-	}, [activeTab, handleResetState, settingsInitialModelTab, version, TAB_CONTENT_MAP])
++	}, [activeTab, handleResetState, settingsInitialModelTab, version, extensionVariant, TAB_CONTENT_MAP])
+ 
+ 	return (
+ 		<Tab>
+diff --git a/apps/vscode/webview-ui/src/components/settings/sections/AboutSection.tsx b/apps/vscode/webview-ui/src/components/settings/sections/AboutSection.tsx
+index 6e84d53ea04..19783b69349 100644
+--- a/apps/vscode/webview-ui/src/components/settings/sections/AboutSection.tsx
++++ b/apps/vscode/webview-ui/src/components/settings/sections/AboutSection.tsx
+@@ -3,15 +3,29 @@ import Section from "../Section"
+ 
+ interface AboutSectionProps {
+ 	version: string
++	extensionVariant?: "legacy" | "next"
+ 	renderSectionHeader: (tabId: string) => JSX.Element | null
+ }
+-const AboutSection = ({ version, renderSectionHeader }: AboutSectionProps) => {
++
++const VARIANT_LABELS: Record<"legacy" | "next", string> = {
++	legacy: "Legacy",
++	next: "Next",
++}
++
++const AboutSection = ({ version, extensionVariant, renderSectionHeader }: AboutSectionProps) => {
+ 	return (
+ 		<div>
+ 			{renderSectionHeader("about")}
+ 			<Section>
+ 				<div className="flex px-4 flex-col gap-2">
+-					<h2 className="text-lg font-semibold">Cline v{version}</h2>
++					<h2 className="text-lg font-semibold">
++						Cline v{version}
++						{extensionVariant && (
++							<span className="ml-2 text-sm font-normal text-description">
++								({VARIANT_LABELS[extensionVariant]})
++							</span>
++						)}
++					</h2>
+ 					<p>
+ 						An AI assistant that can use your CLI and Editor. Cline can handle complex software development tasks
+ 						step-by-step with tools that let him create & edit files, explore large projects, use the browser, and

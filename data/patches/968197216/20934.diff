@@ -1,0 +1,256 @@
+diff --git a/packages/core/src/core/geminiChat.test.ts b/packages/core/src/core/geminiChat.test.ts
+index 770a594bdae..72f39893108 100644
+--- a/packages/core/src/core/geminiChat.test.ts
++++ b/packages/core/src/core/geminiChat.test.ts
+@@ -2081,10 +2081,12 @@ describe('GeminiChat', () => {
+ 
+       const newContents = chat.ensureActiveLoopHasThoughtSignatures(history);
+ 
+-      // Outside active loop - unchanged
+-      expect(newContents[1]?.parts?.[0]).not.toHaveProperty('thoughtSignature');
++      // Inside active loop (which now starts at index 0 because it's the first user text message)
++      expect(newContents[1]?.parts?.[0]?.thoughtSignature).toBe(
++        SYNTHETIC_THOUGHT_SIGNATURE,
++      );
+ 
+-      // Inside active loop, first model turn
++      // Inside active loop, first model turn after the second user text message
+       // First function call gets a signature
+       expect(newContents[3]?.parts?.[0]?.thoughtSignature).toBe(
+         SYNTHETIC_THOUGHT_SIGNATURE,
+diff --git a/packages/core/src/core/geminiChat.ts b/packages/core/src/core/geminiChat.ts
+index 789ea73ff19..88427e85d93 100644
+--- a/packages/core/src/core/geminiChat.ts
++++ b/packages/core/src/core/geminiChat.ts
+@@ -156,6 +156,9 @@ function extractCuratedHistory(comprehensiveHistory: Content[]): Content[] {
+   if (comprehensiveHistory === undefined || comprehensiveHistory.length === 0) {
+     return [];
+   }
++
++  const activeLoopStartIndex = findActiveLoopStartIndex(comprehensiveHistory);
++
+   const curatedHistory: Content[] = [];
+   const length = comprehensiveHistory.length;
+   let i = 0;
+@@ -167,10 +170,31 @@ function extractCuratedHistory(comprehensiveHistory: Content[]): Content[] {
+       const modelOutput: Content[] = [];
+       let isValid = true;
+       while (i < length && comprehensiveHistory[i].role === 'model') {
+-        modelOutput.push(comprehensiveHistory[i]);
+-        if (isValid && !isValidContent(comprehensiveHistory[i])) {
++        const content = comprehensiveHistory[i];
++        if (isValid && !isValidContent(content)) {
+           isValid = false;
+         }
++
++        const isBeforeActiveLoop =
++          activeLoopStartIndex === -1 || i < activeLoopStartIndex;
++
++        // Strip thought parts (always) and thoughtSignature (only if before active loop)
++        const curatedParts = (content.parts ?? [])
++          .filter((part) => !part.thought)
++          .map((part) => {
++            if (
++              isBeforeActiveLoop &&
++              part &&
++              typeof part === 'object' &&
++              'thoughtSignature' in part
++            ) {
++              const { thoughtSignature: _, ...newPart } = part;
++              return newPart;
++            }
++            return part;
++          });
++
++        modelOutput.push({ ...content, parts: curatedParts });
+         i++;
+       }
+       if (isValid) {
+@@ -723,8 +747,7 @@ export class GeminiChat {
+       if (newContent.parts) {
+         newContent.parts = newContent.parts.map((part) => {
+           if (part && typeof part === 'object' && 'thoughtSignature' in part) {
+-            const newPart = { ...part };
+-            delete (newPart as { thoughtSignature?: string }).thoughtSignature;
++            const { thoughtSignature: _, ...newPart } = part;
+             return newPart;
+           }
+           return part;
+@@ -738,16 +761,7 @@ export class GeminiChat {
+   // turn within the active loop must have a `thoughtSignature` property.
+   // If we do not do this, we will get back 400 errors from the API.
+   ensureActiveLoopHasThoughtSignatures(requestContents: Content[]): Content[] {
+-    // First, find the start of the active loop by finding the last user turn
+-    // with a text message, i.e. that is not a function response.
+-    let activeLoopStartIndex = -1;
+-    for (let i = requestContents.length - 1; i >= 0; i--) {
+-      const content = requestContents[i];
+-      if (content.role === 'user' && content.parts?.some((part) => part.text)) {
+-        activeLoopStartIndex = i;
+-        break;
+-      }
+-    }
++    const activeLoopStartIndex = findActiveLoopStartIndex(requestContents);
+ 
+     if (activeLoopStartIndex === -1) {
+       return requestContents;
+@@ -1032,3 +1046,17 @@ export function isSchemaDepthError(errorMessage: string): boolean {
+ export function isInvalidArgumentError(errorMessage: string): boolean {
+   return errorMessage.includes('Request contains an invalid argument');
+ }
++
++/**
++ * Finds the index of the start of the active loop in a chat history.
++ * The active loop starts at the FIRST user turn with a text message.
++ */
++function findActiveLoopStartIndex(history: Content[]): number {
++  for (let i = 0; i < history.length; i++) {
++    const content = history[i];
++    if (content.role === 'user' && content.parts?.some((part) => part.text)) {
++      return i;
++    }
++  }
++  return -1;
++}
+diff --git a/packages/core/src/core/turn.ts b/packages/core/src/core/turn.ts
+index 23b55afe297..c06124f7dd4 100644
+--- a/packages/core/src/core/turn.ts
++++ b/packages/core/src/core/turn.ts
+@@ -183,12 +183,16 @@ export enum CompressionStatus {
+ 
+   /** The compression was skipped due to previous failure, but content was truncated to budget */
+   CONTENT_TRUNCATED,
++
++  /** The compression failed (generic error) */
++  COMPRESSION_FAILED,
+ }
+ 
+ export interface ChatCompressionInfo {
+   originalTokenCount: number;
+   newTokenCount: number;
+   compressionStatus: CompressionStatus;
++  errorMessage?: string;
+ }
+ 
+ export type ServerGeminiChatCompressedEvent = {
+diff --git a/packages/core/src/services/chatCompressionService.ts b/packages/core/src/services/chatCompressionService.ts
+index 5303a1a82a8..7be93555d9c 100644
+--- a/packages/core/src/services/chatCompressionService.ts
++++ b/packages/core/src/services/chatCompressionService.ts
+@@ -337,8 +337,9 @@ export class ChatCompressionService {
+       originalHistoryToCompress.flatMap((c) => c.parts || []),
+     );
+ 
++    const SAFE_BUFFER_TOKENS = 20_000;
+     const historyForSummarizer =
+-      originalToCompressTokenCount < tokenLimit(model)
++      originalToCompressTokenCount < tokenLimit(model) - SAFE_BUFFER_TOKENS
+         ? originalHistoryToCompress
+         : historyToCompressTruncated;
+ 
+@@ -350,32 +351,42 @@ export class ChatCompressionService {
+       ? 'A previous <state_snapshot> exists in the history. You MUST integrate all still-relevant information from that snapshot into the new one, updating it with the more recent events. Do not lose established constraints or critical knowledge.'
+       : 'Generate a new <state_snapshot> based on the provided history.';
+ 
+-    const summaryResponse = await config.getBaseLlmClient().generateContent({
+-      modelConfigKey: { model: modelStringToModelConfigAlias(model) },
+-      contents: [
+-        ...historyForSummarizer,
+-        {
+-          role: 'user',
+-          parts: [
+-            {
+-              text: `${anchorInstruction}\n\nFirst, reason in your scratchpad. Then, generate the updated <state_snapshot>.`,
+-            },
+-          ],
+-        },
+-      ],
+-      systemInstruction: { text: getCompressionPrompt(config) },
+-      promptId,
+-      // TODO(joshualitt): wire up a sensible abort signal,
+-      abortSignal: abortSignal ?? new AbortController().signal,
+-      role: LlmRole.UTILITY_COMPRESSOR,
+-    });
++    let summaryResponse;
++    try {
++      summaryResponse = await config.getBaseLlmClient().generateContent({
++        modelConfigKey: { model: modelStringToModelConfigAlias(model) },
++        contents: [
++          ...historyForSummarizer,
++          {
++            role: 'user',
++            parts: [
++              {
++                text: `${anchorInstruction}\n\nFirst, reason in your scratchpad. Then, generate the updated <state_snapshot>.`,
++              },
++            ],
++          },
++        ],
++        systemInstruction: { text: getCompressionPrompt(config) },
++        promptId,
++        // TODO(joshualitt): wire up a sensible abort signal,
++        abortSignal: abortSignal ?? new AbortController().signal,
++        role: LlmRole.UTILITY_COMPRESSOR,
++      });
++    } catch (error) {
++      debugLogger.debug('Chat history compression (summarize) failed:', error);
++      return this.createCompressionFailureResponse(
++        originalTokenCount,
++        'Summarization',
++        error,
++      );
++    }
+     const summary = getResponseText(summaryResponse) ?? '';
+ 
+     // Phase 3: The "Probe" Verification (Self-Correction)
+     // We perform a second lightweight turn to ensure no critical information was lost.
+-    const verificationResponse = await config
+-      .getBaseLlmClient()
+-      .generateContent({
++    let verificationResponse;
++    try {
++      verificationResponse = await config.getBaseLlmClient().generateContent({
+         modelConfigKey: { model: modelStringToModelConfigAlias(model) },
+         contents: [
+           ...historyForSummarizer,
+@@ -397,6 +408,14 @@ export class ChatCompressionService {
+         role: LlmRole.UTILITY_COMPRESSOR,
+         abortSignal: abortSignal ?? new AbortController().signal,
+       });
++    } catch (error) {
++      debugLogger.debug('Chat history compression (verify) failed:', error);
++      return this.createCompressionFailureResponse(
++        originalTokenCount,
++        'Verification',
++        error,
++      );
++    }
+ 
+     const finalSummary = (
+       getResponseText(verificationResponse)?.trim() || summary
+@@ -470,4 +489,25 @@ export class ChatCompressionService {
+       };
+     }
+   }
++
++  private createCompressionFailureResponse(
++    originalTokenCount: number,
++    stage: 'Summarization' | 'Verification',
++    error: unknown,
++  ): {
++    newHistory: null;
++    info: ChatCompressionInfo;
++  } {
++    return {
++      newHistory: null,
++      info: {
++        originalTokenCount,
++        newTokenCount: originalTokenCount,
++        compressionStatus: CompressionStatus.COMPRESSION_FAILED,
++        errorMessage: `${stage} failed: ${
++          error instanceof Error ? error.message : String(error)
++        }`,
++      },
++    };
++  }
+ }

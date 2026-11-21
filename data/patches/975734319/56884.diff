@@ -1,0 +1,28 @@
+diff --git a/packages/tui/test/util/locale.test.ts b/packages/tui/test/util/locale.test.ts
+index b6a1547b78a4..b6ba9441ffe7 100644
+--- a/packages/tui/test/util/locale.test.ts
++++ b/packages/tui/test/util/locale.test.ts
+@@ -30,3 +30,9 @@ test("truncates text in the middle without overflowing small widths", () => {
+   expect(Locale.truncateMiddle("abcd", 10)).toBe("abcd")
+   expect(Locale.truncateMiddle("a", 1)).toBe("a")
+ })
++
++test("keeps sub-minute durations below the minute boundary", () => {
++  expect(Locale.duration(59949)).toBe("59.9s")
++  expect(Locale.duration(59999)).toBe("59.9s")
++  expect(Locale.duration(60000)).toBe("1m 0s")
++})
+diff --git a/packages/util/src/duration.ts b/packages/util/src/duration.ts
+index 2a27f5560c11..743c6a8ed257 100644
+--- a/packages/util/src/duration.ts
++++ b/packages/util/src/duration.ts
+@@ -4,7 +4,8 @@ export function duration(input: number) {
+     return `${input}ms`
+   }
+   if (input < 60000) {
+-    return `${(input / 1000).toFixed(1)}s`
++    // Floor like the larger units so 59950ms+ cannot round up to "60.0s"
++    return `${(Math.floor(input / 100) / 10).toFixed(1)}s`
+   }
+   if (input < 3600000) {
+     const minutes = Math.floor(input / 60000)

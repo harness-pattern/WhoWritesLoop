@@ -1,0 +1,2731 @@
+diff --git a/lib/crewai-files/src/crewai_files/cache/upload_cache.py b/lib/crewai-files/src/crewai_files/cache/upload_cache.py
+index 48cebdfa14..6c0811418a 100644
+--- a/lib/crewai-files/src/crewai_files/cache/upload_cache.py
++++ b/lib/crewai-files/src/crewai_files/cache/upload_cache.py
+@@ -1,4 +1,4 @@
+-"""Cache for tracking uploaded files using aiocache."""
++"""Cache for tracking uploaded files using aiocache or ValkeyCache."""
+ 
+ from __future__ import annotations
+ 
+@@ -10,7 +10,7 @@
+ from datetime import datetime, timezone
+ import hashlib
+ import logging
+-from typing import TYPE_CHECKING, Any
++from typing import TYPE_CHECKING, Any, Protocol
+ 
+ from aiocache import Cache  # type: ignore[import-untyped]
+ from aiocache.serializers import PickleSerializer  # type: ignore[import-untyped]
+@@ -51,6 +51,33 @@ def is_expired(self) -> bool:
+             return False
+         return datetime.now(timezone.utc) >= self.expires_at
+ 
++    def to_dict(self) -> dict[str, Any]:
++        """Serialize to a JSON-compatible dict."""
++        return {
++            "file_id": self.file_id,
++            "provider": self.provider,
++            "file_uri": self.file_uri,
++            "content_type": self.content_type,
++            "uploaded_at": self.uploaded_at.isoformat(),
++            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
++        }
++
++    @classmethod
++    def from_dict(cls, data: dict[str, Any]) -> CachedUpload:
++        """Deserialize from a dict."""
++        return cls(
++            file_id=data["file_id"],
++            provider=data["provider"],
++            file_uri=data.get("file_uri"),
++            content_type=data["content_type"],
++            uploaded_at=datetime.fromisoformat(data["uploaded_at"]),
++            expires_at=(
++                datetime.fromisoformat(data["expires_at"])
++                if data.get("expires_at")
++                else None
++            ),
++        )
++
+ 
+ def _make_key(file_hash: str, provider: str) -> str:
+     """Create a cache key from file hash and provider."""
+@@ -58,14 +85,7 @@ def _make_key(file_hash: str, provider: str) -> str:
+ 
+ 
+ def _compute_file_hash_streaming(chunks: Iterator[bytes]) -> str:
+-    """Compute SHA-256 hash from streaming chunks.
+-
+-    Args:
+-        chunks: Iterator of byte chunks.
+-
+-    Returns:
+-        Hexadecimal hash string.
+-    """
++    """Compute SHA-256 hash from streaming chunks."""
+     hasher = hashlib.sha256()
+     for chunk in chunks:
+         hasher.update(chunk)
+@@ -73,10 +93,7 @@ def _compute_file_hash_streaming(chunks: Iterator[bytes]) -> str:
+ 
+ 
+ def _compute_file_hash(file: FileInput) -> str:
+-    """Compute SHA-256 hash of file content.
+-
+-    Uses streaming for FilePath sources to avoid loading large files into memory.
+-    """
++    """Compute SHA-256 hash of file content."""
+     from crewai_files.core.sources import FilePath
+ 
+     source = file._file_source
+@@ -86,10 +103,111 @@ def _compute_file_hash(file: FileInput) -> str:
+     return hashlib.sha256(content).hexdigest()
+ 
+ 
++class CacheBackend(Protocol):
++    """Protocol for cache backends used by UploadCache."""
++
++    async def get(self, key: str) -> CachedUpload | None: ...
++    async def set(self, key: str, value: CachedUpload, ttl: int) -> None: ...
++    async def delete(self, key: str) -> bool: ...
++    async def clear(self) -> None: ...
++
++
++class AiocacheBackend:
++    """Cache backend backed by aiocache (memory or Redis)."""
++
++    def __init__(self, cache: Cache) -> None:  # type: ignore[no-any-unimported]
++        self._cache = cache
++
++    async def get(self, key: str) -> CachedUpload | None:
++        result = await self._cache.get(key)
++        if isinstance(result, CachedUpload):
++            return result
++        return None
++
++    async def set(self, key: str, value: CachedUpload, ttl: int) -> None:
++        await self._cache.set(key, value, ttl=ttl)
++
++    async def delete(self, key: str) -> bool:
++        result = await self._cache.delete(key)
++        return bool(result > 0 if isinstance(result, int) else result)
++
++    async def clear(self) -> None:
++        # Scope the clear to this cache's namespace. aiocache's Redis backend
++        # treats clear() with no namespace as FLUSHDB, which would wipe unrelated
++        # keys (A2A cancel flags, other app data) in a shared instance. Passing
++        # the namespace makes it delete only this cache's keys, and still covers
++        # entries written by other processes or left from a previous run.
++        namespace = getattr(self._cache, "namespace", None)
++        if namespace:
++            await self._cache.clear(namespace=namespace)
++        else:
++            # No namespace configured; fall back to the default clear so an
++            # unnamespaced cache still resets (memory backend, or an explicit
++            # empty namespace where FLUSHDB is the only option).
++            await self._cache.clear()
++
++
++class ValkeyCacheBackend:
++    """Cache backend backed by ValkeyCache (JSON serialization)."""
++
++    def __init__(
++        self,
++        host: str = "localhost",
++        port: int = 6379,
++        db: int = 0,
++        username: str | None = None,
++        password: str | None = None,
++        default_ttl: int | None = None,
++        namespace: str = "",
++        use_tls: bool = False,
++    ) -> None:
++        from crewai.memory.storage.valkey_cache import ValkeyCache
++
++        self._cache = ValkeyCache(
++            host=host,
++            port=port,
++            db=db,
++            username=username,
++            password=password,
++            default_ttl=default_ttl,
++            use_tls=use_tls,
++        )
++        self._namespace = namespace
++
++    def _key(self, key: str) -> str:
++        """Prefix key with namespace for isolation."""
++        return f"{self._namespace}:{key}" if self._namespace else key
++
++    async def get(self, key: str) -> CachedUpload | None:
++        data = await self._cache.get(self._key(key))
++        if data is None:
++            return None
++        try:
++            return CachedUpload.from_dict(data)
++        except (KeyError, ValueError) as e:
++            logger.warning(f"Failed to deserialize cached upload: {e}")
++            return None
++
++    async def set(self, key: str, value: CachedUpload, ttl: int) -> None:
++        await self._cache.set(self._key(key), value.to_dict(), ttl=ttl)
++
++    async def delete(self, key: str) -> bool:
++        existed = await self._cache.exists(self._key(key))
++        if existed:
++            await self._cache.delete(self._key(key))
++        return existed
++
++    async def clear(self) -> None:
++        # Flush every key under this backend's namespace, including entries
++        # written by other processes/runs, not just locally-tracked keys.
++        prefix = f"{self._namespace}:" if self._namespace else ""
++        await self._cache.clear(prefix)
++
++
+ class UploadCache:
+-    """Async cache for tracking uploaded files using aiocache.
++    """Async cache for tracking uploaded files.
+ 
+-    Supports in-memory caching by default, with optional Redis backend
++    Supports in-memory caching by default, with optional Redis or Valkey backend
+     for distributed setups.
+ 
+     Attributes:
+@@ -110,7 +228,7 @@ def __init__(
+         Args:
+             ttl: Default TTL in seconds.
+             namespace: Cache namespace.
+-            cache_type: Backend type ("memory" or "redis").
++            cache_type: Backend type ("memory", "redis", or "valkey").
+             max_entries: Maximum cache entries (None for unlimited).
+             **cache_kwargs: Additional args for cache backend.
+         """
+@@ -120,18 +238,46 @@ def __init__(
+         self._provider_keys: dict[ProviderType, set[str]] = {}
+         self._key_access_order: list[str] = []
+ 
+-        if cache_type == "redis":
+-            self._cache = Cache(
+-                Cache.REDIS,
+-                serializer=PickleSerializer(),
++        self._backend: CacheBackend = self._create_backend(
++            cache_type, namespace, ttl, **cache_kwargs
++        )
++
++    @staticmethod
++    def _create_backend(
++        cache_type: str,
++        namespace: str,
++        ttl: int,
++        **cache_kwargs: Any,
++    ) -> CacheBackend:
++        """Create the appropriate cache backend."""
++        if cache_type == "valkey":
++            # Imported lazily: crewai-files must not hard-import crewai at module
++            # load. parse_cache_url is only needed for the Valkey backend path.
++            from crewai.utilities.cache_config import parse_cache_url
++
++            conn = parse_cache_url() or {}
++            return ValkeyCacheBackend(
++                host=cache_kwargs.get("host", conn.get("host", "localhost")),
++                port=cache_kwargs.get("port", conn.get("port", 6379)),
++                db=cache_kwargs.get("db", conn.get("db", 0)),
++                username=cache_kwargs.get("username", conn.get("username")),
++                password=cache_kwargs.get("password", conn.get("password")),
++                default_ttl=ttl,
+                 namespace=namespace,
+-                **cache_kwargs,
++                use_tls=cache_kwargs.get("use_tls", conn.get("use_tls", False)),
+             )
+-        else:
+-            self._cache = Cache(
+-                serializer=PickleSerializer(),
+-                namespace=namespace,
++        if cache_type == "redis":
++            return AiocacheBackend(
++                Cache(
++                    Cache.REDIS,
++                    serializer=PickleSerializer(),
++                    namespace=namespace,
++                    **cache_kwargs,
++                )
+             )
++        return AiocacheBackend(
++            Cache(serializer=PickleSerializer(), namespace=namespace)
++        )
+ 
+     def _track_key(self, provider: ProviderType, key: str) -> None:
+         """Track a key for a provider (for cleanup) and access order."""
+@@ -157,11 +303,9 @@ async def _evict_if_needed(self) -> int:
+         """
+         if self.max_entries is None:
+             return 0
+-
+         current_count = len(self)
+         if current_count < self.max_entries:
+             return 0
+-
+         to_evict = max(1, self.max_entries // 10)
+         return await self._evict_oldest(to_evict)
+ 
+@@ -176,31 +320,24 @@ async def _evict_oldest(self, count: int) -> int:
+         """
+         evicted = 0
+         keys_to_evict = self._key_access_order[:count]
+-
+         for key in keys_to_evict:
+-            await self._cache.delete(key)
++            await self._backend.delete(key)
+             self._key_access_order.remove(key)
+             for provider_keys in self._provider_keys.values():
+                 provider_keys.discard(key)
+             evicted += 1
+-
+         if evicted > 0:
+             logger.debug(f"Evicted {evicted} oldest cache entries")
+-
+         return evicted
+ 
++    # ------------------------------------------------------------------
++    # Async public API
++    # ------------------------------------------------------------------
++
+     async def aget(
+         self, file: FileInput, provider: ProviderType
+     ) -> CachedUpload | None:
+-        """Get a cached upload for a file.
+-
+-        Args:
+-            file: The file to look up.
+-            provider: The provider name.
+-
+-        Returns:
+-            Cached upload if found and not expired, None otherwise.
+-        """
++        """Get a cached upload for a file."""
+         file_hash = _compute_file_hash(file)
+         return await self.aget_by_hash(file_hash, provider)
+ 
+@@ -217,17 +354,14 @@ async def aget_by_hash(
+             Cached upload if found and not expired, None otherwise.
+         """
+         key = _make_key(file_hash, provider)
+-        result = await self._cache.get(key)
+-
++        result = await self._backend.get(key)
+         if result is None:
+             return None
+-        if isinstance(result, CachedUpload):
+-            if result.is_expired():
+-                await self._cache.delete(key)
+-                self._untrack_key(provider, key)
+-                return None
+-            return result
+-        return None
++        if result.is_expired():
++            await self._backend.delete(key)
++            self._untrack_key(provider, key)
++            return None
++        return result
+ 
+     async def aset(
+         self,
+@@ -237,18 +371,7 @@ async def aset(
+         file_uri: str | None = None,
+         expires_at: datetime | None = None,
+     ) -> CachedUpload:
+-        """Cache an uploaded file.
+-
+-        Args:
+-            file: The file that was uploaded.
+-            provider: The provider name.
+-            file_id: Provider-specific file identifier.
+-            file_uri: Optional URI for accessing the file.
+-            expires_at: When the upload expires.
+-
+-        Returns:
+-            The created cache entry.
+-        """
++        """Cache an uploaded file."""
+         file_hash = _compute_file_hash(file)
+         return await self.aset_by_hash(
+             file_hash=file_hash,
+@@ -282,7 +405,6 @@ async def aset_by_hash(
+             The created cache entry.
+         """
+         await self._evict_if_needed()
+-
+         key = _make_key(file_hash, provider)
+         now = datetime.now(timezone.utc)
+ 
+@@ -297,9 +419,13 @@ async def aset_by_hash(
+ 
+         ttl = self.ttl
+         if expires_at is not None:
+-            ttl = max(0, int((expires_at - now).total_seconds()))
++            # An explicit expiry must always translate to a real TTL. A past or
++            # sub-second expires_at rounds to 0, which the backend treats as
++            # "never expire" — the opposite of intent. Floor it to 1s so the
++            # entry expires promptly instead of persisting forever.
++            ttl = max(1, int((expires_at - now).total_seconds()))
+ 
+-        await self._cache.set(key, cached, ttl=ttl)
++        await self._backend.set(key, cached, ttl=ttl)
+         self._track_key(provider, key)
+         logger.debug(f"Cached upload: {file_id} for provider {provider}")
+         return cached
+@@ -316,9 +442,7 @@ async def aremove(self, file: FileInput, provider: ProviderType) -> bool:
+         """
+         file_hash = _compute_file_hash(file)
+         key = _make_key(file_hash, provider)
+-
+-        result = await self._cache.delete(key)
+-        removed = bool(result > 0 if isinstance(result, int) else result)
++        removed = await self._backend.delete(key)
+         if removed:
+             self._untrack_key(provider, key)
+         return removed
+@@ -335,11 +459,10 @@ async def aremove_by_file_id(self, file_id: str, provider: ProviderType) -> bool
+         """
+         if provider not in self._provider_keys:
+             return False
+-
+         for key in list(self._provider_keys[provider]):
+-            cached = await self._cache.get(key)
+-            if isinstance(cached, CachedUpload) and cached.file_id == file_id:
+-                await self._cache.delete(key)
++            cached = await self._backend.get(key)
++            if cached is not None and cached.file_id == file_id:
++                await self._backend.delete(key)
+                 self._untrack_key(provider, key)
+                 return True
+         return False
+@@ -351,17 +474,13 @@ async def aclear_expired(self) -> int:
+             Number of entries removed.
+         """
+         removed = 0
+-
+         for provider, keys in list(self._provider_keys.items()):
+             for key in list(keys):
+-                cached = await self._cache.get(key)
+-                if cached is None or (
+-                    isinstance(cached, CachedUpload) and cached.is_expired()
+-                ):
+-                    await self._cache.delete(key)
++                cached = await self._backend.get(key)
++                if cached is None or cached.is_expired():
++                    await self._backend.delete(key)
+                     self._untrack_key(provider, key)
+                     removed += 1
+-
+         if removed > 0:
+             logger.debug(f"Cleared {removed} expired cache entries")
+         return removed
+@@ -373,9 +492,12 @@ async def aclear(self) -> int:
+             Number of entries cleared.
+         """
+         count = sum(len(keys) for keys in self._provider_keys.values())
+-        await self._cache.clear(namespace=self.namespace)
++        # Flush the whole backend namespace so entries written by another
++        # process, or left from a previous run, are removed too -- not just the
++        # keys tracked in this instance's _provider_keys map.
++        await self._backend.clear()
+         self._provider_keys.clear()
+-
++        self._key_access_order.clear()
+         if count > 0:
+             logger.debug(f"Cleared {count} cache entries")
+         return count
+@@ -391,14 +513,17 @@ async def aget_all_for_provider(self, provider: ProviderType) -> list[CachedUplo
+         """
+         if provider not in self._provider_keys:
+             return []
+-
+         results: list[CachedUpload] = []
+         for key in list(self._provider_keys[provider]):
+-            cached = await self._cache.get(key)
+-            if isinstance(cached, CachedUpload) and not cached.is_expired():
++            cached = await self._backend.get(key)
++            if cached is not None and not cached.is_expired():
+                 results.append(cached)
+         return results
+ 
++    # ------------------------------------------------------------------
++    # Sync wrappers
++    # ------------------------------------------------------------------
++
+     @staticmethod
+     def _run_sync(coro: Any) -> Any:
+         """Run an async coroutine from sync context without blocking event loop."""
+@@ -489,11 +614,7 @@ def __len__(self) -> int:
+         return sum(len(keys) for keys in self._provider_keys.values())
+ 
+     def get_providers(self) -> builtins.set[ProviderType]:
+-        """Get all provider names that have cached entries.
+-
+-        Returns:
+-            Set of provider names.
+-        """
++        """Get all provider names that have cached entries."""
+         return builtins.set(self._provider_keys.keys())
+ 
+ 
+@@ -506,17 +627,7 @@ def get_upload_cache(
+     cache_type: str = "memory",
+     **cache_kwargs: Any,
+ ) -> UploadCache:
+-    """Get or create the default upload cache.
+-
+-    Args:
+-        ttl: Default TTL in seconds.
+-        namespace: Cache namespace.
+-        cache_type: Backend type ("memory" or "redis").
+-        **cache_kwargs: Additional args for cache backend.
+-
+-    Returns:
+-        The upload cache instance.
+-    """
++    """Get or create the default upload cache."""
+     global _default_cache
+     if _default_cache is None:
+         _default_cache = UploadCache(
+diff --git a/lib/crewai-files/tests/test_upload_cache.py b/lib/crewai-files/tests/test_upload_cache.py
+index f7d9f86a33..14557f5c78 100644
+--- a/lib/crewai-files/tests/test_upload_cache.py
++++ b/lib/crewai-files/tests/test_upload_cache.py
+@@ -207,3 +207,127 @@ def test_get_all_for_provider(self):
+ 
+         assert len(gemini_uploads) == 2
+         assert len(anthropic_uploads) == 1
++
++
++class TestNoEagerCrewaiImport:
++    """crewai-files must not hard-import crewai at module load.
++
++    parse_cache_url is only needed for the Valkey backend path and must be
++    imported lazily there, so `import crewai_files` works without crewai
++    installed (preserving the crewai[file-processing] -> crewai-files direction).
++    """
++
++    def test_parse_cache_url_not_bound_at_module_level(self) -> None:
++        import crewai_files.cache.upload_cache as mod
++
++        # A module-level `from crewai... import parse_cache_url` would leave the
++        # name bound on the module. Lazy import inside _create_backend does not.
++        assert not hasattr(mod, "parse_cache_url")
++
++    def test_default_memory_backend_needs_no_crewai(self) -> None:
++        from crewai_files.cache.upload_cache import UploadCache
++
++        # Default (in-memory) cache path must not touch the Valkey helper.
++        cache = UploadCache()
++        assert cache is not None
++
++
++class TestExpiredTtlFloor:
++    """A past/sub-second expires_at must map to a real (>=1s) TTL, not 0 —
++    otherwise the Valkey backend treats it as never-expire and the entry
++    persists forever.
++    """
++
++    def test_past_expires_at_yields_positive_ttl(self) -> None:
++        import asyncio
++        from unittest.mock import AsyncMock
++
++        cache = UploadCache()
++        captured: dict[str, int] = {}
++
++        async def fake_set(key: str, value: object, ttl: int) -> None:
++            captured["ttl"] = ttl
++
++        cache._backend.set = AsyncMock(side_effect=fake_set)  # type: ignore[method-assign]
++
++        file = ImageFile(source=FileBytes(data=MINIMAL_PNG, filename="test.png"))
++        past = datetime.now(timezone.utc) - timedelta(seconds=10)
++
++        asyncio.run(
++            cache.aset(
++                file=file,
++                provider="gemini",
++                file_id="file-123",
++                file_uri="files/file-123",
++                expires_at=past,
++            )
++        )
++
++        assert captured["ttl"] >= 1
++
++
++class TestAiocacheBackendClearNamespace:
++    """AiocacheBackend.clear must scope to its namespace, not FLUSHDB the whole
++    shared Redis/Valkey database.
++    """
++
++    def test_clear_passes_namespace(self) -> None:
++        import asyncio
++        from unittest.mock import AsyncMock, MagicMock
++
++        from crewai_files.cache.upload_cache import AiocacheBackend
++
++        fake_cache = MagicMock()
++        fake_cache.namespace = "crewai_uploads"
++        fake_cache.clear = AsyncMock()
++
++        backend = AiocacheBackend(fake_cache)
++        asyncio.run(backend.clear())
++
++        # Namespace-scoped clear (KEYS ns:* + DELETE), never a bare FLUSHDB.
++        fake_cache.clear.assert_awaited_once_with(namespace="crewai_uploads")
++
++    def test_clear_without_namespace_falls_back(self) -> None:
++        import asyncio
++        from unittest.mock import AsyncMock, MagicMock
++
++        from crewai_files.cache.upload_cache import AiocacheBackend
++
++        fake_cache = MagicMock()
++        fake_cache.namespace = ""
++        fake_cache.clear = AsyncMock()
++
++        backend = AiocacheBackend(fake_cache)
++        asyncio.run(backend.clear())
++
++        fake_cache.clear.assert_awaited_once_with()
++
++
++class TestClearRemovesUntrackedEntries:
++    """clear() must empty the backend namespace, including entries this
++    instance never tracked (written by another process or a previous run).
++    """
++
++    def test_clear_removes_entry_written_by_another_instance(self) -> None:
++        import asyncio
++
++        now = datetime.now(timezone.utc)
++        upload = CachedUpload(
++            file_id="file-other",
++            provider="gemini",
++            file_uri=None,
++            content_type="image/png",
++            uploaded_at=now,
++            expires_at=now + timedelta(hours=1),
++        )
++        cache = UploadCache(namespace="test_clear_untracked")
++
++        async def scenario() -> CachedUpload | None:
++            # Write straight to the backend so this UploadCache does not track it.
++            await cache._backend.set("upload:gemini:abc", upload, ttl=3600)
++            # Sanity check: the entry is visible before clear().
++            assert await cache.aget_by_hash("abc", "gemini") is not None
++            await cache.aclear()
++            return await cache.aget_by_hash("abc", "gemini")
++
++        assert asyncio.run(scenario()) is None
+diff --git a/lib/crewai/pyproject.toml b/lib/crewai/pyproject.toml
+index ff972417cc..651b7c961c 100644
+--- a/lib/crewai/pyproject.toml
++++ b/lib/crewai/pyproject.toml
+@@ -130,6 +130,10 @@ spreadsheets = [
+ qdrant-edge = [
+     "qdrant-edge-py>=0.6.0",
+ ]
++valkey = [
++    # >=2.5.2 required: client_info_tag (LIB-NAME attribution) shipped in 2.5.2.
++    "valkey-glide>=2.5.2,<3",
++]
+ 
+ 
+ [tool.uv]
+diff --git a/lib/crewai/src/crewai/a2a/utils/agent_card.py b/lib/crewai/src/crewai/a2a/utils/agent_card.py
+index df5886988e..e8a2b3564f 100644
+--- a/lib/crewai/src/crewai/a2a/utils/agent_card.py
++++ b/lib/crewai/src/crewai/a2a/utils/agent_card.py
+@@ -13,8 +13,15 @@
+ from typing import TYPE_CHECKING
+ 
+ from a2a.client.errors import A2AClientHTTPError
+-from a2a.types import AgentCapabilities, AgentCard, AgentSkill
+-from aiocache import cached  # type: ignore[import-untyped]
++from a2a.types import (
++    AgentCapabilities,
++    AgentCard,
++    AgentSkill,
++)
++from aiocache import (
++    SimpleMemoryCache,  # type: ignore[import-untyped]
++    cached,  # type: ignore[import-untyped]
++)
+ from aiocache.serializers import PickleSerializer  # type: ignore[import-untyped]
+ import httpx
+ 
+@@ -223,7 +230,15 @@ def _fetch_agent_card_cached(
+     return asyncio.run(coro)
+ 
+ 
+-@cached(ttl=300, serializer=PickleSerializer())  # type: ignore[untyped-decorator]
++# Pinned to an in-process SimpleMemoryCache: PickleSerializer must never
++# deserialize values from an operator-/attacker-controlled Redis/Valkey
++# backend (that would be a pickle code-execution surface on cache read).
++# The network cache alias configured from VALKEY_URL/REDIS_URL is not used here.
++@cached(
++    ttl=300,
++    cache=SimpleMemoryCache,
++    serializer=PickleSerializer(),
++)  # type: ignore[untyped-decorator]
+ async def _afetch_agent_card_cached(
+     endpoint: str,
+     auth_hash: str,
+diff --git a/lib/crewai/src/crewai/a2a/utils/task.py b/lib/crewai/src/crewai/a2a/utils/task.py
+index 6af935bb35..81046a8063 100644
+--- a/lib/crewai/src/crewai/a2a/utils/task.py
++++ b/lib/crewai/src/crewai/a2a/utils/task.py
+@@ -9,9 +9,8 @@
+ from functools import wraps
+ import json
+ import logging
+-import os
++import threading
+ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
+-from urllib.parse import urlparse
+ 
+ from a2a.server.agent_execution import RequestContext
+ from a2a.server.events import EventQueue
+@@ -38,7 +37,6 @@
+ from a2a.utils.errors import ServerError
+ from aiocache import SimpleMemoryCache, caches  # type: ignore[import-untyped]
+ from pydantic import BaseModel
+-from typing_extensions import TypedDict
+ 
+ from crewai.a2a.utils.agent_card import _get_server_config
+ from crewai.a2a.utils.content_type import validate_message_parts
+@@ -50,12 +48,18 @@
+     A2AServerTaskStartedEvent,
+ )
+ from crewai.task import Task
++from crewai.utilities.cache_config import (
++    get_aiocache_config,
++    parse_cache_url,
++    use_valkey_cache,
++)
+ from crewai.utilities.pydantic_schema_utils import create_model_from_schema
+ 
+ 
+ if TYPE_CHECKING:
+     from crewai.a2a.extensions.server import ExtensionContext, ServerExtensionRegistry
+     from crewai.agent import Agent
++    from crewai.memory.storage.valkey_cache import ValkeyCache
+ 
+ 
+ logger = logging.getLogger(__name__)
+@@ -64,52 +68,63 @@
+ T = TypeVar("T")
+ 
+ 
+-class RedisCacheConfig(TypedDict, total=False):
+-    """Configuration for aiocache Redis backend."""
++# ---------------------------------------------------------------------------
++# Lazy cache initialisation
++# ---------------------------------------------------------------------------
+ 
+-    cache: str
+-    endpoint: str
+-    port: int
+-    db: int
+-    password: str
++_task_cache: ValkeyCache | None = None
++_cache_initialized = False
++_cache_init_lock = threading.Lock()
+ 
++# Configure aiocache at import time (matches upstream behaviour).
++# This is safe — it only touches aiocache, no optional dependencies.
++# The Valkey path is deferred to _ensure_task_cache() to avoid importing
++# valkey-glide at module level (it may not be installed).
++if not use_valkey_cache():
++    caches.set_config(get_aiocache_config())
+ 
+-def _parse_redis_url(url: str) -> RedisCacheConfig:
+-    """Parse a Redis URL into aiocache configuration.
+ 
+-    Args:
+-        url: Redis connection URL (e.g., redis://localhost:6379/0).
++def _ensure_task_cache() -> None:
++    """Initialise the Valkey task cache on first use (thread-safe).
+ 
+-    Returns:
+-        Configuration dict for aiocache.RedisCache.
++    For the aiocache path, configuration happens at module level above.
++    This function only needs to run for the Valkey path.
+     """
+-    parsed = urlparse(url)
+-    config: RedisCacheConfig = {
+-        "cache": "aiocache.RedisCache",
+-        "endpoint": parsed.hostname or "localhost",
+-        "port": parsed.port or 6379,
+-    }
+-    if parsed.path and parsed.path != "/":
+-        try:
+-            config["db"] = int(parsed.path.lstrip("/"))
+-        except ValueError:
+-            pass
+-    if parsed.password:
+-        config["password"] = parsed.password
+-    return config
++    global _task_cache, _cache_initialized
++    if _cache_initialized:
++        return
+ 
++    with _cache_init_lock:
++        if _cache_initialized:
++            return
+ 
+-_redis_url = os.environ.get("REDIS_URL")
++        if use_valkey_cache():
++            try:
++                from crewai.memory.storage.valkey_cache import ValkeyCache
++            except ImportError as e:
++                # VALKEY_URL is set but the optional valkey extra (valkey-glide)
++                # is not installed. Fail with a clear, actionable message rather
++                # than letting the bare ImportError surface from every
++                # cancellable A2A task.
++                raise ImportError(
++                    "VALKEY_URL is set, which routes A2A task cancellation "
++                    "through Valkey, but the optional 'valkey' extra is not "
++                    "installed. Install it with `pip install 'crewai[valkey]'` "
++                    "(or unset VALKEY_URL to use the default in-memory cache)."
++                ) from e
++
++            conn = parse_cache_url() or {}
++            _task_cache = ValkeyCache(
++                host=conn.get("host", "localhost"),
++                port=conn.get("port", 6379),
++                db=conn.get("db", 0),
++                username=conn.get("username"),
++                password=conn.get("password"),
++                default_ttl=3600,
++                use_tls=conn.get("use_tls", False),
++            )
+ 
+-caches.set_config(
+-    {
+-        "default": _parse_redis_url(_redis_url)
+-        if _redis_url
+-        else {
+-            "cache": "aiocache.SimpleMemoryCache",
+-        }
+-    }
+-)
++        _cache_initialized = True
+ 
+ 
+ def cancellable(
+@@ -130,6 +145,8 @@ def cancellable(
+     @wraps(fn)
+     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+         """Wrap function with cancellation monitoring."""
++        _ensure_task_cache()
++
+         context: RequestContext | None = None
+         for arg in args:
+             if isinstance(arg, RequestContext):
+@@ -142,17 +159,47 @@ async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+             return await fn(*args, **kwargs)
+ 
+         task_id = context.task_id
+-        cache = caches.get("default")
++
++        async def read_cancel_flag() -> Any:
++            if _task_cache is not None:
++                return await _task_cache.get(f"cancel:{task_id}")
++            return await caches.get("default").get(f"cancel:{task_id}")
+ 
+         async def poll_for_cancel() -> bool:
+-            """Poll cache for cancellation flag."""
++            """Poll the cache for the cancellation flag until it is set.
++
++            A cache error must not end the watcher. Once it ends, nothing
++            observes the flag, so a later cancel() would be acknowledged while
++            the task kept running. Log the first error of a failure streak
++            (not every 100ms poll) and keep polling.
++            """
++            failing = False
+             while True:
+-                if await cache.get(f"cancel:{task_id}"):
+-                    return True
++                try:
++                    if await read_cancel_flag():
++                        return True
++                    failing = False
++                except Exception as e:
++                    if not failing:
++                        logger.warning(
++                            "Cancel watcher cache error, continuing to poll",
++                            extra={"task_id": task_id, "error": str(e)},
++                        )
++                    failing = True
+                 await asyncio.sleep(0.1)
+ 
+         async def watch_for_cancel() -> bool:
+-            """Watch for cancellation events via pub/sub or polling."""
++            """Watch for cancellation via pub/sub or polling.
++
++            Returns only when a cancel has been seen. If Redis pub/sub fails
++            (connection loss, an ACL NOPERM on SUBSCRIBE, ...) or its stream
++            ends, fall back to polling so cancellation stays armed for the life
++            of the task.
++            """
++            # ValkeyCache has no pub/sub yet; the in-memory cache has none.
++            if _task_cache is not None:
++                return await poll_for_cancel()
++            cache = caches.get("default")
+             if isinstance(cache, SimpleMemoryCache):
+                 return await poll_for_cancel()
+ 
+@@ -163,13 +210,16 @@ async def watch_for_cancel() -> bool:
+                 async for message in pubsub.listen():
+                     if message["type"] == "message":
+                         return True
+-            except (OSError, ConnectionError) as e:
++                logger.warning(
++                    "Cancel watcher pub/sub stream ended, falling back to polling",
++                    extra={"task_id": task_id},
++                )
++            except Exception as e:
+                 logger.warning(
+                     "Cancel watcher Redis error, falling back to polling",
+                     extra={"task_id": task_id, "error": str(e)},
+                 )
+-                return await poll_for_cancel()
+-            return False
++            return await poll_for_cancel()
+ 
+         execute_task = asyncio.create_task(fn(*args, **kwargs))
+         cancel_watch = asyncio.create_task(watch_for_cancel())
+@@ -180,17 +230,50 @@ async def watch_for_cancel() -> bool:
+                 return_when=asyncio.FIRST_COMPLETED,
+             )
+ 
++            # Only a watcher that returned True is a cancellation. One that
++            # finished by raising (an unexpected cache error) must not abort the
++            # running task.
++            watcher_signalled_cancel = False
+             if cancel_watch in done:
++                if cancel_watch.exception() is None:
++                    watcher_signalled_cancel = bool(cancel_watch.result())
++                else:
++                    logger.warning(
++                        "Cancel watcher failed; not treating as cancellation",
++                        extra={
++                            "task_id": task_id,
++                            "error": str(cancel_watch.exception()),
++                        },
++                    )
++
++            if watcher_signalled_cancel:
+                 execute_task.cancel()
+                 try:
+                     await execute_task
+                 except asyncio.CancelledError:
+                     pass
+                 raise asyncio.CancelledError(f"Task {task_id} was cancelled")
++
++            # The task finished first, or the watcher ended without a cancel.
++            if not execute_task.done():
++                cancel_watch.cancel()
++                return await execute_task
+             cancel_watch.cancel()
+             return execute_task.result()
+         finally:
+-            await cache.delete(f"cancel:{task_id}")
++            # Clean up the cancellation flag. Best-effort: a cache error here
++            # must not replace the task's real result or exception.
++            try:
++                if _task_cache is not None:
++                    await _task_cache.delete(f"cancel:{task_id}")
++                else:
++                    cache = caches.get("default")
++                    await cache.delete(f"cancel:{task_id}")
++            except Exception as e:
++                logger.warning(
++                    "Failed to clear cancel flag",
++                    extra={"task_id": task_id, "error": str(e)},
++                )
+ 
+     return wrapper
+ 
+@@ -475,6 +558,8 @@ async def cancel(
+     if task_id is None or context_id is None:
+         raise ServerError(InvalidParamsError(message="task_id and context_id required"))
+ 
++    _ensure_task_cache()
++
+     if context.current_task and context.current_task.status.state in (
+         TaskState.completed,
+         TaskState.failed,
+@@ -482,11 +567,16 @@ async def cancel(
+     ):
+         return context.current_task
+ 
+-    cache = caches.get("default")
+-
+-    await cache.set(f"cancel:{task_id}", True, ttl=3600)
+-    if not isinstance(cache, SimpleMemoryCache):
+-        await cache.client.publish(f"cancel:{task_id}", "cancel")
++    if _task_cache is not None:
++        # Use ValkeyCache
++        await _task_cache.set(f"cancel:{task_id}", True, ttl=3600)
++        # Note: pub/sub not implemented for ValkeyCache yet, relies on polling
++    else:
++        # Use aiocache
++        cache = caches.get("default")
++        await cache.set(f"cancel:{task_id}", True, ttl=3600)
++        if not isinstance(cache, SimpleMemoryCache):
++            await cache.client.publish(f"cancel:{task_id}", "cancel")
+ 
+     await event_queue.enqueue_event(
+         TaskStatusUpdateEvent(
+diff --git a/lib/crewai/src/crewai/memory/storage/valkey_cache.py b/lib/crewai/src/crewai/memory/storage/valkey_cache.py
+new file mode 100644
+index 0000000000..4c210242e0
+--- /dev/null
++++ b/lib/crewai/src/crewai/memory/storage/valkey_cache.py
+@@ -0,0 +1,272 @@
++"""Valkey-based cache implementation for CrewAI.
++
++This module provides a simple cache interface using Valkey-GLIDE client
++for caching operations with optional TTL support. It replaces Redis usage
++in A2A communication, file uploads, and agent card caching.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import logging
++from typing import Any
++
++from glide import GlideClient, GlideClientConfiguration, NodeAddress
++
++from crewai.memory.storage.valkey_io_loop import on_io_loop
++
++
++_logger = logging.getLogger(__name__)
++
++
++class ValkeyCache:
++    """Simple cache interface using Valkey-GLIDE client.
++
++    Provides get/set/delete/exists operations for caching with optional TTL.
++    Uses JSON serialization for complex values and lazy client initialization.
++
++    Example:
++        >>> cache = ValkeyCache(host="localhost", port=6379)
++        >>> await cache.set("key", {"data": "value"}, ttl=3600)
++        >>> value = await cache.get("key")
++        >>> await cache.delete("key")
++    """
++
++    def __init__(
++        self,
++        host: str = "localhost",
++        port: int = 6379,
++        db: int = 0,
++        username: str | None = None,
++        password: str | None = None,
++        default_ttl: int | None = None,
++        use_tls: bool = False,
++    ) -> None:
++        """Initialize Valkey cache.
++
++        Args:
++            host: Valkey server hostname.
++            port: Valkey server port.
++            db: Database number to use.
++            username: Optional ACL username for authentication.
++            password: Optional password for authentication.
++            default_ttl: Default TTL in seconds (None = no expiration).
++            use_tls: Enable TLS/SSL encryption for connections (rediss/valkeys).
++        """
++        self._host = host
++        self._port = port
++        self._db = db
++        self._username = username
++        self._password = password
++        self._default_ttl = default_ttl
++        self._use_tls = use_tls
++        # The client and its creation lock are only ever touched on the shared
++        # Valkey I/O loop (see valkey_io_loop), so they never need rebinding
++        # when callers come from different event loops or threads.
++        self._client: GlideClient | None = None
++        self._client_lock: asyncio.Lock | None = None
++
++    @on_io_loop
++    async def _get_client(self) -> GlideClient:
++        """Get or create the Valkey client (lazy initialization).
++
++        Runs on the Valkey I/O loop. A double-check lock keeps concurrent
++        callers from creating more than one client.
++
++        Returns:
++            Initialized GlideClient instance.
++
++        Raises:
++            RuntimeError: If connection to Valkey fails.
++            TimeoutError: If connection attempt times out (10 seconds).
++        """
++        if self._client_lock is None:
++            self._client_lock = asyncio.Lock()
++
++        if self._client is None:
++            async with self._client_lock:
++                if self._client is None:
++                    host = self._host
++                    port = self._port
++                    db = self._db
++                    try:
++                        from glide import ServerCredentials
++
++                        config = GlideClientConfiguration(
++                            addresses=[NodeAddress(host, port)],
++                            client_name="crewai_valkey",
++                            # Valkey library-name tag for CLIENT INFO attribution.
++                            # Independent of client_name (CLIENT SETNAME); this sets
++                            # the LIB-NAME suffix (GlidePy(crewai)) so operators can
++                            # attribute Valkey usage to CrewAI. Metadata only.
++                            client_info_tag="crewai",
++                            use_tls=self._use_tls,
++                            database_id=db,
++                            credentials=(
++                                ServerCredentials(
++                                    username=self._username or None,
++                                    password=self._password or "",
++                                )
++                                if (self._password or self._username)
++                                else None
++                            ),
++                        )
++
++                        # Add connection timeout (10 seconds)
++                        try:
++                            self._client = await asyncio.wait_for(
++                                GlideClient.create(config), timeout=10.0
++                            )
++                        except asyncio.TimeoutError as e:
++                            _logger.error("Connection timeout connecting to Valkey")
++                            raise TimeoutError(
++                                "Connection timeout to Valkey. "
++                                "Ensure Valkey is running and accessible."
++                            ) from e
++
++                        _logger.info("Valkey cache client initialized")
++                    except (TimeoutError, RuntimeError):
++                        raise
++                    except Exception as e:
++                        _logger.error(
++                            "Failed to create Valkey cache client: %s",
++                            type(e).__name__,
++                        )
++                        raise RuntimeError(
++                            "Cannot connect to Valkey. Check connection settings."
++                        ) from e
++
++        return self._client
++
++    @on_io_loop
++    async def get(self, key: str) -> Any | None:
++        """Get value from cache.
++
++        Args:
++            key: Cache key.
++
++        Returns:
++            Cached value (deserialized from JSON) or None if not found.
++        """
++        client = await self._get_client()
++        value = await client.get(key)
++
++        if value is None:
++            return None
++
++        try:
++            return json.loads(value)
++        except json.JSONDecodeError:
++            _logger.warning(f"Failed to deserialize cached value for key: {key}")
++            return None
++
++    @on_io_loop
++    async def set(
++        self,
++        key: str,
++        value: Any,
++        ttl: int | None = None,
++    ) -> None:
++        """Set value in cache.
++
++        Args:
++            key: Cache key.
++            value: Value to cache (will be serialized to JSON).
++            ttl: TTL in seconds (None uses default_ttl, 0 = no expiration).
++
++        Raises:
++            TypeError: If value is not JSON-serializable.
++            ValueError: If ttl is negative.
++        """
++        from glide import ExpirySet, ExpiryType
++
++        # Validate input before opening a connection
++        try:
++            serialized = json.dumps(value)
++        except (TypeError, ValueError) as e:
++            _logger.error("Cannot serialize value for key %r: %s", key, e)
++            raise TypeError(
++                f"Value for cache key {key!r} is not JSON-serializable: {e}"
++            ) from e
++
++        ttl_to_use = ttl if ttl is not None else self._default_ttl
++        if ttl_to_use is not None and ttl_to_use < 0:
++            raise ValueError("TTL must be >= 0")
++
++        client = await self._get_client()
++
++        if ttl_to_use and ttl_to_use > 0:
++            # Set with expiration using SET command with EX option
++            await client.set(
++                key,
++                serialized,
++                expiry=ExpirySet(ExpiryType.SEC, ttl_to_use),
++            )
++        else:
++            await client.set(key, serialized)
++
++    @on_io_loop
++    async def delete(self, key: str) -> None:
++        """Delete value from cache.
++
++        Args:
++            key: Cache key to delete.
++        """
++        client = await self._get_client()
++        await client.delete([key])
++
++    @on_io_loop
++    async def exists(self, key: str) -> bool:
++        """Check if key exists in cache.
++
++        Args:
++            key: Cache key to check.
++
++        Returns:
++            True if key exists, False otherwise.
++        """
++        client = await self._get_client()
++        result = await client.exists([key])
++        return result > 0
++
++    @on_io_loop
++    async def clear(self, prefix: str = "") -> int:
++        """Delete all keys matching a prefix (server-side, not just local state).
++
++        Scans the keyspace so entries written by other processes or left from a
++        previous run are also removed.
++
++        Args:
++            prefix: Key prefix to match. Empty string matches all keys.
++
++        Returns:
++            Number of keys deleted.
++        """
++        client = await self._get_client()
++        match = f"{prefix}*" if prefix else "*"
++        deleted = 0
++        cursor: str | bytes = "0"
++        while True:
++            result = await client.scan(cursor, match=match, count=1000)
++            cursor = result[0]
++            keys = result[1]
++            if keys:
++                await client.delete(
++                    [k.decode("utf-8") if isinstance(k, bytes) else k for k in keys]
++                )
++                deleted += len(keys)
++            cursor_str = (
++                cursor.decode("utf-8") if isinstance(cursor, bytes) else str(cursor)
++            )
++            if cursor_str == "0":
++                break
++        return deleted
++
++    @on_io_loop
++    async def close(self) -> None:
++        """Close Valkey client connection."""
++        if self._client:
++            await self._client.close()
++            self._client = None
++            _logger.debug("Valkey cache client closed")
+diff --git a/lib/crewai/src/crewai/memory/storage/valkey_io_loop.py b/lib/crewai/src/crewai/memory/storage/valkey_io_loop.py
+new file mode 100644
+index 0000000000..3e09a1acfd
+--- /dev/null
++++ b/lib/crewai/src/crewai/memory/storage/valkey_io_loop.py
+@@ -0,0 +1,79 @@
++"""Shared background event loop for Valkey GLIDE clients.
++
++A GlideClient (and the asyncio.Lock guarding its creation) is bound to the
++event loop it was created on. The Valkey cache and storage are called from many
++loops: ``asyncio.run()`` per sync call, the caller's own loop, several threads
++at once. Creating a client per loop races on rebind, and valkey-glide is
++unreliable when many clients are created and closed on short-lived loops in
++parallel threads (commands stop getting responses).
++
++Instead, all GLIDE work runs on one long-lived loop in a daemon thread. Each
++cache or storage instance keeps a single client that is only ever touched on
++that loop, and callers on other loops await the result.
++"""
++
++from __future__ import annotations
++
++import asyncio
++from collections.abc import Callable, Coroutine
++import functools
++import threading
++from typing import Any, ParamSpec, TypeVar
++
++
++P = ParamSpec("P")
++T = TypeVar("T")
++
++_io_loop: asyncio.AbstractEventLoop | None = None
++_io_loop_lock = threading.Lock()
++
++
++def get_io_loop() -> asyncio.AbstractEventLoop:
++    """Return the shared Valkey I/O loop, starting its thread on first use."""
++    global _io_loop
++    loop = _io_loop
++    if loop is not None and loop.is_running():
++        return loop
++    with _io_loop_lock:
++        if _io_loop is None or not _io_loop.is_running():
++            new_loop = asyncio.new_event_loop()
++            started = threading.Event()
++            new_loop.call_soon(started.set)
++            threading.Thread(
++                target=new_loop.run_forever, name="valkey-io", daemon=True
++            ).start()
++            started.wait()
++            _io_loop = new_loop
++        return _io_loop
++
++
++async def run_on_io_loop(coro: Coroutine[Any, Any, T]) -> T:
++    """Await ``coro`` on the I/O loop from any event loop.
++
++    Runs it directly if already on the I/O loop. Otherwise it is scheduled
++    there; contextvars carry over and cancelling the caller cancels it.
++    """
++    loop = get_io_loop()
++    if asyncio.get_running_loop() is loop:
++        return await coro
++    return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
++
++
++def run_on_io_loop_sync(coro: Coroutine[Any, Any, T]) -> T:
++    """Run ``coro`` on the I/O loop and block until it finishes.
++
++    For synchronous callers. Must not be called from the I/O loop thread.
++    """
++    return asyncio.run_coroutine_threadsafe(coro, get_io_loop()).result()
++
++
++def on_io_loop(
++    fn: Callable[P, Coroutine[Any, Any, T]],
++) -> Callable[P, Coroutine[Any, Any, T]]:
++    """Decorate an async method so its body always runs on the I/O loop."""
++
++    @functools.wraps(fn)
++    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
++        return await run_on_io_loop(fn(*args, **kwargs))
++
++    return wrapper
+diff --git a/lib/crewai/src/crewai/utilities/cache_config.py b/lib/crewai/src/crewai/utilities/cache_config.py
+new file mode 100644
+index 0000000000..24d35989bf
+--- /dev/null
++++ b/lib/crewai/src/crewai/utilities/cache_config.py
+@@ -0,0 +1,101 @@
++"""Shared cache configuration helpers for Valkey/Redis URL parsing."""
++
++from __future__ import annotations
++
++import logging
++import os
++from typing import Any
++from urllib.parse import unquote, urlparse
++
++
++_logger = logging.getLogger(__name__)
++
++
++def parse_cache_url() -> dict[str, Any] | None:
++    """Parse VALKEY_URL or REDIS_URL from environment.
++
++    Priority: VALKEY_URL > REDIS_URL.
++
++    Returns:
++        Dict with host, port, db, username, password keys, or None if no URL
++        is set.
++    """
++    url = os.environ.get("VALKEY_URL") or os.environ.get("REDIS_URL")
++    if not url:
++        return None
++    parsed = urlparse(url)
++    # urlparse leaves userinfo percent-encoded. Decode it (as redis-py's
++    # from_url does) so a secret containing "@", ":", "/" or "#" reaches the
++    # server as written rather than in its encoded form.
++    # A password-only URL (redis://:pw@host) yields username="". Normalize the
++    # empty string to None so credential builders can treat "no ACL user" as
++    # password-only auth instead of authenticating as a blank ACL user.
++    username = unquote(parsed.username) if parsed.username else None
++    password = unquote(parsed.password) if parsed.password is not None else None
++    return {
++        "host": parsed.hostname or "localhost",
++        "port": parsed.port or 6379,
++        "db": _parse_db_from_path(parsed.path),
++        "username": username,
++        "password": password,
++        "use_tls": parsed.scheme in ("rediss", "valkeys"),
++    }
++
++
++def _parse_db_from_path(path: str | None) -> int:
++    """Parse database number from URL path, defaulting to 0."""
++    if not path or path == "/":
++        return 0
++    try:
++        return int(path.lstrip("/"))
++    except ValueError:
++        _logger.warning(
++            "Invalid database number in URL path: %s, using default 0", path
++        )
++        return 0
++
++
++def get_aiocache_config() -> dict[str, Any]:
++    """Build an aiocache configuration dict from environment.
++
++    Uses VALKEY_URL or REDIS_URL (both are Redis-wire-compatible) to
++    configure ``aiocache.RedisCache``.  Falls back to
++    ``aiocache.SimpleMemoryCache`` when neither variable is set.
++
++    Returns:
++        Configuration dict suitable for ``aiocache.caches.set_config()``.
++    """
++    conn = parse_cache_url()
++    if conn is not None:
++        redis_config: dict[str, Any] = {
++            "cache": "aiocache.RedisCache",
++            "endpoint": conn["host"],
++            "port": conn["port"],
++            "db": conn.get("db", 0),
++            "password": conn.get("password"),
++        }
++        # Forward an ACL username when present (managed Valkey/Redis commonly
++        # requires it alongside the password). aiocache's RedisBackend takes
++        # endpoint/port/db/password/ssl as named arguments and forwards any
++        # other top-level key to BaseCache.__init__, which rejects "username"
++        # with a TypeError; the username must reach the underlying redis
++        # ConnectionPool via connection_pool_kwargs instead.
++        if conn.get("username"):
++            redis_config["connection_pool_kwargs"] = {"username": conn["username"]}
++        # Forward TLS for rediss:// / valkeys:// so the aiocache Redis path
++        # opens an encrypted connection instead of plaintext. "ssl" is a named
++        # RedisBackend argument (it selects redis.SSLConnection), so it is safe
++        # at the top level, unlike "username".
++        if conn.get("use_tls"):
++            redis_config["ssl"] = True
++        return {"default": redis_config}
++    return {
++        "default": {
++            "cache": "aiocache.SimpleMemoryCache",
++        }
++    }
++
++
++def use_valkey_cache() -> bool:
++    """Return True if VALKEY_URL is set in the environment."""
++    return bool(os.environ.get("VALKEY_URL"))
+diff --git a/lib/crewai/tests/a2a/utils/test_agent_card.py b/lib/crewai/tests/a2a/utils/test_agent_card.py
+index fb96710a79..b0bc5bf318 100644
+--- a/lib/crewai/tests/a2a/utils/test_agent_card.py
++++ b/lib/crewai/tests/a2a/utils/test_agent_card.py
+@@ -323,3 +323,27 @@ def test_json_excludes_none_values(self) -> None:
+         assert "provider" not in json_data
+         assert "documentationUrl" not in json_data
+         assert "iconUrl" not in json_data
++
++
++class TestAgentCardCacheIsolation:
++    """The agent-card pickle cache is pinned to its own SimpleMemoryCache.
++
++    Fetching an agent card must not reconfigure the process-wide aiocache
++    ``default`` alias, because the in-memory A2A cancel path relies on that
++    alias staying the same instance across a running poller and a later
++    ``cancel()``. Reconfiguring it would swap the instance and lose the flag.
++    """
++
++    def test_agent_card_module_does_not_reconfigure_default_cache(self) -> None:
++        # The clobbering helper and its unconditional caches.set_config call
++        # were removed; assert they are gone so this cannot regress.
++        from crewai.a2a.utils import agent_card
++
++        assert not hasattr(agent_card, "_ensure_cache_configured")
++
++    def test_default_cache_alias_is_stable_across_get(self) -> None:
++        from aiocache import caches
++
++        first = caches.get("default")
++        second = caches.get("default")
++        assert first is second
+diff --git a/lib/crewai/tests/a2a/utils/test_task.py b/lib/crewai/tests/a2a/utils/test_task.py
+index 781827ac83..dde6fd7d7f 100644
+--- a/lib/crewai/tests/a2a/utils/test_task.py
++++ b/lib/crewai/tests/a2a/utils/test_task.py
+@@ -372,4 +372,244 @@ async def slow_task(**kwargs: Any) -> str:
+             await cancel(mock_context, mock_event_queue)
+ 
+             with pytest.raises(asyncio.CancelledError):
+-                await execute_task
+\ No newline at end of file
++                await execute_task
++
++class TestValkeyExtraMissing:
++    """When VALKEY_URL is set but the optional valkey extra is not installed,
++    _ensure_task_cache must raise a clear, actionable ImportError instead of the
++    bare glide ImportError leaking from every cancellable A2A task.
++    """
++
++    def test_missing_valkey_extra_raises_clear_error(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        import builtins
++
++        import crewai.a2a.utils.task as task_mod
++
++        monkeypatch.setenv("VALKEY_URL", "valkey://localhost:6379")
++        # Reset the one-time init guard so _ensure_task_cache runs its body.
++        monkeypatch.setattr(task_mod, "_cache_initialized", False)
++        monkeypatch.setattr(task_mod, "_task_cache", None)
++
++        real_import = builtins.__import__
++
++        def _blocked_import(name: str, *args: Any, **kwargs: Any) -> Any:
++            if name == "crewai.memory.storage.valkey_cache" or name.endswith(
++                "valkey_cache"
++            ):
++                raise ImportError("No module named 'glide'")
++            return real_import(name, *args, **kwargs)
++
++        monkeypatch.setattr(builtins, "__import__", _blocked_import)
++
++        with pytest.raises(ImportError, match=r"crewai\[valkey\]"):
++            task_mod._ensure_task_cache()
++
++
++class _FlakyValkeyCache:
++    """Stand-in for ValkeyCache whose get() fails a set number of times."""
++
++    def __init__(self, get_failures: int, then: Any = None, delete_error: bool = False):
++        self.get_failures = get_failures
++        self.then = then
++        self.delete_error = delete_error
++        self.get_calls = 0
++
++    async def get(self, key: str) -> Any:
++        self.get_calls += 1
++        if self.get_calls <= self.get_failures:
++            raise RuntimeError("Cannot connect to Valkey. Check connection settings.")
++        return self.then
++
++    async def delete(self, key: str) -> bool:
++        if self.delete_error:
++            raise RuntimeError("Cannot connect to Valkey. Check connection settings.")
++        return True
++
++
++class TestCancelWatcherErrors:
++    """A Valkey error in the cancel watcher must never cancel a running task,
++    and a failing flag cleanup must not replace the task's outcome.
++    """
++
++    @pytest.fixture
++    def use_valkey(self, monkeypatch: pytest.MonkeyPatch) -> Any:
++        import crewai.a2a.utils.task as task_mod
++
++        def _install(fake: _FlakyValkeyCache) -> _FlakyValkeyCache:
++            monkeypatch.setattr(task_mod, "_cache_initialized", True)
++            monkeypatch.setattr(task_mod, "_task_cache", fake)
++            return fake
++
++        return _install
++
++    @pytest.mark.asyncio
++    async def test_unreachable_valkey_does_not_cancel_task(
++        self, mock_context: MagicMock, use_valkey: Any
++    ) -> None:
++        fake = use_valkey(_FlakyValkeyCache(get_failures=10_000))
++
++        @cancellable
++        async def work(context: RequestContext) -> str:
++            await asyncio.sleep(0.35)  # spans several 100ms polls
++            return "finished"
++
++        assert await work(mock_context) == "finished"
++        assert fake.get_calls >= 2  # it kept polling through the errors
++
++    @pytest.mark.asyncio
++    async def test_cancel_still_detected_after_transient_errors(
++        self, mock_context: MagicMock, use_valkey: Any
++    ) -> None:
++        use_valkey(_FlakyValkeyCache(get_failures=2, then=True))
++
++        @cancellable
++        async def slow(context: RequestContext) -> str:
++            await asyncio.sleep(5)
++            return "should not reach"
++
++        with pytest.raises(asyncio.CancelledError):
++            await slow(mock_context)
++
++    @pytest.mark.asyncio
++    async def test_error_streak_logged_once(
++        self, mock_context: MagicMock, use_valkey: Any
++    ) -> None:
++        import crewai.a2a.utils.task as task_mod
++
++        use_valkey(_FlakyValkeyCache(get_failures=10_000))
++
++        @cancellable
++        async def work(context: RequestContext) -> str:
++            await asyncio.sleep(0.35)
++            return "finished"
++
++        with patch.object(task_mod.logger, "warning") as warn:
++            await work(mock_context)
++
++        poll_warnings = [
++            c for c in warn.call_args_list if "continuing to poll" in c.args[0]
++        ]
++        assert len(poll_warnings) == 1
++
++    @pytest.mark.asyncio
++    async def test_cleanup_error_does_not_replace_result(
++        self, mock_context: MagicMock, use_valkey: Any
++    ) -> None:
++        use_valkey(_FlakyValkeyCache(get_failures=0, then=None, delete_error=True))
++
++        @cancellable
++        async def work(context: RequestContext) -> str:
++            return "finished"
++
++        assert await work(mock_context) == "finished"
++
++    @pytest.mark.asyncio
++    async def test_cleanup_error_does_not_mask_task_exception(
++        self, mock_context: MagicMock, use_valkey: Any
++    ) -> None:
++        use_valkey(_FlakyValkeyCache(get_failures=0, then=None, delete_error=True))
++
++        @cancellable
++        async def work(context: RequestContext) -> str:
++            raise ValueError("real failure")
++
++        with pytest.raises(ValueError, match="real failure"):
++            await work(mock_context)
++
++    @pytest.mark.asyncio
++    async def test_watcher_that_raises_is_not_a_cancel(
++        self, mock_context: MagicMock, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        # aiocache Redis path: a pub/sub error outside (OSError, ConnectionError)
++        # escapes the watcher. The decorator must not read that as a cancel.
++        import crewai.a2a.utils.task as task_mod
++
++        redis_like = MagicMock()  # not a SimpleMemoryCache, so pub/sub is used
++        redis_like.client.pubsub.side_effect = RuntimeError("pubsub unavailable")
++        redis_like.delete = AsyncMock(return_value=True)
++        fake_caches = MagicMock()
++        fake_caches.get.return_value = redis_like
++        monkeypatch.setattr(task_mod, "_cache_initialized", True)
++        monkeypatch.setattr(task_mod, "_task_cache", None)
++        monkeypatch.setattr(task_mod, "caches", fake_caches)
++
++        @cancellable
++        async def work(context: RequestContext) -> str:
++            await asyncio.sleep(0.05)
++            return "finished"
++
++        assert await work(mock_context) == "finished"
++
++
++class TestRedisCancelWatcherStaysArmed:
++    """aiocache Redis path: if pub/sub fails or its stream ends, the watcher
++    must fall back to polling so a later cancel() still stops the task.
++    """
++
++    @staticmethod
++    def _install(
++        monkeypatch: pytest.MonkeyPatch, redis_like: MagicMock
++    ) -> None:
++        import crewai.a2a.utils.task as task_mod
++
++        redis_like.delete = AsyncMock(return_value=True)
++        fake_caches = MagicMock()
++        fake_caches.get.return_value = redis_like
++        monkeypatch.setattr(task_mod, "_cache_initialized", True)
++        monkeypatch.setattr(task_mod, "_task_cache", None)
++        monkeypatch.setattr(task_mod, "caches", fake_caches)
++
++    @staticmethod
++    async def _run_until_cancelled(mock_context: MagicMock) -> None:
++        @cancellable
++        async def slow(context: RequestContext) -> str:
++            await asyncio.sleep(5)
++            return "should not reach"
++
++        with pytest.raises(asyncio.CancelledError):
++            await asyncio.wait_for(slow(mock_context), timeout=2)
++
++    @pytest.mark.asyncio
++    async def test_cancel_detected_after_pubsub_error(
++        self, mock_context: MagicMock, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        redis_like = MagicMock()
++        # e.g. an ACL NOPERM on SUBSCRIBE: not an OSError/ConnectionError.
++        redis_like.client.pubsub.side_effect = RuntimeError("NOPERM")
++        redis_like.get = AsyncMock(side_effect=[None, None, True])
++        self._install(monkeypatch, redis_like)
++
++        await self._run_until_cancelled(mock_context)
++
++    @pytest.mark.asyncio
++    async def test_cancel_detected_after_pubsub_stream_ends(
++        self, mock_context: MagicMock, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        async def no_messages() -> Any:
++            return
++            yield  # pragma: no cover - makes this an async generator
++
++        pubsub = MagicMock()
++        pubsub.subscribe = AsyncMock()
++        pubsub.listen = no_messages
++        redis_like = MagicMock()
++        redis_like.client.pubsub.return_value = pubsub
++        redis_like.get = AsyncMock(side_effect=[None, True])
++        self._install(monkeypatch, redis_like)
++
++        await self._run_until_cancelled(mock_context)
++
++    @pytest.mark.asyncio
++    async def test_cancel_detected_after_cache_get_errors(
++        self, mock_context: MagicMock, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        redis_like = MagicMock()
++        redis_like.client.pubsub.side_effect = OSError("connection reset")
++        redis_like.get = AsyncMock(
++            side_effect=[RuntimeError("redis down"), RuntimeError("redis down"), True]
++        )
++        self._install(monkeypatch, redis_like)
++
++        await self._run_until_cancelled(mock_context)
+diff --git a/lib/crewai/tests/memory/storage/test_valkey_cache.py b/lib/crewai/tests/memory/storage/test_valkey_cache.py
+new file mode 100644
+index 0000000000..3bb327b7a6
+--- /dev/null
++++ b/lib/crewai/tests/memory/storage/test_valkey_cache.py
+@@ -0,0 +1,617 @@
++"""Tests for ValkeyCache implementation."""
++
++from __future__ import annotations
++
++import json
++from unittest.mock import AsyncMock, MagicMock, patch
++
++import pytest
++
++from crewai.memory.storage.valkey_cache import ValkeyCache
++
++
++@pytest.fixture
++def mock_glide_client() -> AsyncMock:
++    """Create a mock GlideClient for testing."""
++    client = AsyncMock()
++    client.get = AsyncMock()
++    client.set = AsyncMock()
++    client.delete = AsyncMock()
++    client.exists = AsyncMock()
++    client.close = AsyncMock()
++    return client
++
++
++@pytest.fixture
++def valkey_cache(mock_glide_client: AsyncMock) -> ValkeyCache:
++    """Create a ValkeyCache instance with mocked client."""
++    cache = ValkeyCache(host="localhost", port=6379, db=0)
++
++    # Mock the client creation to return our mock
++    async def mock_create_client() -> AsyncMock:
++        cache._client = mock_glide_client
++        return mock_glide_client
++
++    cache._get_client = mock_create_client  # type: ignore[method-assign]
++    return cache
++
++
++class TestValkeyCacheBasicOperations:
++    """Tests for basic ValkeyCache operations (get/set/delete/exists)."""
++
++    @pytest.mark.asyncio
++    async def test_set_and_get_string_value(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting and getting a string value."""
++        # Mock get to return serialized string
++        mock_glide_client.get.return_value = json.dumps("test_value")
++
++        # Set value
++        await valkey_cache.set("test_key", "test_value")
++
++        # Verify set was called
++        mock_glide_client.set.assert_called_once()
++        call_args = mock_glide_client.set.call_args
++        assert call_args[0][0] == "test_key"
++        assert call_args[0][1] == json.dumps("test_value")
++
++        # Get value
++        result = await valkey_cache.get("test_key")
++
++        # Verify get was called and result is correct
++        mock_glide_client.get.assert_called_once_with("test_key")
++        assert result == "test_value"
++
++    @pytest.mark.asyncio
++    async def test_set_and_get_dict_value(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting and getting a dictionary value."""
++        test_dict = {"key1": "value1", "key2": 42, "key3": [1, 2, 3]}
++        mock_glide_client.get.return_value = json.dumps(test_dict)
++
++        # Set value
++        await valkey_cache.set("dict_key", test_dict)
++
++        # Verify set was called with serialized dict
++        mock_glide_client.set.assert_called_once()
++        call_args = mock_glide_client.set.call_args
++        assert call_args[0][0] == "dict_key"
++        assert call_args[0][1] == json.dumps(test_dict)
++
++        # Get value
++        result = await valkey_cache.get("dict_key")
++
++        # Verify result matches original dict
++        assert result == test_dict
++
++    @pytest.mark.asyncio
++    async def test_set_and_get_list_value(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting and getting a list value."""
++        test_list = [1, "two", 3.0, {"nested": "dict"}]
++        mock_glide_client.get.return_value = json.dumps(test_list)
++
++        await valkey_cache.set("list_key", test_list)
++        result = await valkey_cache.get("list_key")
++
++        assert result == test_list
++
++    @pytest.mark.asyncio
++    async def test_get_nonexistent_key_returns_none(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test getting a non-existent key returns None."""
++        mock_glide_client.get.return_value = None
++
++        result = await valkey_cache.get("nonexistent_key")
++
++        assert result is None
++        mock_glide_client.get.assert_called_once_with("nonexistent_key")
++
++    @pytest.mark.asyncio
++    async def test_delete_key(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test deleting a key."""
++        await valkey_cache.delete("test_key")
++
++        mock_glide_client.delete.assert_called_once_with(["test_key"])
++
++    @pytest.mark.asyncio
++    async def test_exists_returns_true_for_existing_key(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test exists returns True for existing key."""
++        mock_glide_client.exists.return_value = 1
++
++        result = await valkey_cache.exists("existing_key")
++
++        assert result is True
++        mock_glide_client.exists.assert_called_once_with(["existing_key"])
++
++    @pytest.mark.asyncio
++    async def test_exists_returns_false_for_nonexistent_key(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test exists returns False for non-existent key."""
++        mock_glide_client.exists.return_value = 0
++
++        result = await valkey_cache.exists("nonexistent_key")
++
++        assert result is False
++        mock_glide_client.exists.assert_called_once_with(["nonexistent_key"])
++
++
++class TestValkeyCacheTTL:
++    """Tests for ValkeyCache TTL functionality."""
++
++    @pytest.mark.asyncio
++    async def test_set_with_explicit_ttl(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting a value with explicit TTL."""
++        await valkey_cache.set("ttl_key", "value", ttl=3600)
++
++        # Verify set was called with expiry
++        mock_glide_client.set.assert_called_once()
++        call_args = mock_glide_client.set.call_args
++        assert call_args[0][0] == "ttl_key"
++        assert call_args[0][1] == json.dumps("value")
++        assert "expiry" in call_args[1]
++
++    @pytest.mark.asyncio
++    async def test_set_with_default_ttl(
++        self, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting a value with default TTL from constructor."""
++        cache = ValkeyCache(host="localhost", port=6379, default_ttl=1800)
++
++        async def mock_create_client() -> AsyncMock:
++            cache._client = mock_glide_client
++            return mock_glide_client
++
++        cache._get_client = mock_create_client  # type: ignore[method-assign]
++
++        await cache.set("default_ttl_key", "value")
++
++        # Verify set was called with default TTL
++        mock_glide_client.set.assert_called_once()
++        call_args = mock_glide_client.set.call_args
++        assert "expiry" in call_args[1]
++
++    @pytest.mark.asyncio
++    async def test_set_without_ttl(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting a value without TTL (no expiration)."""
++        await valkey_cache.set("no_ttl_key", "value")
++
++        # Verify set was called without expiry
++        mock_glide_client.set.assert_called_once()
++        call_args = mock_glide_client.set.call_args
++        assert call_args[0][0] == "no_ttl_key"
++        assert call_args[0][1] == json.dumps("value")
++        # Should not have expiry parameter
++        assert "expiry" not in call_args[1] or call_args[1].get("expiry") is None
++
++    @pytest.mark.asyncio
++    async def test_set_with_zero_ttl_no_expiration(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting a value with TTL=0 means no expiration."""
++        await valkey_cache.set("zero_ttl_key", "value", ttl=0)
++
++        # Verify set was called without expiry
++        mock_glide_client.set.assert_called_once()
++        call_args = mock_glide_client.set.call_args
++        assert "expiry" not in call_args[1] or call_args[1].get("expiry") is None
++
++    @pytest.mark.asyncio
++    async def test_explicit_ttl_overrides_default(
++        self, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test explicit TTL overrides default TTL."""
++        cache = ValkeyCache(host="localhost", port=6379, default_ttl=1800)
++
++        async def mock_create_client() -> AsyncMock:
++            cache._client = mock_glide_client
++            return mock_glide_client
++
++        cache._get_client = mock_create_client  # type: ignore[method-assign]
++
++        await cache.set("override_key", "value", ttl=7200)
++
++        # Verify set was called with explicit TTL (7200), not default (1800)
++        mock_glide_client.set.assert_called_once()
++        call_args = mock_glide_client.set.call_args
++        assert "expiry" in call_args[1]
++
++
++class TestValkeyCacheJSONSerialization:
++    """Tests for ValkeyCache JSON serialization edge cases."""
++
++    @pytest.mark.asyncio
++    async def test_serialize_none_value(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test serializing None value."""
++        mock_glide_client.get.return_value = json.dumps(None)
++
++        await valkey_cache.set("none_key", None)
++        result = await valkey_cache.get("none_key")
++
++        assert result is None
++
++    @pytest.mark.asyncio
++    async def test_serialize_boolean_values(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test serializing boolean values."""
++        mock_glide_client.get.side_effect = [
++            json.dumps(True),
++            json.dumps(False),
++        ]
++
++        await valkey_cache.set("true_key", True)
++        await valkey_cache.set("false_key", False)
++
++        result_true = await valkey_cache.get("true_key")
++        result_false = await valkey_cache.get("false_key")
++
++        assert result_true is True
++        assert result_false is False
++
++    @pytest.mark.asyncio
++    async def test_serialize_numeric_values(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test serializing numeric values (int, float)."""
++        mock_glide_client.get.side_effect = [
++            json.dumps(42),
++            json.dumps(3.14159),
++            json.dumps(0),
++            json.dumps(-100),
++        ]
++
++        await valkey_cache.set("int_key", 42)
++        await valkey_cache.set("float_key", 3.14159)
++        await valkey_cache.set("zero_key", 0)
++        await valkey_cache.set("negative_key", -100)
++
++        assert await valkey_cache.get("int_key") == 42
++        assert await valkey_cache.get("float_key") == 3.14159
++        assert await valkey_cache.get("zero_key") == 0
++        assert await valkey_cache.get("negative_key") == -100
++
++    @pytest.mark.asyncio
++    async def test_serialize_empty_collections(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test serializing empty collections."""
++        mock_glide_client.get.side_effect = [
++            json.dumps([]),
++            json.dumps({}),
++            json.dumps(""),
++        ]
++
++        await valkey_cache.set("empty_list", [])
++        await valkey_cache.set("empty_dict", {})
++        await valkey_cache.set("empty_string", "")
++
++        assert await valkey_cache.get("empty_list") == []
++        assert await valkey_cache.get("empty_dict") == {}
++        assert await valkey_cache.get("empty_string") == ""
++
++    @pytest.mark.asyncio
++    async def test_serialize_nested_structures(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test serializing deeply nested structures."""
++        nested_data = {
++            "level1": {
++                "level2": {
++                    "level3": [1, 2, {"level4": "deep"}]
++                }
++            },
++            "list": [{"a": 1}, {"b": 2}]
++        }
++        mock_glide_client.get.return_value = json.dumps(nested_data)
++
++        await valkey_cache.set("nested_key", nested_data)
++        result = await valkey_cache.get("nested_key")
++
++        assert result == nested_data
++
++    @pytest.mark.asyncio
++    async def test_deserialize_invalid_json_returns_none(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test deserializing invalid JSON returns None and logs warning."""
++        mock_glide_client.get.return_value = "invalid json {{"
++
++        with patch("crewai.memory.storage.valkey_cache._logger") as mock_logger:
++            result = await valkey_cache.get("invalid_key")
++
++            assert result is None
++            mock_logger.warning.assert_called_once()
++
++    @pytest.mark.asyncio
++    async def test_serialize_unicode_strings(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test serializing unicode strings."""
++        unicode_data = "Hello 世界 🌍 Привет"
++        mock_glide_client.get.return_value = json.dumps(unicode_data)
++
++        await valkey_cache.set("unicode_key", unicode_data)
++        result = await valkey_cache.get("unicode_key")
++
++        assert result == unicode_data
++
++
++class TestValkeyCacheConnectionManagement:
++    """Tests for ValkeyCache connection management."""
++
++    @pytest.mark.asyncio
++    async def test_lazy_client_initialization(self) -> None:
++        """Test client is initialized lazily on first use."""
++        cache = ValkeyCache(host="localhost", port=6379)
++
++        # Client should be None initially
++        assert cache._client is None
++
++        # Mock GlideClient.create
++        with patch("crewai.memory.storage.valkey_cache.GlideClient") as mock_glide:
++            mock_client = AsyncMock()
++            mock_glide.create = AsyncMock(return_value=mock_client)
++            mock_client.get = AsyncMock(return_value=None)
++
++            # First operation should initialize client
++            await cache.get("test_key")
++
++            # Client should now be initialized
++            assert cache._client is not None
++            mock_glide.create.assert_called_once()
++
++    @pytest.mark.asyncio
++    async def test_client_reuse_across_operations(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test client is reused across multiple operations."""
++        mock_glide_client.get.return_value = json.dumps("value")
++        mock_glide_client.exists.return_value = 1
++
++        # Perform multiple operations
++        await valkey_cache.get("key1")
++        await valkey_cache.set("key2", "value2")
++        await valkey_cache.exists("key3")
++        await valkey_cache.delete("key4")
++
++        # _get_client should return the same client instance
++        client1 = await valkey_cache._get_client()
++        client2 = await valkey_cache._get_client()
++        assert client1 is client2
++
++    @pytest.mark.asyncio
++    async def test_close_connection(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test closing the client connection."""
++        # Initialize client
++        await valkey_cache._get_client()
++        assert valkey_cache._client is not None
++
++        # Close connection
++        await valkey_cache.close()
++
++        # Verify close was called and client is None
++        mock_glide_client.close.assert_called_once()
++        assert valkey_cache._client is None
++
++    @pytest.mark.asyncio
++    async def test_connection_error_raises_runtime_error(self) -> None:
++        """Test connection error raises RuntimeError with descriptive message."""
++        cache = ValkeyCache(host="invalid-host", port=9999)
++
++        with patch("crewai.memory.storage.valkey_cache.GlideClient") as mock_glide:
++            mock_glide.create = AsyncMock(side_effect=Exception("Connection refused"))
++
++            with pytest.raises(RuntimeError) as exc_info:
++                await cache._get_client()
++
++            assert "Cannot connect to Valkey" in str(exc_info.value)
++
++    @pytest.mark.asyncio
++    async def test_authentication_with_password(self) -> None:
++        """Test client initialization with password authentication."""
++        cache = ValkeyCache(
++            host="localhost",
++            port=6379,
++            password="secret_password"
++        )
++
++        with patch("crewai.memory.storage.valkey_cache.GlideClient") as mock_glide:
++            mock_client = AsyncMock()
++            mock_glide.create = AsyncMock(return_value=mock_client)
++
++            await cache._get_client()
++
++            # Verify GlideClient.create was called with credentials
++            mock_glide.create.assert_called_once()
++            config = mock_glide.create.call_args[0][0]
++            assert hasattr(config, "credentials")
++
++
++class TestValkeyCacheEdgeCases:
++    """Tests for ValkeyCache edge cases and error conditions."""
++
++    @pytest.mark.asyncio
++    async def test_set_with_special_characters_in_key(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test setting values with special characters in key."""
++        special_keys = [
++            "key:with:colons",
++            "key/with/slashes",
++            "key-with-dashes",
++            "key_with_underscores",
++            "key.with.dots",
++        ]
++
++        for key in special_keys:
++            await valkey_cache.set(key, "value")
++            mock_glide_client.set.assert_called()
++
++    @pytest.mark.asyncio
++    async def test_large_value_serialization(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test serializing large values."""
++        large_list = list(range(10000))
++        mock_glide_client.get.return_value = json.dumps(large_list)
++
++        await valkey_cache.set("large_key", large_list)
++        result = await valkey_cache.get("large_key")
++
++        assert result == large_list
++
++    @pytest.mark.asyncio
++    async def test_concurrent_operations(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test concurrent cache operations."""
++        import asyncio
++
++        mock_glide_client.get.return_value = json.dumps("value")
++
++        # Perform concurrent operations
++        tasks = [
++            valkey_cache.set(f"key{i}", f"value{i}")
++            for i in range(10)
++        ]
++        await asyncio.gather(*tasks)
++
++        # Verify all operations completed
++        assert mock_glide_client.set.call_count == 10
++
++    @pytest.mark.asyncio
++    async def test_set_non_serializable_value_raises_type_error(
++        self, valkey_cache: ValkeyCache, mock_glide_client: AsyncMock
++    ) -> None:
++        """Test that non-JSON-serializable values raise TypeError."""
++        from datetime import datetime
++
++        with pytest.raises(TypeError, match="not JSON-serializable"):
++            await valkey_cache.set("bad_key", datetime.now())
++
++        # Verify set was never called on the client
++        mock_glide_client.set.assert_not_called()
++
++
++class TestValkeyCacheEventLoopRebind:
++    """UploadCache's sync methods each call asyncio.run(), and callers may sit
++    on different loops in different threads. All GLIDE work runs on the shared
++    Valkey I/O loop, so one client serves every caller.
++    """
++
++    def test_one_client_shared_across_event_loops(self) -> None:
++        import asyncio
++
++        from crewai.memory.storage.valkey_io_loop import get_io_loop
++
++        cache = ValkeyCache(host="localhost", port=6379, db=0)
++        created_on: list[asyncio.AbstractEventLoop] = []
++        created: list[AsyncMock] = []
++
++        async def fake_create(_config: object) -> AsyncMock:
++            created_on.append(asyncio.get_running_loop())
++            client = AsyncMock()
++            client.get.return_value = None
++            created.append(client)
++            return client
++
++        with patch(
++            "crewai.memory.storage.valkey_cache.GlideClient.create",
++            side_effect=fake_create,
++        ):
++            # Two separate asyncio.run() calls => two different, closed loops.
++            asyncio.run(cache.get("k"))
++            asyncio.run(cache.get("k"))
++
++        assert len(created) == 1
++        assert created_on[0] is get_io_loop()
++        assert created[0].get.await_count == 2
++        created[0].close.assert_not_awaited()
++
++    def test_loops_in_other_threads_share_client_during_creation(self) -> None:
++        """A caller on another loop arriving while the client is still being
++        created must wait for that client, not start a second one or close it.
++        """
++        import asyncio
++        import threading
++
++        cache = ValkeyCache(host="localhost", port=6379, db=0)
++        created: list[AsyncMock] = []
++        creating = threading.Event()
++        release = threading.Event()
++        got: dict[str, object] = {}
++
++        async def fake_create(_config: object) -> AsyncMock:
++            creating.set()
++            await asyncio.to_thread(release.wait, 5)
++            client = AsyncMock()
++            created.append(client)
++            return client
++
++        async def first() -> None:
++            got["first"] = await cache._get_client()
++
++        async def second() -> None:
++            await asyncio.to_thread(creating.wait, 5)
++            pending = asyncio.ensure_future(cache._get_client())
++            await asyncio.sleep(0.05)  # let it reach the creation lock
++            release.set()
++            got["second"] = await pending
++
++        with patch(
++            "crewai.memory.storage.valkey_cache.GlideClient.create",
++            side_effect=fake_create,
++        ):
++            t = threading.Thread(target=asyncio.run, args=(first(),))
++            t.start()
++            asyncio.run(second())
++            t.join(5)
++
++        assert len(created) == 1
++        assert got["first"] is got["second"] is created[0]
++        created[0].close.assert_not_awaited()
++
++    def test_concurrent_callers_share_one_client(self) -> None:
++        import asyncio
++
++        cache = ValkeyCache(host="localhost", port=6379, db=0)
++        created: list[AsyncMock] = []
++
++        async def fake_create(_config: object) -> AsyncMock:
++            # Yield so overlapping callers interleave before the client is set.
++            await asyncio.sleep(0)
++            client = AsyncMock()
++            created.append(client)
++            return client
++
++        async def hammer() -> None:
++            with patch(
++                "crewai.memory.storage.valkey_cache.GlideClient.create",
++                side_effect=fake_create,
++            ):
++                clients = await asyncio.gather(
++                    *(cache._get_client() for _ in range(10))
++                )
++            # The double-check lock must collapse the burst to a single client.
++            assert len(created) == 1
++            assert all(c is created[0] for c in clients)
++
++        asyncio.run(hammer())
+diff --git a/lib/crewai/tests/utilities/test_cache_config.py b/lib/crewai/tests/utilities/test_cache_config.py
+new file mode 100644
+index 0000000000..db84c2896d
+--- /dev/null
++++ b/lib/crewai/tests/utilities/test_cache_config.py
+@@ -0,0 +1,294 @@
++"""Tests for shared cache configuration helpers."""
++
++from __future__ import annotations
++
++from collections.abc import Iterator
++import os
++from unittest.mock import patch
++
++import pytest
++
++from crewai.utilities.cache_config import (
++    get_aiocache_config,
++    parse_cache_url,
++    use_valkey_cache,
++)
++
++
++class TestParseCacheUrl:
++    """Tests for parse_cache_url()."""
++
++    def test_returns_none_when_no_env_vars(self) -> None:
++        with patch.dict(os.environ, {}, clear=True):
++            assert parse_cache_url() is None
++
++    def test_parses_valkey_url(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://myhost:6380/2"}, clear=True
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["host"] == "myhost"
++            assert result["port"] == 6380
++            assert result["db"] == 2
++            assert result["password"] is None
++
++    def test_parses_redis_url(self) -> None:
++        with patch.dict(
++            os.environ, {"REDIS_URL": "redis://localhost:6379/0"}, clear=True
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["host"] == "localhost"
++            assert result["port"] == 6379
++            assert result["db"] == 0
++
++    def test_valkey_url_takes_priority_over_redis_url(self) -> None:
++        with patch.dict(
++            os.environ,
++            {
++                "VALKEY_URL": "redis://valkey-host:6380/1",
++                "REDIS_URL": "redis://redis-host:6379/0",
++            },
++            clear=True,
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["host"] == "valkey-host"
++            assert result["port"] == 6380
++
++    def test_parses_password(self) -> None:
++        with patch.dict(
++            os.environ,
++            {"VALKEY_URL": "redis://:s3cret@myhost:6379/0"},
++            clear=True,
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["password"] == "s3cret"
++
++    def test_defaults_for_minimal_url(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://myhost"}, clear=True
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["host"] == "myhost"
++            assert result["port"] == 6379
++            assert result["db"] == 0
++            assert result["password"] is None
++
++    def test_non_numeric_db_path_defaults_to_zero(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://myhost:6379/mydb"}, clear=True
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["db"] == 0
++
++
++class TestGetAiocacheConfig:
++    """Tests for get_aiocache_config()."""
++
++    @pytest.fixture(autouse=True)
++    def _restore_aiocache_config(self) -> Iterator[None]:
++        # Some tests install the generated config into aiocache's process-wide
++        # registry to prove it constructs; put the original back afterwards so
++        # later tests don't inherit a Redis-backed default cache.
++        from copy import deepcopy
++
++        from aiocache import caches
++
++        original = deepcopy(caches.get_config())
++        yield
++        caches.set_config(original)
++
++    def test_returns_memory_cache_when_no_url(self) -> None:
++        with patch.dict(os.environ, {}, clear=True):
++            config = get_aiocache_config()
++            assert config["default"]["cache"] == "aiocache.SimpleMemoryCache"
++
++    def test_returns_redis_cache_when_url_set(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://myhost:6380/2"}, clear=True
++        ):
++            config = get_aiocache_config()
++            assert config["default"]["cache"] == "aiocache.RedisCache"
++            assert config["default"]["endpoint"] == "myhost"
++            assert config["default"]["port"] == 6380
++            assert config["default"]["db"] == 2
++
++    def test_forwards_tls_for_rediss_scheme(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "rediss://myhost:6380/2"}, clear=True
++        ):
++            config = get_aiocache_config()
++            assert config["default"]["ssl"] is True
++
++    def test_no_ssl_flag_for_plaintext_scheme(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://myhost:6380/2"}, clear=True
++        ):
++            config = get_aiocache_config()
++            assert "ssl" not in config["default"]
++
++    def test_username_routed_through_connection_pool_kwargs(self) -> None:
++        # aiocache's RedisCache forwards unknown top-level keys to
++        # BaseCache.__init__, which rejects "username". The username must be
++        # nested under connection_pool_kwargs so it reaches the redis pool.
++        with patch.dict(
++            os.environ,
++            {"VALKEY_URL": "redis://acluser:pw@myhost:6379/0"},
++            clear=True,
++        ):
++            config = get_aiocache_config()
++            default = config["default"]
++            assert "username" not in default
++            assert default["connection_pool_kwargs"] == {"username": "acluser"}
++
++    def test_password_only_url_omits_username_kwargs(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://:pw@myhost:6379/0"}, clear=True
++        ):
++            config = get_aiocache_config()
++            default = config["default"]
++            assert "username" not in default
++            assert "connection_pool_kwargs" not in default
++            assert default["password"] == "pw"
++
++    def test_username_config_constructs_without_typeerror(self) -> None:
++        # Regression: a URL with userinfo used to inject a top-level "username"
++        # key that crashed RedisCache construction with a TypeError.
++        aiocache = pytest.importorskip("aiocache")
++        with patch.dict(
++            os.environ,
++            {"VALKEY_URL": "redis://acluser:pw@localhost:6379/0"},
++            clear=True,
++        ):
++            config = get_aiocache_config()
++        aiocache.caches.set_config(config)
++        cache = aiocache.caches.get("default")  # must not raise
++        pool_kwargs = cache.client.connection_pool.connection_kwargs
++        assert pool_kwargs.get("username") == "acluser"
++        assert pool_kwargs.get("password") == "pw"
++
++    @pytest.mark.parametrize(
++        "url", ["rediss://localhost:6380/0", "rediss://acluser:pw@localhost:6380/0"]
++    )
++    def test_tls_config_constructs_ssl_connection(self, url: str) -> None:
++        # "ssl" is a named RedisBackend argument, so a top-level ssl=True must
++        # construct (not be forwarded to BaseCache) and select SSLConnection.
++        aiocache = pytest.importorskip("aiocache")
++        with patch.dict(os.environ, {"VALKEY_URL": url}, clear=True):
++            config = get_aiocache_config()
++        aiocache.caches.set_config(config)
++        cache = aiocache.caches.get("default")  # must not raise
++        pool = cache.client.connection_pool
++        assert pool.connection_class.__name__ == "SSLConnection"
++
++
++class TestParseCacheUrlUsername:
++    """Username normalization in parse_cache_url()."""
++
++    def test_password_only_url_normalizes_empty_username_to_none(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://:pw@myhost:6379/0"}, clear=True
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            # Empty string would authenticate as a blank ACL user under GLIDE.
++            assert result["username"] is None
++            assert result["password"] == "pw"
++
++    def test_acl_username_preserved(self) -> None:
++        with patch.dict(
++            os.environ,
++            {"VALKEY_URL": "redis://acluser:pw@myhost:6379/0"},
++            clear=True,
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["username"] == "acluser"
++
++
++class TestParseCacheUrlPercentEncoding:
++    """URL userinfo is percent-encoded; credentials must reach the server
++    decoded, the same way redis-py's from_url treats them.
++    """
++
++    def test_decodes_reserved_characters_in_credentials(self) -> None:
++        with patch.dict(
++            os.environ,
++            {"VALKEY_URL": "redis://us%40er:p%40ss%3Aw%2Fo%23rd@myhost:6379/0"},
++            clear=True,
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["username"] == "us@er"
++            assert result["password"] == "p@ss:w/o#rd"
++            assert result["host"] == "myhost"
++
++    def test_password_only_url_with_encoded_password(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://:p%25w@myhost:6379/0"}, clear=True
++        ):
++            result = parse_cache_url()
++            assert result is not None
++            assert result["username"] is None
++            assert result["password"] == "p%w"
++
++    def test_decoded_password_reaches_aiocache_config(self) -> None:
++        with patch.dict(
++            os.environ, {"REDIS_URL": "redis://:p%40ss@myhost:6379/0"}, clear=True
++        ):
++            assert get_aiocache_config()["default"]["password"] == "p@ss"
++
++
++class TestUseValkeyCache:
++    """Tests for use_valkey_cache()."""
++
++    def test_returns_false_when_not_set(self) -> None:
++        with patch.dict(os.environ, {}, clear=True):
++            assert use_valkey_cache() is False
++
++    def test_returns_true_when_set(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://localhost:6379"}, clear=True
++        ):
++            assert use_valkey_cache() is True
++
++    def test_returns_false_when_only_redis_url_set(self) -> None:
++        with patch.dict(
++            os.environ, {"REDIS_URL": "redis://localhost:6379"}, clear=True
++        ):
++            assert use_valkey_cache() is False
++
++
++class TestCacheUrlUsername:
++    """ACL username in VALKEY_URL/REDIS_URL must be parsed and forwarded."""
++
++    def test_parse_cache_url_reads_username(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://alice:s3cret@host:6379/0"}, clear=True
++        ):
++            conn = parse_cache_url()
++            assert conn is not None
++            assert conn["username"] == "alice"
++            assert conn["password"] == "s3cret"
++
++    def test_get_aiocache_config_forwards_username(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://alice:s3cret@host:6379/0"}, clear=True
++        ):
++            config = get_aiocache_config()
++            # Nested under connection_pool_kwargs, not a top-level key, because
++            # aiocache's BaseCache rejects an unknown "username" argument.
++            assert "username" not in config["default"]
++            assert config["default"]["connection_pool_kwargs"] == {"username": "alice"}
++
++    def test_no_username_key_when_absent(self) -> None:
++        with patch.dict(
++            os.environ, {"VALKEY_URL": "redis://:s3cret@host:6379/0"}, clear=True
++        ):
++            config = get_aiocache_config()
++            assert "username" not in config["default"]
+diff --git a/uv.lock b/uv.lock
+index abf0ed28e2..002e5b5b48 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1569,6 +1569,9 @@ spreadsheets = [
+ tools = [
+     { name = "crewai-tools" },
+ ]
++valkey = [
++    { name = "valkey-glide" },
++]
+ voyageai = [
+     { name = "voyageai" },
+ ]
+@@ -1636,9 +1639,10 @@ requires-dist = [
+     { name = "tokenizers", specifier = ">=0.21,<1" },
+     { name = "tomli", specifier = "~=2.0.2" },
+     { name = "tomli-w", specifier = "~=1.1.0" },
++    { name = "valkey-glide", marker = "extra == 'valkey'", specifier = ">=2.5.2,<3" },
+     { name = "voyageai", marker = "extra == 'voyageai'", specifier = "~=0.3.5" },
+ ]
+-provides-extras = ["a2a", "anthropic", "aws", "azure-ai-inference", "bedrock", "docling", "embeddings", "file-processing", "google-genai", "litellm", "mem0", "openpyxl", "pandas", "qdrant", "qdrant-edge", "spreadsheets", "tools", "voyageai", "watson"]
++provides-extras = ["a2a", "anthropic", "aws", "azure-ai-inference", "bedrock", "docling", "embeddings", "file-processing", "google-genai", "litellm", "mem0", "openpyxl", "pandas", "qdrant", "qdrant-edge", "spreadsheets", "tools", "valkey", "voyageai", "watson"]
+ 
+ [[package]]
+ name = "crewai-cli"
+@@ -10991,6 +10995,41 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/fa/6e/3e955517e22cbdd565f2f8b2e73d52528b14b8bcfdb04f62466b071de847/validators-0.35.0-py3-none-any.whl", hash = "sha256:e8c947097eae7892cb3d26868d637f79f47b4a0554bc6b80065dfe5aac3705dd", size = 44712, upload-time = "2025-05-01T05:42:04.203Z" },
+ ]
+ 
++[[package]]
++name = "valkey-glide"
++version = "2.6.0"
++source = { registry = "https://pypi.org/simple" }
++dependencies = [
++    { name = "anyio" },
++    { name = "cffi" },
++    { name = "protobuf" },
++    { name = "sniffio" },
++    { name = "typing-extensions", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
++]
++sdist = { url = "https://files.pythonhosted.org/packages/98/e2/53e6c5d45fea4f4ba5f3a4b867871080a4f0ed1615cf857356d9dafde775/valkey_glide-2.6.0.tar.gz", hash = "sha256:6bbd850cf59943b77c7567579e1a9c74dcc972f8ebcbe8133abbc069e4401667", size = 1702273, upload-time = "2026-11-06T04:49:35.281Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/24/9b/a1518d0d8d200e3405322e36a0352e71658061c56dcdb229bf1601f042e2/valkey_glide-2.6.0-cp310-cp310-macosx_10_7_x86_64.whl", hash = "sha256:b7c5ab64328f15602e094bf91024b330eb9a49dab593fc4242b64fbe8e050635", size = 16774515, upload-time = "2026-11-06T04:48:01.243Z" },
++    { url = "https://files.pythonhosted.org/packages/ac/29/1c1cae3ad311c258fd1dd59490c1437b0fe962f13d58c38e7f2b853bd0a6/valkey_glide-2.6.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:3abaa4fa635944881adac415bbf743688ec6ea56f98b408e8bb1b78bad6d7b98", size = 14996532, upload-time = "2026-11-06T04:48:05.035Z" },
++    { url = "https://files.pythonhosted.org/packages/28/2c/51d94469dd4d997639c8e985f65047a837327664f11f8d8bed37bc746ae6/valkey_glide-2.6.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:01d7252c5e47c870d708dc2e8741d0f8c56bcb807a4a2652e768736e20c3a239", size = 16813170, upload-time = "2026-11-06T04:48:08.228Z" },
++    { url = "https://files.pythonhosted.org/packages/4b/72/4bda013be78d32af597efa1cb58070735c46541568dfb9afeb5d5b3c9db4/valkey_glide-2.6.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:17042345d9c06e4eb34b3cb5206e20874dc899f2e9d7728c5b2521ae147ab46d", size = 17638223, upload-time = "2026-11-06T04:48:11.665Z" },
++    { url = "https://files.pythonhosted.org/packages/62/e6/57372ba8d781c177cf415fbf43f66a75deaa28997cf088688d5ab97a9af4/valkey_glide-2.6.0-cp311-cp311-macosx_10_7_x86_64.whl", hash = "sha256:de405f156e429f58f3a03c5d97461aec4fea67e621ba4ed90a526a2dc999f92d", size = 16779139, upload-time = "2026-11-06T04:48:15.062Z" },
++    { url = "https://files.pythonhosted.org/packages/34/ba/5ced7f610620391d46ec051bff1e7202845b8e57b17fcab50afa5d12b35a/valkey_glide-2.6.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:50aca4a45e09821cbc2f9f41f30dadc2d62b7876a1153033884ad175d627713c", size = 14981447, upload-time = "2026-11-06T04:48:18.586Z" },
++    { url = "https://files.pythonhosted.org/packages/35/57/59c5a115b778cb3fd0963773721d52f86810aac6e9ef510c8defe7a41455/valkey_glide-2.6.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e4927629130c448a9e2a197066a4b130378ee2c4142993d23899d24ab26cf93a", size = 16805384, upload-time = "2026-11-06T04:48:21.785Z" },
++    { url = "https://files.pythonhosted.org/packages/93/f7/6da6fe23ae4c4e5a0f8600f723941668f39d850a62a2f0074642ede7ac1f/valkey_glide-2.6.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3efe52baa4c4167136f6625411dbd3d5f2ea8b8b0440ca5ac9441a6cf188d2bb", size = 17638604, upload-time = "2026-11-06T04:48:25.322Z" },
++    { url = "https://files.pythonhosted.org/packages/e4/db/23cc08329d7cf354a735f428792449a8f4663a2d5282f6eb26d94b195485/valkey_glide-2.6.0-cp312-cp312-macosx_10_7_x86_64.whl", hash = "sha256:ca8e81c8bd9ad65adbad29488e887b89d63059d2016cced0528db38494b90782", size = 16769365, upload-time = "2026-11-06T04:48:28.962Z" },
++    { url = "https://files.pythonhosted.org/packages/7f/dd/295c1ab33f9db07377644ba2fb2ecebdb3db1ba6a21aaa18f81bc7e6d0c3/valkey_glide-2.6.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:dba2568d5d2e468155d99f6b6438170ce14a186dbf8ddcad3f33b7f7594b3959", size = 14977215, upload-time = "2026-11-06T04:48:32.389Z" },
++    { url = "https://files.pythonhosted.org/packages/20/8a/b8568356d22ec3171c431fdc354726dc43e9f2ae170604b15e5fcc5fa816/valkey_glide-2.6.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9bd81ab7d17f19c0e62881734eddb90a1421eae710aab4ec6098cfc5818a1fc2", size = 16798680, upload-time = "2026-11-06T04:48:35.739Z" },
++    { url = "https://files.pythonhosted.org/packages/e8/eb/7f43becd72aad3ba74a77d3973beb6722061d52087dfeb9993e7a6589bae/valkey_glide-2.6.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:27a618f2aaed1260f81a0a59aebbf3fe0ad5fcf3adfa7d62db2499468834a314", size = 17640439, upload-time = "2026-11-06T04:48:39.358Z" },
++    { url = "https://files.pythonhosted.org/packages/a5/b7/f064590b911c018f80e7297c0edd8333fb91b41db7e615b9721cfb3c96a5/valkey_glide-2.6.0-cp313-cp313-macosx_10_7_x86_64.whl", hash = "sha256:6f9e58dc15f1eb62516fee5697abdbffc8c953ec0284be7de65d57403f2d0acd", size = 16773533, upload-time = "2026-11-06T04:48:42.591Z" },
++    { url = "https://files.pythonhosted.org/packages/9a/c2/49e2529998c99dc1ac95ea08c970a1b0869736dd27e6498fbb49a100d920/valkey_glide-2.6.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:1b3e9fdd13dbde10991f3f0002a04bc316fe4c03583afb6b15a760b7a12f2ec8", size = 14977755, upload-time = "2026-11-06T04:48:45.836Z" },
++    { url = "https://files.pythonhosted.org/packages/34/49/442436e3105a7d91d5eb48f599d24f5f501cc3605cc384fba98dd838c7ec/valkey_glide-2.6.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:519d5a361388cadd479203cd9ab6e626d6479bf997323ec7a1f18133dea6121b", size = 16799463, upload-time = "2026-11-06T04:48:49.065Z" },
++    { url = "https://files.pythonhosted.org/packages/b6/e8/fc469fd8bdef4e2501e76c331e663b8d18b91fd40a3143858fba955840e0/valkey_glide-2.6.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8ee48fa0e16db3c203f96c7bc551cb0565af1163edec19df40e942f995573e16", size = 17638936, upload-time = "2026-11-06T04:48:52.375Z" },
++    { url = "https://files.pythonhosted.org/packages/86/e4/9e22ea7dff65da11cf438b9a62e698e30bf12cdc39f580670e260acad68f/valkey_glide-2.6.0-pp311-pypy311_pp73-macosx_10_7_x86_64.whl", hash = "sha256:3b771d2321ef889261cf665f1a18f98dc10c02e54ac3fddf8d36ee81faf1006a", size = 16779759, upload-time = "2026-11-06T04:49:22.367Z" },
++    { url = "https://files.pythonhosted.org/packages/91/c5/9bbe3d618696eea25007c79354af841df4361a930e5c862e095afe63b094/valkey_glide-2.6.0-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:76fb4001345f114ce156d736ec5f314575bc881ba4cc94b78f09f5454d77834a", size = 14991004, upload-time = "2026-11-06T04:49:25.482Z" },
++    { url = "https://files.pythonhosted.org/packages/16/ee/2e33fda5662540f0a223803b746f5c1f8515ebec7b1a14358bd87ba36c55/valkey_glide-2.6.0-pp311-pypy311_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2d446d59c911c31d931bd9524f55ed013e2526b127a48bbd13a1b6fedaed459d", size = 16811500, upload-time = "2026-11-06T04:49:28.701Z" },
++    { url = "https://files.pythonhosted.org/packages/bf/48/ece447e10a2ec9dba0dff4103611ea8c50a74a0f4e66d28f4a44daf539bd/valkey_glide-2.6.0-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b2e2e541defcacc77db22c674598b35c6ad6f784cedcda4cbfcce8c305c03a26", size = 17644606, upload-time = "2026-11-06T04:49:32.037Z" },
++]
++
+ [[package]]
+ name = "vcrpy"
+ version = "8.2.1"

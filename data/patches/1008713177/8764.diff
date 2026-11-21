@@ -1,0 +1,310 @@
+diff --git a/integrations/external-context/src/http-client.test.ts b/integrations/external-context/src/http-client.test.ts
+new file mode 100644
+index 00000000000..f97599fc563
+--- /dev/null
++++ b/integrations/external-context/src/http-client.test.ts
+@@ -0,0 +1,222 @@
++/**
++ * @license
++ * Copyright 2025 Google LLC
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { MAX_RESPONSE_BYTES, postJson } from './http-client.js';
++
++// Behavioral net for readBoundedBody's reader loop. The loop was rewritten
++// from `for await (const chunk of response.body)` to an explicit getReader()
++// loop — async-iterating a ReadableStream needs [Symbol.asyncIterator] on the
++// TYPE, and that resolution flipped underneath the file when #8693's
++// @types/jsdom install dragged lib.dom into this program (TS2504 on the
++// `for await`). These tests pin what the rewrite must preserve: bounded
++// accumulation, the oversize rejection, and — the easy one to drop —
++// cancelling the stream on early exit, which `for await` used to do
++// implicitly via iterator return().
++
++function streamingResponse(
++  chunks: Uint8Array[],
++  onCancel: () => void,
++): Response {
++  let next = 0;
++  const body = new ReadableStream<Uint8Array>({
++    pull(controller) {
++      if (next < chunks.length) {
++        controller.enqueue(chunks[next]);
++        next += 1;
++      } else {
++        controller.close();
++      }
++    },
++    cancel() {
++      onCancel();
++    },
++  });
++  return new Response(body, {
++    status: 200,
++    headers: { 'content-type': 'application/json' },
++  });
++}
++
++function requestArgs() {
++  return {
++    url: new URL('https://provider.example/'),
++    authorization: 'Bearer test',
++    body: { q: 'x' },
++    signal: new AbortController().signal,
++  };
++}
++
++afterEach(() => {
++  vi.unstubAllGlobals();
++});
++
++describe('postJson bounded body reading', () => {
++  it('assembles a multi-chunk body and parses it', async () => {
++    const encoder = new TextEncoder();
++    const payload = JSON.stringify({ answer: 42, pad: 'y'.repeat(4096) });
++    const mid = Math.floor(payload.length / 2);
++    const cancelled = vi.fn();
++    vi.stubGlobal(
++      'fetch',
++      vi.fn(async () =>
++        streamingResponse(
++          [
++            encoder.encode(payload.slice(0, mid)),
++            encoder.encode(payload.slice(mid)),
++          ],
++          cancelled,
++        ),
++      ),
++    );
++
++    await expect(postJson(requestArgs())).resolves.toEqual({
++      answer: 42,
++      pad: 'y'.repeat(4096),
++    });
++    // A fully-drained stream is closed, not cancelled.
++    expect(cancelled).not.toHaveBeenCalled();
++  });
++
++  it('accepts a body of exactly MAX_RESPONSE_BYTES', async () => {
++    // The bound is `total > MAX`, so a payload landing exactly on it passes.
++    const exact = `["${'a'.repeat(MAX_RESPONSE_BYTES - 4)}"]`;
++    expect(exact.length).toBe(MAX_RESPONSE_BYTES);
++    vi.stubGlobal(
++      'fetch',
++      vi.fn(async () =>
++        streamingResponse([new TextEncoder().encode(exact)], vi.fn()),
++      ),
++    );
++
++    await expect(postJson(requestArgs())).resolves.toEqual([
++      'a'.repeat(MAX_RESPONSE_BYTES - 4),
++    ]);
++  });
++
++  it('rejects an over-budget stream AND cancels it', async () => {
++    // No content-length header, so only the streaming bound can catch it.
++    const chunk = new Uint8Array(512 * 1024);
++    const cancelled = vi.fn();
++    let enqueued = 0;
++    const body = new ReadableStream<Uint8Array>({
++      pull(controller) {
++        // Endless stream: the reject must come from the byte budget, and the
++        // cancel is what stops this producer.
++        controller.enqueue(chunk);
++        enqueued += 1;
++      },
++      cancel() {
++        cancelled();
++      },
++    });
++    vi.stubGlobal(
++      'fetch',
++      vi.fn(async () => new Response(body, { status: 200 })),
++    );
++
++    await expect(postJson(requestArgs())).rejects.toThrow(
++      'External context provider returned an invalid response.',
++    );
++    // `for await` cancelled the stream via its implicit iterator return();
++    // the reader loop must do the same or the producer keeps running.
++    expect(cancelled).toHaveBeenCalledTimes(1);
++    // Budget is 1 MiB: two 512 KiB chunks reach it, the third crosses it.
++    expect(enqueued).toBeLessThanOrEqual(4);
++  });
++
++  it('holds the oversize reject until a deferred cancellation settles', async () => {
++    // `for await` awaited iterator return() before propagating, so a caller
++    // retrying immediately could not overlap the old transport's teardown.
++    let resolveCancel!: () => void;
++    const cancelBarrier = new Promise<void>((resolve) => {
++      resolveCancel = resolve;
++    });
++    let cancelSeen!: () => void;
++    const cancelCalled = new Promise<void>((resolve) => {
++      cancelSeen = resolve;
++    });
++    const body = new ReadableStream<Uint8Array>({
++      pull(controller) {
++        controller.enqueue(new Uint8Array(512 * 1024));
++      },
++      cancel() {
++        cancelSeen();
++        return cancelBarrier;
++      },
++    });
++    vi.stubGlobal(
++      'fetch',
++      vi.fn(async () => new Response(body, { status: 200 })),
++    );
++
++    let rejected = false;
++    let rejection: unknown;
++    const pending = postJson(requestArgs()).catch((error: unknown) => {
++      rejected = true;
++      rejection = error;
++    });
++
++    await cancelCalled;
++    // Let any racing microtasks land; the reject must still be on hold.
++    await new Promise((resolve) => setTimeout(resolve, 0));
++    expect(rejected).toBe(false);
++
++    resolveCancel();
++    await pending;
++    expect(rejected).toBe(true);
++    expect((rejection as Error).message).toBe(
++      'External context provider returned an invalid response.',
++    );
++  });
++
++  it('maps a mid-stream read failure after partial data to a transport error', async () => {
++    // The provider disconnects after sending part of the JSON: read() rejects
++    // with the partial chunk already accumulated.
++    const body = new ReadableStream<Uint8Array>({
++      start(controller) {
++        controller.enqueue(new TextEncoder().encode('{"answer":'));
++      },
++      pull(controller) {
++        controller.error(new Error('connection reset'));
++      },
++    });
++    vi.stubGlobal(
++      'fetch',
++      vi.fn(async () => new Response(body, { status: 200 })),
++    );
++
++    await expect(postJson(requestArgs())).rejects.toThrow(
++      'External context provider request did not complete.',
++    );
++    // Cleanup must still run: the reader lock is released on mid-read errors.
++    expect(body.locked).toBe(false);
++  });
++
++  it('rejects a body that is not valid UTF-8', async () => {
++    const cancelled = vi.fn();
++    vi.stubGlobal(
++      'fetch',
++      vi.fn(async () =>
++        // `{"a":"<invalid byte>"}`: the invalid byte sits inside otherwise-
++        // valid JSON, so only fatal decoding rejects it — lax decoding would
++        // resolve `{ a: '\uFFFD' }` and accept corrupted provider content.
++        streamingResponse(
++          [
++            new Uint8Array([
++              0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d,
++            ]),
++          ],
++          cancelled,
++        ),
++      ),
++    );
++
++    await expect(postJson(requestArgs())).rejects.toThrow(
++      'External context provider returned an invalid response.',
++    );
++  });
++});
+diff --git a/integrations/external-context/src/http-client.ts b/integrations/external-context/src/http-client.ts
+index 23252daa9c7..0626708f0d4 100644
+--- a/integrations/external-context/src/http-client.ts
++++ b/integrations/external-context/src/http-client.ts
+@@ -4,7 +4,7 @@
+  * SPDX-License-Identifier: Apache-2.0
+  */
+ 
+-const MAX_RESPONSE_BYTES = 1024 * 1024;
++export const MAX_RESPONSE_BYTES = 1024 * 1024;
+ 
+ class ProviderResponseError extends Error {
+   constructor() {
+@@ -119,14 +119,43 @@ async function readBoundedBody(response: Response): Promise<string> {
+     throw new ProviderResponseError();
+   }
+ 
++  // getReader(), not `for await`: async-iterating a ReadableStream needs
++  // [Symbol.asyncIterator] on the TYPE, and whether it is there depends on
++  // which lib set the program resolves — @types/node's stream has it, the
++  // DOM lib's needs lib.dom.asynciterable. That resolution flipped
++  // underneath this file once: installing @types/jsdom at the root (#8693)
++  // dragged lib.dom into this program and failed the build with TS2504 on
++  // this exact line. The reader API types identically in every lib set, so
++  // the build no longer depends on that resolution.
++  const reader = response.body.getReader();
+   const chunks: Uint8Array[] = [];
+   let total = 0;
+-  for await (const chunk of response.body) {
+-    total += chunk.byteLength;
+-    if (total > MAX_RESPONSE_BYTES) {
+-      throw new ProviderResponseError();
++  let finished = false;
++  try {
++    for (;;) {
++      const { done, value } = await reader.read();
++      if (done) {
++        finished = true;
++        break;
++      }
++      if (value === undefined) {
++        continue;
++      }
++      total += value.byteLength;
++      if (total > MAX_RESPONSE_BYTES) {
++        throw new ProviderResponseError();
++      }
++      chunks.push(value);
++    }
++  } finally {
++    // Parity with `for await`, whose implicit iterator return() cancels the
++    // stream when the loop exits early (the oversize throw above) and is
++    // awaited before the error propagates — an immediate retry must not
++    // overlap this response's still-settling teardown.
++    if (!finished) {
++      await reader.cancel().catch(() => undefined);
+     }
+-    chunks.push(chunk);
++    reader.releaseLock();
+   }
+ 
+   const body = new Uint8Array(total);
+diff --git a/integrations/external-context/tsconfig.json b/integrations/external-context/tsconfig.json
+index 053e5ad66a5..07d93d16c90 100644
+--- a/integrations/external-context/tsconfig.json
++++ b/integrations/external-context/tsconfig.json
+@@ -2,15 +2,6 @@
+   "extends": "../../tsconfig.json",
+   "compilerOptions": {
+     "composite": true,
+-    // Override the root's `vitest/globals` entry: vitest's types import the
+-    // optional `jsdom` peer types, and once `@types/jsdom` is installed that
+-    // drags `/// <reference lib="dom" />` into this program. The DOM lib
+-    // flips @types/node's conditional fetch globals to their DOM variants,
+-    // whose ReadableStream is not async-iterable (needs lib.dom.asynciterable),
+-    // breaking the `for await` over `response.body` in http-client.ts. The
+-    // sources compiled here use no vitest globals (tests are excluded), so
+-    // `node` alone is enough.
+-    "types": ["node"],
+     "outDir": "dist",
+     "rootDir": "src"
+   },

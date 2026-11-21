@@ -1,0 +1,167 @@
+diff --git a/bun.lock b/bun.lock
+index 18583a1a5ca9..b913a57cd314 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -111,6 +111,7 @@
+         "@types/luxon": "catalog:",
+         "@types/node": "catalog:",
+         "@typescript/native-preview": "catalog:",
++        "happy-dom": "20.11.1",
+         "tw-animate-css": "1.4.0",
+         "typescript": "catalog:",
+         "vite": "catalog:",
+diff --git a/packages/app/package.json b/packages/app/package.json
+index 21096c7e7fdc..60d03064c67c 100644
+--- a/packages/app/package.json
++++ b/packages/app/package.json
+@@ -40,6 +40,7 @@
+     "@types/luxon": "catalog:",
+     "@types/node": "catalog:",
+     "@typescript/native-preview": "catalog:",
++    "happy-dom": "20.11.1",
+     "tw-animate-css": "1.4.0",
+     "typescript": "catalog:",
+     "vite": "catalog:",
+diff --git a/packages/app/src/pages/session/timeline/observe-element-offset.test.ts b/packages/app/src/pages/session/timeline/observe-element-offset.test.ts
+index 9cca163d6bf4..a3ce973b1dc4 100644
+--- a/packages/app/src/pages/session/timeline/observe-element-offset.test.ts
++++ b/packages/app/src/pages/session/timeline/observe-element-offset.test.ts
+@@ -1,5 +1,6 @@
+ import { expect, test } from "bun:test"
+ import { type Virtualizer } from "@tanstack/solid-virtual"
++import { Window } from "happy-dom"
+ import { mutationNodesContainElement, observeElementOffsetReconnectAware } from "./observe-element-offset"
+ 
+ test("matches only the scroll element or an ancestor containing it", () => {
+@@ -16,14 +17,15 @@ test("matches only the scroll element or an ancestor containing it", () => {
+ })
+ 
+ test("reports a divergent native offset once and ignores equal offsets and unrelated mutations", async () => {
+-  const route = document.createElement("section")
+-  const viewport = document.createElement("div")
+-  const unrelated = document.createElement("div")
++  const targetWindow = new Window()
++  const route = targetWindow.document.createElement("section")
++  const viewport = targetWindow.document.createElement("div")
++  const unrelated = targetWindow.document.createElement("div")
+   route.append(viewport)
+-  document.body.append(route)
++  targetWindow.document.body.append(route)
+   const instance = {
+     scrollElement: viewport,
+-    targetWindow: window,
++    targetWindow,
+     scrollOffset: 79_400,
+     options: {
+       horizontal: false,
+@@ -38,24 +40,24 @@ test("reports a divergent native offset once and ignores equal offsets and unrel
+     instance.scrollOffset = offset
+   })
+ 
+-  document.body.append(unrelated)
++  targetWindow.document.body.append(unrelated)
+   unrelated.remove()
+-  await frames(2)
++  await frames(2, targetWindow)
+   expect(calls).toEqual([])
+ 
+   route.remove()
+-  document.body.append(route)
+-  await waitFor(() => calls.length === 1)
++  targetWindow.document.body.append(route)
++  await waitFor(() => calls.length === 1, targetWindow)
+   expect(calls).toEqual([[0, false]])
+ 
+   route.remove()
+-  document.body.append(route)
++  targetWindow.document.body.append(route)
+   await new Promise((resolve) => setTimeout(resolve, 0))
+-  await frames(3)
++  await frames(3, targetWindow)
+   expect(calls).toEqual([[0, false]])
+ 
+   cleanup?.()
+-  route.remove()
++  await targetWindow.happyDOM.close()
+ })
+ 
+ test("keeps checking until stale reset-delay callbacks can no longer win", async () => {
+@@ -191,13 +193,18 @@ test("cleanup cancels reconnect checks and delegated offset observation", async
+   route.remove()
+ })
+ 
+-async function frames(count: number) {
++type FrameWindow = {
++  requestAnimationFrame(callback: () => void): unknown
++  performance: { now(): number }
++}
++
++async function frames(count: number, targetWindow: FrameWindow = window) {
+   for (let index = 0; index < count; index++) {
+-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
++    await new Promise<void>((resolve) => targetWindow.requestAnimationFrame(() => resolve()))
+   }
+ }
+ 
+-async function waitFor(condition: () => boolean) {
+-  const deadline = performance.now() + 1_000
+-  while (!condition() && performance.now() < deadline) await frames(1)
++async function waitFor(condition: () => boolean, targetWindow: FrameWindow = window) {
++  const deadline = targetWindow.performance.now() + 1_000
++  while (!condition() && targetWindow.performance.now() < deadline) await frames(1, targetWindow)
+ }
+diff --git a/packages/core/test/config/reload.test.ts b/packages/core/test/config/reload.test.ts
+index 399b60a1d285..7c4a7cb10f66 100644
+--- a/packages/core/test/config/reload.test.ts
++++ b/packages/core/test/config/reload.test.ts
+@@ -53,6 +53,7 @@ describe("config plugin reloads", () => {
+       expect(yield* catalog.provider.get(Provider.ID.make("first"))).toBeDefined()
+ 
+       yield* test.setEntries([config("second")])
++      yield* Effect.yieldNow
+       yield* bus.publish(ConfigSchema.Event.Updated, {})
+       yield* waitUntil(
+         Effect.gen(function* () {
+diff --git a/packages/core/test/event-logger.test.ts b/packages/core/test/event-logger.test.ts
+index 9678d0e0d472..cf6dbbcfc29f 100644
+--- a/packages/core/test/event-logger.test.ts
++++ b/packages/core/test/event-logger.test.ts
+@@ -35,7 +35,9 @@ describe("EventLogger", () => {
+       Effect.runPromise,
+     )
+ 
+-    expect(output.map((entry) => entry.message)).toEqual([
++    expect(
++      output.flatMap((entry) => (Array.isArray(entry.message) && entry.message[0] === "event" ? [entry.message] : [])),
++    ).toEqual([
+       ["event", { event: expect.objectContaining({ type: "agent.updated" }) }],
+       ["event", { event: expect.objectContaining({ type: "catalog.updated" }) }],
+       ["event", { event: expect.objectContaining({ type: "command.updated" }) }],
+diff --git a/packages/core/test/session-log.test.ts b/packages/core/test/session-log.test.ts
+index 7728cf72487d..e72ff388e0df 100644
+--- a/packages/core/test/session-log.test.ts
++++ b/packages/core/test/session-log.test.ts
+@@ -46,9 +46,7 @@ describe("Session.log", () => {
+ 
+       const items = Array.from(yield* Stream.runCollect(session.log({ sessionID: created.id })))
+ 
+-      // Session creation commits a non-public durable event, so the marker's
+-      // seq covers more of the aggregate than the public events emitted.
+-      expect(items.map((item) => item.type)).toEqual(["session.renamed", "log.synced"])
++      expect(items.map((item) => item.type)).toEqual(["session.created", "session.renamed", "log.synced"])
+       expect(items.at(-1)).toEqual({ type: "log.synced", aggregateID: created.id, seq: Event.Seq.make(1) })
+     }),
+   )
+diff --git a/packages/core/test/session-projector.test.ts b/packages/core/test/session-projector.test.ts
+index c13b4195d327..2a2cedf89e0b 100644
+--- a/packages/core/test/session-projector.test.ts
++++ b/packages/core/test/session-projector.test.ts
+@@ -117,7 +117,7 @@ describe("SessionProjector", () => {
+         diff: "legacy patch",
+         files: [{ path: "src/old.ts", status: "modified", additions: 1, deletions: 0, patch: "@@" }],
+       })
+-      yield* db.run(sql`update session set revert = ${legacy} where id = ${sessionID}`)
++      yield* db.run(sql`update session_v2 set revert = ${legacy} where id = ${sessionID}`)
+       const stored = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()
+       if (!stored) return yield* Effect.die("Session row missing")
+       const storedRevert = fromRow(stored).revert

@@ -1,0 +1,28 @@
+.DS_Store
+github_token.txt
+.github_token
+token.txt
+.env
+__pycache__/
+*.pyc
+
+# Database and transient SQLite files (506 MB; regenerate or use CSV exports)
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.out
+paper/*.synctex.gz
+paper/*.bbl
+paper/*.blg
+paper/build.log
+paper/main_arxiv.tex
+
+# LaTeX temp
+paper/tmp*.tmp

@@ -1,0 +1,571 @@
+diff --git a/packages/app/src/components/updater-action.ts b/packages/app/src/components/updater-action.ts
+index 9c13c542b417..9b6daf6af437 100644
+--- a/packages/app/src/components/updater-action.ts
++++ b/packages/app/src/components/updater-action.ts
+@@ -3,6 +3,7 @@ import type { UpdaterState } from "@/updater"
+ import { usePlatform } from "@/context/platform"
+ import { useLanguage } from "@/context/language"
+ import { showToast } from "@/utils/toast"
++import { formatServerError } from "@/utils/server-errors"
+ 
+ export function updaterAction(state: UpdaterState | undefined) {
+   if (!state) return { label: "settings.updates.action.checkNow" as const }
+@@ -31,7 +32,14 @@ export function useUpdaterAction() {
+     action,
+     async run() {
+       const run = action().run
+-      if (run === "install") return platform.updater?.install()
++      if (run === "install") {
++        return platform.updater?.install().catch((error) => {
++          showToast({
++            title: language.t("common.requestFailed"),
++            description: formatServerError(error, language.t, language.t("common.requestFailed")),
++          })
++        })
++      }
+       if (run !== "check") return
+ 
+       const state = await platform.updater?.check()
+diff --git a/packages/desktop/src/main/index.ts b/packages/desktop/src/main/index.ts
+index 3dd31571268c..d16179bb6c16 100644
+--- a/packages/desktop/src/main/index.ts
++++ b/packages/desktop/src/main/index.ts
+@@ -25,6 +25,7 @@ import {
+ } from "./onboarding"
+ import { getDefaultServerUrl, preferAppEnv, setDefaultServerUrl } from "./server"
+ import { setupAutoUpdater, showUpdaterDialog } from "./updater"
++import { registerUpdaterIpc } from "./updater-ipc"
+ import { safeWebContentsURL } from "./window-state"
+ import {
+   getLastFocusedWindow,
+@@ -283,7 +284,6 @@ const main = Effect.gen(function* () {
+     setDisplayBackend: async () => undefined,
+     checkAppExists: (appName) => checkAppExists(appName),
+     resolveAppPath: async (appName) => resolveAppPath(appName),
+-    updater,
+     showUpdater: () => showUpdaterDialog(updater, true),
+     setBackgroundColor: (color) => setBackgroundColor(color),
+     exportDebugLogs: () => exportDebugLogs(),
+@@ -292,6 +292,7 @@ const main = Effect.gen(function* () {
+       if (setNativeTranslations(bundle)) createMenu(menuDeps)
+     },
+   })
++  registerUpdaterIpc(updater)
+   registerWslIpcHandlers(wslServers)
+   void updater.start()
+   const updateTimer = setInterval(() => void updater.check(), 10 * 60 * 1000)
+diff --git a/packages/desktop/src/main/ipc.ts b/packages/desktop/src/main/ipc.ts
+index d8abfc1ceb3b..6d769741b995 100644
+--- a/packages/desktop/src/main/ipc.ts
++++ b/packages/desktop/src/main/ipc.ts
+@@ -20,8 +20,6 @@ import {
+   setTitlebar,
+   updateTitlebar,
+ } from "./windows"
+-import type { UpdaterController } from "./updater-controller"
+-import { createUpdaterSubscriptions } from "./updater-subscriptions"
+ import { createDesktopDraftStore } from "./draft-store"
+ import { nativeT } from "./native-translations"
+ 
+@@ -46,7 +44,6 @@ type Deps = {
+   setDisplayBackend: (backend: string | null) => Promise<void> | void
+   checkAppExists: (appName: string) => Promise<boolean> | boolean
+   resolveAppPath: (appName: string) => Promise<string | null>
+-  updater: UpdaterController
+   showUpdater: () => Promise<void> | void
+   setBackgroundColor: (color: string) => void
+   exportDebugLogs: () => Promise<string>
+@@ -56,8 +53,6 @@ type Deps = {
+ 
+ export function registerIpcHandlers(deps: Deps) {
+   const drafts = createDesktopDraftStore(join(app.getPath("userData"), "drafts.sqlite"))
+-  const updaterSubscriptions = createUpdaterSubscriptions()
+-  app.once("will-quit", updaterSubscriptions.clear)
+   app.on("before-quit", () => drafts.flush())
+   app.once("will-quit", () => drafts.close())
+   app.on("browser-window-created", (_event, win) => win.on("session-end", () => drafts.flush()))
+@@ -80,20 +75,6 @@ export function registerIpcHandlers(deps: Deps) {
+   )
+   ipcMain.handle("check-app-exists", (_event: IpcMainInvokeEvent, appName: string) => deps.checkAppExists(appName))
+   ipcMain.handle("resolve-app-path", (_event: IpcMainInvokeEvent, appName: string) => deps.resolveAppPath(appName))
+-  ipcMain.handle("updater-subscribe", (event) => {
+-    const id = event.sender.id
+-    updaterSubscriptions.set(
+-      id,
+-      deps.updater.subscribe((state) => {
+-        if (event.sender.isDestroyed()) return updaterSubscriptions.delete(id)
+-        event.sender.send("updater-state", state)
+-      }),
+-    )
+-    event.sender.once("destroyed", () => updaterSubscriptions.delete(id))
+-  })
+-  ipcMain.handle("updater-unsubscribe", (event) => updaterSubscriptions.delete(event.sender.id))
+-  ipcMain.handle("updater-check", () => deps.updater.check())
+-  ipcMain.handle("updater-install", () => deps.updater.install())
+   ipcMain.handle("set-background-color", (_event: IpcMainInvokeEvent, color: string) => deps.setBackgroundColor(color))
+   ipcMain.handle("export-debug-logs", () => deps.exportDebugLogs())
+   ipcMain.handle("set-force-focus", (event: IpcMainInvokeEvent, enabled: boolean) =>
+diff --git a/packages/desktop/src/main/updater-controller.test.ts b/packages/desktop/src/main/updater-controller.test.ts
+index ff3f7d1dfd83..cb551c5ca2e1 100644
+--- a/packages/desktop/src/main/updater-controller.test.ts
++++ b/packages/desktop/src/main/updater-controller.test.ts
+@@ -1,25 +1,31 @@
+ import { describe, expect, test } from "bun:test"
+-import { createUpdaterController, type UpdaterBackend, type UpdaterReadyRecord } from "./updater-controller"
++import { createUpdaterController, type UpdaterPlatform, type UpdaterReadyRecord } from "./updater-controller"
+ 
+ function setup(input?: { currentVersion?: string; ready?: UpdaterReadyRecord }) {
+   const calls: string[] = []
+-  const backend: UpdaterBackend = {
+-    async checkForUpdates() {
++  const platform: UpdaterPlatform = {
++    async checkForUpdate() {
+       calls.push("check")
+-      return { isUpdateAvailable: true, updateInfo: { version: "2.0.0" } }
++      return "2.0.0"
+     },
+-    async downloadUpdate() {
++    async stageUpdate() {
+       calls.push("download")
+     },
+-    quitAndInstall() {
++    installAndRestart() {
+       calls.push("install")
++      return new Promise<never>(() => {})
+     },
+   }
+   let ready = input?.ready
+   const controller = createUpdaterController({
+     enabled: true,
+     currentVersion: input?.currentVersion ?? "1.0.0",
+-    backend,
++    platform,
++    lifecycle: {
++      async prepareToRestart() {
++        calls.push("prepare")
++      },
++    },
+     persistence: {
+       get: () => ready,
+       set: (value) => {
+@@ -29,9 +35,6 @@ function setup(input?: { currentVersion?: string; ready?: UpdaterReadyRecord })
+         ready = undefined
+       },
+     },
+-    stop: async () => {
+-      calls.push("stop")
+-    },
+   })
+   return { controller, calls, getReady: () => ready }
+ }
+@@ -76,36 +79,81 @@ describe("updater controller", () => {
+     expect(app.calls).toEqual(["check", "download"])
+   })
+ 
+-  test("returns to ready when quitAndInstall returns without exiting", async () => {
++  test("starts installing synchronously and coalesces restart requests", async () => {
+     const app = setup()
+     await app.controller.start()
+ 
+-    await app.controller.install()
++    const first = app.controller.install()
++    const second = app.controller.install()
+ 
+-    expect(app.calls).toEqual(["check", "download", "stop", "install"])
+-    expect(app.controller.getState()).toEqual({ status: "ready", version: "2.0.0" })
++    expect(first).toBe(second)
++    await Promise.resolve()
++    expect(app.calls).toEqual(["check", "download", "prepare", "install"])
++    expect(app.controller.getState()).toEqual({ status: "installing", version: "2.0.0" })
+   })
+ 
+-  test("returns to ready when installation cannot start", async () => {
++  test("does not check for updates while installation is in progress", async () => {
+     const app = setup()
+     await app.controller.start()
++    void app.controller.install()
++
++    await app.controller.check()
+ 
++    expect(app.calls).toEqual(["check", "download", "prepare", "install"])
++    expect(app.controller.getState()).toEqual({ status: "installing", version: "2.0.0" })
++  })
++
++  test("returns to ready when installation fails", async () => {
++    const app = setup()
++    await app.controller.start()
++    const error = new Error("install failed")
+     const failed = createUpdaterController({
+       enabled: true,
+       currentVersion: "1.0.0",
+-      backend: {
+-        checkForUpdates: async () => ({ isUpdateAvailable: true, updateInfo: { version: "2.0.0" } }),
+-        downloadUpdate: async () => {},
+-        quitAndInstall() {},
++      platform: {
++        checkForUpdate: async () => "2.0.0",
++        stageUpdate: async () => {},
++        installAndRestart: () => Promise.reject(error),
+       },
++      lifecycle: { prepareToRestart: async () => {} },
+       persistence: { get: () => undefined, set() {}, clear() {} },
+-      stop: async () => {
+-        throw new Error("stop failed")
+-      },
+     })
+     await failed.start()
+ 
+-    await expect(failed.install()).rejects.toThrow("stop failed")
++    await expect(failed.install()).rejects.toThrow("install failed")
+     expect(failed.getState()).toEqual({ status: "ready", version: "2.0.0" })
+   })
++
++  test("allows a state subscriber to retry after installation fails", async () => {
++    let attempts = 0
++    let sawInstalling = false
++    let retry: Promise<void> | undefined
++    const failed = createUpdaterController({
++      enabled: true,
++      currentVersion: "1.0.0",
++      platform: {
++        checkForUpdate: async () => "2.0.0",
++        stageUpdate: async () => {},
++        installAndRestart() {
++          attempts++
++          if (attempts === 1) return Promise.reject(new Error("install failed"))
++          return new Promise<never>(() => {})
++        },
++      },
++      lifecycle: { prepareToRestart: async () => {} },
++      persistence: { get: () => undefined, set() {}, clear() {} },
++    })
++    failed.subscribe((state) => {
++      if (state.status === "installing") sawInstalling = true
++      if (!sawInstalling || state.status !== "ready" || retry) return
++      retry = failed.install()
++    })
++    await failed.start()
++
++    await expect(failed.install()).rejects.toThrow("install failed")
++
++    expect(retry).toBeDefined()
++    expect(attempts).toBe(2)
++    expect(failed.getState()).toEqual({ status: "installing", version: "2.0.0" })
++  })
+ })
+diff --git a/packages/desktop/src/main/updater-controller.ts b/packages/desktop/src/main/updater-controller.ts
+index a0ae1a892745..39661bafac0c 100644
+--- a/packages/desktop/src/main/updater-controller.ts
++++ b/packages/desktop/src/main/updater-controller.ts
+@@ -4,10 +4,14 @@ export type { UpdaterState } from "@opencode-ai/app/updater"
+ 
+ export type UpdaterReadyRecord = { version: string }
+ 
+-export type UpdaterBackend = {
+-  checkForUpdates(): Promise<{ isUpdateAvailable?: boolean; updateInfo?: { version?: string } } | null | undefined>
+-  downloadUpdate(): Promise<unknown>
+-  quitAndInstall(): void
++export type UpdaterPlatform = {
++  checkForUpdate(): Promise<string | undefined>
++  stageUpdate(): Promise<unknown>
++  installAndRestart(): Promise<never>
++}
++
++export type UpdaterLifecycle = {
++  prepareToRestart(): Promise<void>
+ }
+ 
+ type UpdaterPersistence = {
+@@ -19,13 +23,14 @@ type UpdaterPersistence = {
+ export function createUpdaterController(input: {
+   enabled: boolean
+   currentVersion: string
+-  backend: UpdaterBackend
++  platform?: UpdaterPlatform
++  lifecycle: UpdaterLifecycle
+   persistence: UpdaterPersistence
+-  stop: () => Promise<void>
+   log?: (message: string, data?: object) => void
+ }) {
+   let state: UpdaterState = input.enabled ? { status: "idle" } : { status: "disabled" }
+   let pending: Promise<UpdaterState> | undefined
++  let installing: Promise<void> | undefined
+   const listeners = new Set<(state: UpdaterState) => void>()
+ 
+   const transition = (next: UpdaterState) => {
+@@ -37,20 +42,21 @@ export function createUpdaterController(input: {
+ 
+   const check = () => {
+     if (!input.enabled) return Promise.resolve(state)
+-    if (state.status === "ready") return Promise.resolve(state)
++    const platform = input.platform
++    if (!platform) return Promise.resolve(state)
++    if (state.status === "ready" || state.status === "installing") return Promise.resolve(state)
+     if (pending) return pending
+ 
+     pending = (async () => {
+       transition({ status: "checking" })
+-      const result = await input.backend.checkForUpdates()
+-      const version = result?.updateInfo?.version
+-      if (!result?.isUpdateAvailable || !version || version === input.currentVersion) {
++      const version = await platform.checkForUpdate()
++      if (!version || version === input.currentVersion) {
+         await input.persistence.clear()
+         return transition({ status: "up-to-date" })
+       }
+ 
+       transition({ status: "downloading", version })
+-      await input.backend.downloadUpdate()
++      await platform.stageUpdate()
+       await input.persistence.set({ version })
+       return transition({ status: "ready", version })
+     })()
+@@ -63,6 +69,33 @@ export function createUpdaterController(input: {
+     return pending
+   }
+ 
++  const install = () => {
++    if (installing) return installing
++    if (state.status !== "ready") return Promise.reject(new Error("Update is not ready to install"))
++
++    const version = startInstalling(state.version)
++    installing = restartWithUpdate(version)
++    return installing
++  }
++
++  const startInstalling = (version: string) => {
++    transition({ status: "installing", version })
++    return version
++  }
++
++  const restartWithUpdate = (version: string) =>
++    prepareAndRestart().catch((error) => {
++      installing = undefined
++      transition({ status: "ready", version })
++      throw error
++    })
++
++  const prepareAndRestart = async () => {
++    if (!input.platform) throw new Error("Updater is disabled")
++    await input.lifecycle.prepareToRestart()
++    await input.platform.installAndRestart()
++  }
++
+   return {
+     getState: () => state,
+     subscribe(listener: (state: UpdaterState) => void) {
+@@ -76,21 +109,7 @@ export function createUpdaterController(input: {
+       return check()
+     },
+     check,
+-    async install() {
+-      if (state.status !== "ready") throw new Error("Update is not ready to install")
+-      const version = state.version
+-      transition({ status: "installing", version })
+-      await input
+-        .stop()
+-        .then(() => {
+-          input.backend.quitAndInstall()
+-          transition({ status: "ready", version })
+-        })
+-        .catch((error) => {
+-          transition({ status: "ready", version })
+-          throw error
+-        })
+-    },
++    install,
+   }
+ }
+ 
+diff --git a/packages/desktop/src/main/updater-ipc.ts b/packages/desktop/src/main/updater-ipc.ts
+new file mode 100644
+index 000000000000..7bcc7797f19e
+--- /dev/null
++++ b/packages/desktop/src/main/updater-ipc.ts
+@@ -0,0 +1,23 @@
++import { app, ipcMain } from "electron"
++import type { UpdaterController } from "./updater-controller"
++import { createUpdaterSubscriptions } from "./updater-subscriptions"
++
++export function registerUpdaterIpc(controller: UpdaterController) {
++  const subscriptions = createUpdaterSubscriptions()
++  app.once("will-quit", subscriptions.clear)
++
++  ipcMain.handle("updater-subscribe", (event) => {
++    const id = event.sender.id
++    subscriptions.set(
++      id,
++      controller.subscribe((state) => {
++        if (event.sender.isDestroyed()) return subscriptions.delete(id)
++        event.sender.send("updater-state", state)
++      }),
++    )
++    event.sender.once("destroyed", () => subscriptions.delete(id))
++  })
++  ipcMain.handle("updater-unsubscribe", (event) => subscriptions.delete(event.sender.id))
++  ipcMain.handle("updater-check", () => controller.check())
++  ipcMain.handle("updater-install", () => controller.install())
++}
+diff --git a/packages/desktop/src/main/updater-platform.ts b/packages/desktop/src/main/updater-platform.ts
+new file mode 100644
+index 000000000000..ac6b70cae3fb
+--- /dev/null
++++ b/packages/desktop/src/main/updater-platform.ts
+@@ -0,0 +1,89 @@
++import { app, autoUpdater } from "electron"
++import pkg from "electron-updater"
++import { getLogger } from "./logging"
++import { setAppQuitting } from "./windows"
++import type { UpdaterPlatform } from "./updater-controller"
++
++const updateClient = pkg.autoUpdater
++const restartTimeout = 10_000
++
++export function createUpdaterPlatform(logger: ReturnType<typeof getLogger>): UpdaterPlatform {
++  configureUpdater(logger)
++  autoUpdater.on("before-quit-for-update", () => setAppQuitting())
++
++  return {
++    async checkForUpdate() {
++      const result = await updateClient.checkForUpdates()
++      if (!result?.isUpdateAvailable) return
++      return result.updateInfo.version
++    },
++    stageUpdate,
++    installAndRestart: () => installAndRestart(logger),
++  }
++}
++
++function configureUpdater(logger: ReturnType<typeof getLogger>) {
++  updateClient.logger = logger
++  updateClient.channel = "latest"
++  updateClient.allowPrerelease = false
++  updateClient.allowDowngrade = true
++  updateClient.autoDownload = false
++  updateClient.autoInstallOnAppQuit = process.platform === "darwin"
++  logger.log("auto updater configured", {
++    channel: updateClient.channel,
++    allowPrerelease: updateClient.allowPrerelease,
++    allowDowngrade: updateClient.allowDowngrade,
++    currentVersion: app.getVersion(),
++  })
++}
++
++function stageUpdate() {
++  if (process.platform !== "darwin") return updateClient.downloadUpdate()
++
++  return new Promise<void>((resolve, reject) => {
++    const cleanup = () => {
++      autoUpdater.removeListener("update-downloaded", complete)
++      updateClient.removeListener("error", fail)
++    }
++    const complete = () => {
++      cleanup()
++      resolve()
++    }
++    const fail = (error: Error) => {
++      cleanup()
++      reject(error)
++    }
++
++    autoUpdater.once("update-downloaded", complete)
++    updateClient.once("error", fail)
++    void updateClient.downloadUpdate().catch(fail)
++  })
++}
++
++function installAndRestart(logger: ReturnType<typeof getLogger>) {
++  return new Promise<never>((_resolve, reject) => {
++    const timeout = setTimeout(() => {
++      logger.error("update restart did not start")
++      fail(new Error())
++    }, restartTimeout)
++    const started = () => {
++      clearTimeout(timeout)
++      autoUpdater.removeListener("before-quit-for-update", started)
++    }
++    const fail = (error: Error) => {
++      clearTimeout(timeout)
++      autoUpdater.removeListener("before-quit-for-update", started)
++      updateClient.removeListener("error", fail)
++      setAppQuitting(false)
++      reject(error)
++    }
++
++    autoUpdater.once("before-quit-for-update", started)
++    updateClient.once("error", fail)
++    try {
++      updateClient.quitAndInstall()
++    } catch (error) {
++      fail(error instanceof Error ? error : new Error(String(error)))
++    }
++  })
++}
+diff --git a/packages/desktop/src/main/updater.ts b/packages/desktop/src/main/updater.ts
+index 08350917c1b6..41b61134f01c 100644
+--- a/packages/desktop/src/main/updater.ts
++++ b/packages/desktop/src/main/updater.ts
+@@ -1,51 +1,21 @@
+ import { app, dialog } from "electron"
+-import pkg from "electron-updater"
+ import { UPDATER_ENABLED } from "./constants"
+ import { createUpdaterController, type UpdaterReadyRecord } from "./updater-controller"
+ import { getLogger } from "./logging"
+ import { getStore } from "./store"
+-import { setAppQuitting } from "./windows"
+ import { nativeT } from "./native-translations"
++import { createUpdaterPlatform } from "./updater-platform"
+ 
+-const { autoUpdater } = pkg
+ const key = "ready"
+ 
+-export function setupAutoUpdater(stop: () => Promise<void>) {
++export function setupAutoUpdater(prepareToRestart: () => Promise<void>) {
+   const logger = getLogger()
+-  autoUpdater.logger = logger
+-  autoUpdater.channel = "latest"
+-  autoUpdater.allowPrerelease = false
+-  autoUpdater.allowDowngrade = true
+-  autoUpdater.autoDownload = false
+-  autoUpdater.autoInstallOnAppQuit = false
+-  logger.log("auto updater configured", {
+-    channel: autoUpdater.channel,
+-    allowPrerelease: autoUpdater.allowPrerelease,
+-    allowDowngrade: autoUpdater.allowDowngrade,
+-    currentVersion: app.getVersion(),
+-  })
+-
+   const store = getStore("opencode.updater")
+   return createUpdaterController({
+     enabled: UPDATER_ENABLED,
+     currentVersion: app.getVersion(),
+-    backend: {
+-      checkForUpdates: () => autoUpdater.checkForUpdates(),
+-      downloadUpdate: () => autoUpdater.downloadUpdate(),
+-      quitAndInstall: () => {
+-        // quitAndInstall closes all windows before emitting before-quit, so
+-        // flag the quit first to keep window ids persisted for restore.
+-        setAppQuitting()
+-        try {
+-          autoUpdater.quitAndInstall()
+-        } catch (error) {
+-          // The install failed and the app keeps running; clear the flag so
+-          // deliberate window closes prune ids again.
+-          setAppQuitting(false)
+-          throw error
+-        }
+-      },
+-    },
++    platform: UPDATER_ENABLED ? createUpdaterPlatform(logger) : undefined,
++    lifecycle: { prepareToRestart },
+     persistence: {
+       get() {
+         const value = store.get(key)
+@@ -55,7 +25,6 @@ export function setupAutoUpdater(stop: () => Promise<void>) {
+       set: (value) => store.set(key, value),
+       clear: () => store.delete(key),
+     },
+-    stop,
+     log: (message, data) => logger.log(message, data),
+   })
+ }

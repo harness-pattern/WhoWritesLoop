@@ -1,0 +1,146 @@
+diff --git a/packages/opencode/specs/effect-migration.md b/packages/opencode/specs/effect-migration.md
+index 4f195917fde2..86eb156d6e9d 100644
+--- a/packages/opencode/specs/effect-migration.md
++++ b/packages/opencode/specs/effect-migration.md
+@@ -123,6 +123,7 @@ Done now:
+ - [x] `Discovery`
+ - [x] `File`
+ - [x] `Snapshot`
++- [x] `SessionStatus`
+ 
+ Still open and likely worth migrating:
+ 
+diff --git a/packages/opencode/src/effect/instances.ts b/packages/opencode/src/effect/instances.ts
+index 6fcfddb24f58..408b55bedc98 100644
+--- a/packages/opencode/src/effect/instances.ts
++++ b/packages/opencode/src/effect/instances.ts
+@@ -8,6 +8,7 @@ import { Instance } from "@/project/instance"
+ import { Vcs } from "@/project/vcs"
+ import { ProviderAuth } from "@/provider/auth-service"
+ import { Question } from "@/question/service"
++import { SessionStatus } from "@/session/status"
+ import { Skill } from "@/skill/service"
+ import { Snapshot } from "@/snapshot/service"
+ import { InstanceContext } from "./instance-context"
+@@ -24,6 +25,7 @@ export type InstanceServices =
+   | FileTime.Service
+   | Format.Service
+   | File.Service
++  | SessionStatus.Service
+   | Skill.Service
+   | Snapshot.Service
+ 
+@@ -44,6 +46,7 @@ function lookup(_key: string) {
+     FileTime.layer,
+     Format.layer,
+     File.layer,
++    SessionStatus.layer,
+     Skill.defaultLayer,
+     Snapshot.defaultLayer,
+   ).pipe(Layer.provide(ctx))
+diff --git a/packages/opencode/src/effect/runtime.ts b/packages/opencode/src/effect/runtime.ts
+index e6f1f326262e..2cbc4b9e7e67 100644
+--- a/packages/opencode/src/effect/runtime.ts
++++ b/packages/opencode/src/effect/runtime.ts
+@@ -20,6 +20,10 @@ export function runPromiseInstance<A, E>(effect: Effect.Effect<A, E, InstanceSer
+   return runtime.runPromise(effect.pipe(Effect.provide(Instances.get(Instance.directory))))
+ }
+ 
++export function runSyncInstance<A, E>(effect: Effect.Effect<A, E, InstanceServices>) {
++  return runtime.runSync(effect.pipe(Effect.provide(Instances.get(Instance.directory))))
++}
++
+ export function disposeRuntime() {
+   return runtime.dispose()
+ }
+diff --git a/packages/opencode/src/session/status.ts b/packages/opencode/src/session/status.ts
+index 57e7939853a0..af0de15670a5 100644
+--- a/packages/opencode/src/session/status.ts
++++ b/packages/opencode/src/session/status.ts
+@@ -1,7 +1,8 @@
+ import { BusEvent } from "@/bus/bus-event"
+ import { Bus } from "@/bus"
+-import { Instance } from "@/project/instance"
++import { runSyncInstance } from "@/effect/runtime"
+ import { SessionID } from "./schema"
++import { Effect, Layer, ServiceMap } from "effect"
+ import z from "zod"
+ 
+ export namespace SessionStatus {
+@@ -42,36 +43,51 @@ export namespace SessionStatus {
+     ),
+   }
+ 
+-  const state = Instance.state(() => {
+-    const data: Record<string, Info> = {}
+-    return data
+-  })
++  export interface Interface {
++    readonly get: (sessionID: SessionID) => Effect.Effect<Info>
++    readonly list: () => Effect.Effect<Record<string, Info>>
++    readonly set: (sessionID: SessionID, status: Info) => Effect.Effect<void>
++  }
++
++  export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/SessionStatus") {}
++
++  export const layer = Layer.effect(
++    Service,
++    Effect.gen(function* () {
++      const data = new Map<SessionID, Info>()
++
++      const get = Effect.fn("SessionStatus.get")(function* (sessionID: SessionID) {
++        return data.get(sessionID) ?? { type: "idle" as const }
++      })
++
++      const list = Effect.fn("SessionStatus.list")(function* () {
++        return Object.fromEntries(data)
++      })
++
++      const set = Effect.fn("SessionStatus.set")(function* (sessionID: SessionID, status: Info) {
++        Bus.publish(Event.Status, { sessionID, status })
++        if (status.type === "idle") {
++          // deprecated
++          Bus.publish(Event.Idle, { sessionID })
++          data.delete(sessionID)
++          return
++        }
++        data.set(sessionID, status)
++      })
+ 
+-  export function get(sessionID: SessionID) {
+-    return (
+-      state()[sessionID] ?? {
+-        type: "idle",
+-      }
+-    )
++      return Service.of({ get, list, set })
++    }),
++  )
++
++  export function get(sessionID: SessionID): Info {
++    return runSyncInstance(Service.use((svc) => svc.get(sessionID)))
+   }
+ 
+-  export function list() {
+-    return state()
++  export function list(): Record<string, Info> {
++    return runSyncInstance(Service.use((svc) => svc.list()))
+   }
+ 
+   export function set(sessionID: SessionID, status: Info) {
+-    Bus.publish(Event.Status, {
+-      sessionID,
+-      status,
+-    })
+-    if (status.type === "idle") {
+-      // deprecated
+-      Bus.publish(Event.Idle, {
+-        sessionID,
+-      })
+-      delete state()[sessionID]
+-      return
+-    }
+-    state()[sessionID] = status
++    runSyncInstance(Service.use((svc) => svc.set(sessionID, status)))
+   }
+ }

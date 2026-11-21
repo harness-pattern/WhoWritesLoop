@@ -1,0 +1,16 @@
+diff --git a/openhands/sdk/agent/spec.py b/openhands/sdk/agent/spec.py
+index 783a19d8838..7b502868c07 100644
+--- a/openhands/sdk/agent/spec.py
++++ b/openhands/sdk/agent/spec.py
+@@ -78,8 +78,9 @@ class AgentSpec(OpenHandsModel):
+                 ],
+                 "system_message_suffix": "Always finish your response "
+                 "with the word 'yay!'",
+-                "user_message_prefix": "The first character of your "
+-                "response should be 'I'",
++                "user_message_suffix": (
++                    "The first character of your response should be 'I'"
++                ),
+             }
+         ],
+     )

@@ -1,0 +1,2202 @@
+diff --git a/enterprise/storage/saas_conversation_store.py b/enterprise/storage/saas_conversation_store.py
+index fb76b0f5718a..07cf7dbce415 100644
+--- a/enterprise/storage/saas_conversation_store.py
++++ b/enterprise/storage/saas_conversation_store.py
+@@ -90,6 +90,7 @@ def _to_external_model(self, conversation_metadata: StoredConversationMetadata):
+         kwargs.pop('per_turn_token', None)
+         kwargs.pop('parent_conversation_id', None)
+         kwargs.pop('public')
++        kwargs.pop('agent_kind', None)
+ 
+         return ConversationMetadata(**kwargs)
+ 
+diff --git a/enterprise/tests/unit/storage/test_saas_sql_app_conversation_info_service.py b/enterprise/tests/unit/storage/test_saas_sql_app_conversation_info_service.py
+index 37cda4dca215..258ff9ccf06a 100644
+--- a/enterprise/tests/unit/storage/test_saas_sql_app_conversation_info_service.py
++++ b/enterprise/tests/unit/storage/test_saas_sql_app_conversation_info_service.py
+@@ -280,6 +280,7 @@ async def test_to_info_with_user_id_functionality(
+         stored_metadata.per_turn_token = 0
+         stored_metadata.public = None
+         stored_metadata.tags = {}
++        stored_metadata.agent_kind = None
+ 
+         saas_metadata = MagicMock(spec=StoredConversationMetadataSaas)
+         saas_metadata.user_id = UUID('a1111111-1111-1111-1111-111111111111')
+diff --git a/frontend/src/components/features/settings/sdk-settings/sdk-section-page.tsx b/frontend/src/components/features/settings/sdk-settings/sdk-section-page.tsx
+index f30e42562dac..6276148134f9 100644
+--- a/frontend/src/components/features/settings/sdk-settings/sdk-section-page.tsx
++++ b/frontend/src/components/features/settings/sdk-settings/sdk-section-page.tsx
+@@ -70,6 +70,7 @@ export function SdkSectionPage({
+   excludeKeys = EMPTY_EXCLUDE_KEYS,
+   scope = "personal",
+   settingsSource = "agent_settings",
++  variant,
+   header,
+   extraDirty = false,
+   buildPayload,
+@@ -81,6 +82,14 @@ export function SdkSectionPage({
+   excludeKeys?: Set<string>;
+   scope?: SettingsScope;
+   settingsSource?: SettingsValueSource;
++  /**
++   * Which ``AgentSettings`` variant ("llm" or "acp") this page owns.
++   * When set, sections and fields tagged with a different variant are
++   * hidden from the generic renderer. Leaving this undefined keeps the
++   * schema unfiltered (used for non–variant-aware pages such as
++   * condenser/verification/MCP that are already LLM-only by nature).
++   */
++  variant?: string | null;
+ 
+   header?: (props: SdkSectionHeaderProps) => React.ReactNode;
+   extraDirty?: boolean;
+@@ -196,8 +205,9 @@ export function SdkSectionPage({
+       values,
+       view,
+       excludeKeys,
++      variant,
+     );
+-  }, [filteredSchema, values, view, excludeKeys]);
++  }, [filteredSchema, values, view, excludeKeys, variant]);
+ 
+   const handleFieldChange = React.useCallback(
+     (fieldKey: string, nextValue: string | boolean) => {
+diff --git a/frontend/src/constants/settings-nav.tsx b/frontend/src/constants/settings-nav.tsx
+index e2f34d1b8cf9..c6e1076efe34 100644
+--- a/frontend/src/constants/settings-nav.tsx
++++ b/frontend/src/constants/settings-nav.tsx
+@@ -55,6 +55,33 @@ export const SAAS_NAV_ITEMS: SettingsNavItem[] = [
+     text: "SETTINGS$NAV_VERIFICATION",
+     section: "org",
+   },
++  // Agent Type is the top-level selector — defaults to OpenHands (the
++  // standard LLM agent). Saving ACP here reshapes the nav below so the
++  // user only sees settings that apply to their chosen agent type.
++  {
++    icon: <CircuitIcon width={22} height={22} />,
++    to: "/settings/agent-type",
++    text: "SETTINGS$NAV_AGENT_TYPE",
++    section: "personal",
++  },
++  // ACP-agent sub-configuration. Only visible when agent_kind=acp —
++  // see ``ACP_ONLY_NAV_PATHS`` in ``use-settings-nav-items.ts``.
++  {
++    icon: <ServerProcessIcon width={22} height={22} />,
++    to: "/settings/acp-server",
++    text: "SETTINGS$NAV_ACP_SERVER",
++    section: "personal",
++  },
++  {
++    icon: <CircuitIcon width={22} height={22} />,
++    to: "/settings/acp-model",
++    text: "SETTINGS$NAV_ACP_MODEL",
++    section: "personal",
++  },
++  // OpenHands-agent sub-configuration. These nav entries hide when
++  // agent_kind=acp because the ACP subprocess manages its own
++  // LLM/condenser/security/MCP — see ``LLM_ONLY_NAV_PATHS`` in
++  // ``use-settings-nav-items.ts``.
+   {
+     icon: <CircuitIcon width={22} height={22} />,
+     to: "/settings",
+@@ -73,6 +100,12 @@ export const SAAS_NAV_ITEMS: SettingsNavItem[] = [
+     text: "SETTINGS$NAV_VERIFICATION",
+     section: "personal",
+   },
++  {
++    icon: <ServerProcessIcon width={22} height={22} />,
++    to: "/settings/mcp",
++    text: "SETTINGS$NAV_MCP",
++    section: "personal",
++  },
+   {
+     icon: <KeyIcon width={22} height={22} />,
+     to: "/settings/api-keys",
+@@ -85,12 +118,6 @@ export const SAAS_NAV_ITEMS: SettingsNavItem[] = [
+     text: "SETTINGS$NAV_SECRETS",
+     section: "personal",
+   },
+-  {
+-    icon: <ServerProcessIcon width={22} height={22} />,
+-    to: "/settings/mcp",
+-    text: "SETTINGS$NAV_MCP",
+-    section: "personal",
+-  },
+   {
+     icon: <UserIcon width={22} height={22} />,
+     to: "/settings/user",
+@@ -124,6 +151,24 @@ export const SAAS_NAV_ITEMS: SettingsNavItem[] = [
+ ];
+ 
+ export const OSS_NAV_ITEMS: SettingsNavItem[] = [
++  // Agent Type — top-level selector (OpenHands / ACP).
++  {
++    icon: <CircuitIcon width={22} height={22} />,
++    to: "/settings/agent-type",
++    text: "SETTINGS$NAV_AGENT_TYPE",
++  },
++  // ACP-agent sub-configuration (only visible in ACP mode).
++  {
++    icon: <ServerProcessIcon width={22} height={22} />,
++    to: "/settings/acp-server",
++    text: "SETTINGS$NAV_ACP_SERVER",
++  },
++  {
++    icon: <CircuitIcon width={22} height={22} />,
++    to: "/settings/acp-model",
++    text: "SETTINGS$NAV_ACP_MODEL",
++  },
++  // OpenHands-agent sub-configuration (all hidden in ACP mode).
+   {
+     icon: <CircuitIcon width={22} height={22} />,
+     to: "/settings",
+diff --git a/frontend/src/hooks/use-settings-nav-items.ts b/frontend/src/hooks/use-settings-nav-items.ts
+index dbc84034e360..da711395d7f6 100644
+--- a/frontend/src/hooks/use-settings-nav-items.ts
++++ b/frontend/src/hooks/use-settings-nav-items.ts
+@@ -9,10 +9,38 @@ import { OrganizationUserRole } from "#/types/org";
+ import { isBillingHidden } from "#/utils/org/billing-visibility";
+ import { isSettingsPageHidden } from "#/utils/settings-utils";
+ import { useMe } from "./query/use-me";
++import { useSettings } from "./query/use-settings";
+ import { usePermission } from "./organizations/use-permissions";
+ import { useOrgTypeAndAccess } from "./use-org-type-and-access";
+ import { I18nKey } from "#/i18n/declaration";
+ 
++/** Settings-nav entries that only make sense for the standard LLM agent.
++ *
++ * When the user has picked the ACP variant (``agent_kind === "acp"``),
++ * the ACP subprocess owns its own system prompt, tool set, memory,
++ * skills, and MCP — so these nav entries would just route to pages
++ * that silently ignore what the user saves. We hide them so the
++ * sidebar reflects reality. The Agent Type page
++ * (``/settings/agent-type``) is how the user switches back. */
++const LLM_ONLY_NAV_PATHS = new Set<string>([
++  "/settings", // LLM page — only applies to the OpenHands agent.
++  "/settings/condenser",
++  "/settings/verification",
++  "/settings/mcp",
++  "/settings/skills", // Skills get injected into LLM agent_context; ACP ignores them.
++  "/settings/org-defaults",
++  "/settings/org-defaults/condenser",
++  "/settings/org-defaults/verification",
++]);
++
++/** Settings-nav entries that only apply to the ACP variant. Hidden
++ *  when ``agent_kind !== "acp"`` so OpenHands-agent users don't see
++ *  ACP-subprocess configuration they can't act on. */
++const ACP_ONLY_NAV_PATHS = new Set<string>([
++  "/settings/acp-server",
++  "/settings/acp-model",
++]);
++
+ // Rendered navigation item types
+ export type SettingsNavRenderedItem =
+   | { type: "item"; item: SettingsNavItem }
+@@ -36,10 +64,22 @@ const SECTION_HEADERS: Partial<Record<SettingsNavSection, I18nKey>> = {
+ export function useSettingsNavItems(): SettingsNavRenderedItem[] {
+   const { data: config } = useConfig();
+   const { data: user } = useMe();
++  const { data: settings } = useSettings();
+   const userRole: OrganizationUserRole = user?.role ?? "member";
+   const { hasPermission } = usePermission(userRole);
+   const { isPersonalOrg, isTeamOrg, organizationId } = useOrgTypeAndAccess();
+ 
++  // ACP replaces the standard LLM agent wholesale; hide the LLM-only
++  // sub-tabs so the sidebar doesn't suggest they still apply.
++  const agentSettings = settings?.agent_settings as
++    | Record<string, unknown>
++    | undefined;
++  const agentKind =
++    typeof agentSettings?.agent_kind === "string"
++      ? (agentSettings.agent_kind as string)
++      : "llm";
++  const hideLlmOnlyNav = agentKind === "acp";
++
+   const shouldHideBilling = isBillingHidden(
+     config,
+     hasPermission("view_billing"),
+@@ -53,6 +93,18 @@ export function useSettingsNavItems(): SettingsNavRenderedItem[] {
+   // First apply feature flag-based hiding
+   items = items.filter((item) => !isSettingsPageHidden(item.to, featureFlags));
+ 
++  // Reshape the sidebar to match the active agent kind:
++  // - ACP mode hides LLM-only sub-tabs (LLM, Condenser, Verification,
++  //   MCP, Skills) — those don't apply when the ACP subprocess owns
++  //   the agent loop.
++  // - LLM (OpenHands) mode hides the ACP-only sub-tabs (ACP Server,
++  //   ACP Model).
++  if (hideLlmOnlyNav) {
++    items = items.filter((item) => !LLM_ONLY_NAV_PATHS.has(item.to));
++  } else {
++    items = items.filter((item) => !ACP_ONLY_NAV_PATHS.has(item.to));
++  }
++
+   // Hide billing when billing is not accessible OR when in team org
+   if (shouldHideBilling || isTeamOrg) {
+     items = items.filter((item) => item.to !== "/settings/billing");
+diff --git a/frontend/src/i18n/declaration.ts b/frontend/src/i18n/declaration.ts
+index 084da4b01e33..0bdf18031a81 100644
+--- a/frontend/src/i18n/declaration.ts
++++ b/frontend/src/i18n/declaration.ts
+@@ -63,6 +63,16 @@ export enum I18nKey {
+   SETTINGS$MCP_TITLE = "SETTINGS$MCP_TITLE",
+   SETTINGS$MCP_DESCRIPTION = "SETTINGS$MCP_DESCRIPTION",
+   SETTINGS$NAV_MCP = "SETTINGS$NAV_MCP",
++  SETTINGS$NAV_AGENT_TYPE = "SETTINGS$NAV_AGENT_TYPE",
++  SETTINGS$NAV_ACP_SERVER = "SETTINGS$NAV_ACP_SERVER",
++  SETTINGS$NAV_ACP_MODEL = "SETTINGS$NAV_ACP_MODEL",
++  SETTINGS$AGENT_TYPE_TITLE = "SETTINGS$AGENT_TYPE_TITLE",
++  SETTINGS$AGENT_TYPE_LABEL = "SETTINGS$AGENT_TYPE_LABEL",
++  SETTINGS$AGENT_TYPE_OPENHANDS = "SETTINGS$AGENT_TYPE_OPENHANDS",
++  SETTINGS$AGENT_TYPE_ACP = "SETTINGS$AGENT_TYPE_ACP",
++  SETTINGS$AGENT_TYPE_OPENHANDS_DESCRIPTION = "SETTINGS$AGENT_TYPE_OPENHANDS_DESCRIPTION",
++  SETTINGS$AGENT_TYPE_ACP_DESCRIPTION = "SETTINGS$AGENT_TYPE_ACP_DESCRIPTION",
++  SETTINGS$LLM_ACP_ACTIVE_NOTICE = "SETTINGS$LLM_ACP_ACTIVE_NOTICE",
+   SETTINGS$MCP_CONFIGURATION = "SETTINGS$MCP_CONFIGURATION",
+   SETTINGS$MCP_EDIT_CONFIGURATION = "SETTINGS$MCP_EDIT_CONFIGURATION",
+   SETTINGS$MCP_PREVIEW_CHANGES = "SETTINGS$MCP_PREVIEW_CHANGES",
+diff --git a/frontend/src/i18n/translation.json b/frontend/src/i18n/translation.json
+index 9136024e393b..210966cf61fa 100644
+--- a/frontend/src/i18n/translation.json
++++ b/frontend/src/i18n/translation.json
+@@ -1070,6 +1070,176 @@
+     "uk": "MCP",
+     "ca": "MCP"
+   },
++  "SETTINGS$NAV_AGENT_TYPE": {
++    "en": "Agent Type",
++    "ja": "Agent Type",
++    "zh-CN": "Agent Type",
++    "zh-TW": "Agent Type",
++    "ko-KR": "Agent Type",
++    "no": "Agent Type",
++    "it": "Agent Type",
++    "pt": "Agent Type",
++    "es": "Agent Type",
++    "ar": "Agent Type",
++    "fr": "Agent Type",
++    "tr": "Agent Type",
++    "de": "Agent Type",
++    "uk": "Agent Type",
++    "ca": "Agent Type"
++  },
++  "SETTINGS$NAV_ACP_SERVER": {
++    "en": "ACP Server",
++    "ja": "ACP Server",
++    "zh-CN": "ACP Server",
++    "zh-TW": "ACP Server",
++    "ko-KR": "ACP Server",
++    "no": "ACP Server",
++    "it": "ACP Server",
++    "pt": "ACP Server",
++    "es": "ACP Server",
++    "ar": "ACP Server",
++    "fr": "ACP Server",
++    "tr": "ACP Server",
++    "de": "ACP Server",
++    "uk": "ACP Server",
++    "ca": "ACP Server"
++  },
++  "SETTINGS$NAV_ACP_MODEL": {
++    "en": "ACP Model",
++    "ja": "ACP Model",
++    "zh-CN": "ACP Model",
++    "zh-TW": "ACP Model",
++    "ko-KR": "ACP Model",
++    "no": "ACP Model",
++    "it": "ACP Model",
++    "pt": "ACP Model",
++    "es": "ACP Model",
++    "ar": "ACP Model",
++    "fr": "ACP Model",
++    "tr": "ACP Model",
++    "de": "ACP Model",
++    "uk": "ACP Model",
++    "ca": "ACP Model"
++  },
++  "SETTINGS$AGENT_TYPE_TITLE": {
++    "en": "Agent Type",
++    "ja": "Agent Type",
++    "zh-CN": "Agent Type",
++    "zh-TW": "Agent Type",
++    "ko-KR": "Agent Type",
++    "no": "Agent Type",
++    "it": "Agent Type",
++    "pt": "Agent Type",
++    "es": "Agent Type",
++    "ar": "Agent Type",
++    "fr": "Agent Type",
++    "tr": "Agent Type",
++    "de": "Agent Type",
++    "uk": "Agent Type",
++    "ca": "Agent Type"
++  },
++  "SETTINGS$AGENT_TYPE_LABEL": {
++    "en": "Agent type",
++    "ja": "Agent type",
++    "zh-CN": "Agent type",
++    "zh-TW": "Agent type",
++    "ko-KR": "Agent type",
++    "no": "Agent type",
++    "it": "Agent type",
++    "pt": "Agent type",
++    "es": "Agent type",
++    "ar": "Agent type",
++    "fr": "Agent type",
++    "tr": "Agent type",
++    "de": "Agent type",
++    "uk": "Agent type",
++    "ca": "Agent type"
++  },
++  "SETTINGS$AGENT_TYPE_OPENHANDS": {
++    "en": "OpenHands",
++    "ja": "OpenHands",
++    "zh-CN": "OpenHands",
++    "zh-TW": "OpenHands",
++    "ko-KR": "OpenHands",
++    "no": "OpenHands",
++    "it": "OpenHands",
++    "pt": "OpenHands",
++    "es": "OpenHands",
++    "ar": "OpenHands",
++    "fr": "OpenHands",
++    "tr": "OpenHands",
++    "de": "OpenHands",
++    "uk": "OpenHands",
++    "ca": "OpenHands"
++  },
++  "SETTINGS$AGENT_TYPE_ACP": {
++    "en": "ACP (Agent Client Protocol)",
++    "ja": "ACP (Agent Client Protocol)",
++    "zh-CN": "ACP (Agent Client Protocol)",
++    "zh-TW": "ACP (Agent Client Protocol)",
++    "ko-KR": "ACP (Agent Client Protocol)",
++    "no": "ACP (Agent Client Protocol)",
++    "it": "ACP (Agent Client Protocol)",
++    "pt": "ACP (Agent Client Protocol)",
++    "es": "ACP (Agent Client Protocol)",
++    "ar": "ACP (Agent Client Protocol)",
++    "fr": "ACP (Agent Client Protocol)",
++    "tr": "ACP (Agent Client Protocol)",
++    "de": "ACP (Agent Client Protocol)",
++    "uk": "ACP (Agent Client Protocol)",
++    "ca": "ACP (Agent Client Protocol)"
++  },
++  "SETTINGS$AGENT_TYPE_OPENHANDS_DESCRIPTION": {
++    "en": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "ja": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "zh-CN": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "zh-TW": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "ko-KR": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "no": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "it": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "pt": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "es": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "ar": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "fr": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "tr": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "de": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "uk": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar.",
++    "ca": "The standard OpenHands agent. Configure its model, tools, condenser, verification, and MCP in the sidebar."
++  },
++  "SETTINGS$AGENT_TYPE_ACP_DESCRIPTION": {
++    "en": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "ja": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "zh-CN": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "zh-TW": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "ko-KR": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "no": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "it": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "pt": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "es": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "ar": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "fr": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "tr": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "de": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "uk": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected.",
++    "ca": "Delegate the agent loop to an ACP-compatible subprocess (Claude Code, Codex, or Gemini CLI). The subprocess manages its own model and tools — the LLM / Condenser / Verification / MCP tabs are hidden while ACP is selected."
++  },
++  "SETTINGS$LLM_ACP_ACTIVE_NOTICE": {
++    "en": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "ja": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "zh-CN": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "zh-TW": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "ko-KR": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "no": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "it": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "pt": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "es": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "ar": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "fr": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "tr": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "de": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "uk": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent.",
++    "ca": "You currently have an ACP agent selected. Saving here will switch you back to the standard LLM agent."
++  },
+   "SETTINGS$MCP_CONFIGURATION": {
+     "en": "MCP Configuration",
+     "ja": "MCP設定",
+diff --git a/frontend/src/routes.ts b/frontend/src/routes.ts
+index a006d15fc9a1..db0ecbf91a9e 100644
+--- a/frontend/src/routes.ts
++++ b/frontend/src/routes.ts
+@@ -27,6 +27,9 @@ export default [
+         "routes/org-default-verification-settings.tsx",
+       ),
+       route("mcp", "routes/mcp-settings.tsx"),
++      route("agent-type", "routes/agent-type-settings.tsx"),
++      route("acp-server", "routes/acp-server-settings.tsx"),
++      route("acp-model", "routes/acp-model-settings.tsx"),
+       route("skills", "routes/skills-settings.tsx"),
+       route("user", "routes/user-settings.tsx"),
+       route("integrations", "routes/git-settings.tsx"),
+diff --git a/frontend/src/routes/acp-model-settings.tsx b/frontend/src/routes/acp-model-settings.tsx
+new file mode 100644
+index 000000000000..4e7d3fc1b333
+--- /dev/null
++++ b/frontend/src/routes/acp-model-settings.tsx
+@@ -0,0 +1,42 @@
++import { SdkSectionPage } from "#/components/features/settings/sdk-settings/sdk-section-page";
++import { createPermissionGuard } from "#/utils/org/permission-guard";
++
++/**
++ * Settings page for ACP *model* configuration — what the ACP
++ * subprocess actually runs once launched:
++ *
++ * - Basic view: ``acp_model`` (e.g. ``claude-opus-4-6``).
++ * - Advanced/all: ``acp_session_mode``, ``acp_prompt_timeout``.
++ *
++ * Subprocess launch details (``acp_server`` + custom command/args/env)
++ * live on the companion "ACP Server" page. Saving commits
++ * ``agent_kind: "acp"``.
++ */
++const ACP_SERVER_FIELDS = new Set<string>([
++  "acp_server",
++  "acp_command",
++  "acp_args",
++  "acp_env",
++]);
++
++function AcpModelSettingsScreen() {
++  return (
++    <SdkSectionPage
++      sectionKeys={["acp"]}
++      variant="acp"
++      excludeKeys={ACP_SERVER_FIELDS}
++      buildPayload={(basePayload) => {
++        const agentSettings = {
++          ...(basePayload as Record<string, unknown>),
++          agent_kind: "acp",
++        };
++        return { agent_settings: agentSettings };
++      }}
++      testId="acp-model-settings-screen"
++    />
++  );
++}
++
++export const clientLoader = createPermissionGuard("view_llm_settings");
++
++export default AcpModelSettingsScreen;
+diff --git a/frontend/src/routes/acp-server-settings.tsx b/frontend/src/routes/acp-server-settings.tsx
+new file mode 100644
+index 000000000000..9ea49e3c6afa
+--- /dev/null
++++ b/frontend/src/routes/acp-server-settings.tsx
+@@ -0,0 +1,54 @@
++import { SdkSectionPage } from "#/components/features/settings/sdk-settings/sdk-section-page";
++import { createPermissionGuard } from "#/utils/org/permission-guard";
++
++/**
++ * Settings page for ACP *subprocess launch* configuration + the
++ * provider credentials the subprocess needs to authenticate:
++ *
++ * - ACP section — basic: ``acp_server`` (Claude Code / Codex /
++ *   Gemini CLI / Custom). Advanced/all: ``acp_command``, ``acp_args``,
++ *   ``acp_env`` for overriding the default subprocess command.
++ * - LLM section — basic: ``llm.api_key`` + ``llm.base_url`` (the
++ *   backend translates these into the right provider env vars for the
++ *   chosen ``acp_server`` — see ``LiveStatusAppConversationService
++ *   ._acp_provider_env``). ``llm.model`` is excluded because the
++ *   authoritative model for ACP is ``acp_model`` on the ACP Model
++ *   page.
++ *
++ * The ``acp_model``, ``acp_session_mode``, and ``acp_prompt_timeout``
++ * fields are excluded here — they belong on the companion "ACP Model"
++ * page. Saving commits ``agent_kind: "acp"`` so landing here while in
++ * OpenHands mode and saving switches the agent type over.
++ */
++const EXCLUDED_KEYS = new Set<string>([
++  // Lives on the ACP Model page.
++  "acp_model",
++  "acp_session_mode",
++  "acp_prompt_timeout",
++  // ``acp_model`` is the authoritative model identifier for ACP; the
++  // ``llm.model`` field on ``ACPAgentSettings`` is only used for cost
++  // attribution inside OpenHands and would confuse the user if shown.
++  "llm.model",
++]);
++
++function AcpServerSettingsScreen() {
++  return (
++    <SdkSectionPage
++      sectionKeys={["acp", "llm"]}
++      variant="acp"
++      excludeKeys={EXCLUDED_KEYS}
++      buildPayload={(basePayload) => {
++        const agentSettings = {
++          ...(basePayload as Record<string, unknown>),
++          agent_kind: "acp",
++        };
++        return { agent_settings: agentSettings };
++      }}
++      testId="acp-server-settings-screen"
++    />
++  );
++}
++
++export const clientLoader = createPermissionGuard("view_llm_settings");
++
++export default AcpServerSettingsScreen;
+diff --git a/frontend/src/routes/agent-type-settings.tsx b/frontend/src/routes/agent-type-settings.tsx
+new file mode 100644
+index 000000000000..51f4b6616b22
+--- /dev/null
++++ b/frontend/src/routes/agent-type-settings.tsx
+@@ -0,0 +1,138 @@
++import React from "react";
++import { AxiosError } from "axios";
++import { useTranslation } from "react-i18next";
++import { BrandButton } from "#/components/features/settings/brand-button";
++import { SettingsDropdownInput } from "#/components/features/settings/settings-dropdown-input";
++import { useSaveSettings } from "#/hooks/mutation/use-save-settings";
++import { useSettings } from "#/hooks/query/use-settings";
++import { I18nKey } from "#/i18n/declaration";
++import { Typography } from "#/ui/typography";
++import {
++  displayErrorToast,
++  displaySuccessToast,
++} from "#/utils/custom-toast-handlers";
++import { createPermissionGuard } from "#/utils/org/permission-guard";
++import { retrieveAxiosErrorMessage } from "#/utils/retrieve-axios-error-message";
++
++/** Map from the user-facing agent-type label to the ``agent_kind``
++ *  discriminator value the backend expects. "OpenHands" is the
++ *  friendly name for the standard LLM agent. */
++const AGENT_KINDS = {
++  openhands: "llm",
++  acp: "acp",
++} as const;
++
++type AgentTypeKey = keyof typeof AGENT_KINDS;
++
++/**
++ * Settings page that picks between the OpenHands (LLM) agent and an
++ * ACP agent. This page is deliberately *just the selector* — saving
++ * here only writes ``agent_kind``. The ACP-specific configuration
++ * (server / model / subprocess details) lives on the dedicated
++ * ``ACP Server`` and ``ACP Model`` sidebar entries that appear when
++ * ``agent_kind === "acp"``.
++ *
++ * Switching agent type also reshapes the rest of the sidebar:
++ *
++ * - ``agent_kind = "llm"`` → LLM, Condenser, Verification, MCP,
++ *   Skills are all visible.
++ * - ``agent_kind = "acp"`` → ACP Server and ACP Model appear;
++ *   LLM-only sub-tabs (Condenser, Verification, MCP, Skills) hide.
++ */
++function AgentTypeSettingsScreen() {
++  const { t } = useTranslation();
++  const { data: settings } = useSettings();
++  const { mutate: saveSettings, isPending } = useSaveSettings();
++
++  const persistedAgentKind = (
++    settings?.agent_settings as Record<string, unknown> | undefined
++  )?.agent_kind;
++  const persistedKey: AgentTypeKey =
++    persistedAgentKind === "acp" ? "acp" : "openhands";
++
++  const [selectedKey, setSelectedKey] =
++    React.useState<AgentTypeKey>(persistedKey);
++  React.useEffect(() => {
++    setSelectedKey(persistedKey);
++  }, [persistedKey]);
++
++  const selectionDirty = selectedKey !== persistedKey;
++  const isAcp = selectedKey === "acp";
++
++  const agentTypeItems = React.useMemo(
++    () => [
++      {
++        key: "openhands" satisfies AgentTypeKey,
++        label: t(I18nKey.SETTINGS$AGENT_TYPE_OPENHANDS),
++      },
++      {
++        key: "acp" satisfies AgentTypeKey,
++        label: t(I18nKey.SETTINGS$AGENT_TYPE_ACP),
++      },
++    ],
++    [t],
++  );
++
++  const handleSave = React.useCallback(() => {
++    saveSettings(
++      {
++        agent_settings: { agent_kind: AGENT_KINDS[selectedKey] },
++      },
++      {
++        onSuccess: () => displaySuccessToast(t(I18nKey.SETTINGS$SAVED_WARNING)),
++        onError: (error: AxiosError) => {
++          const msg = retrieveAxiosErrorMessage(error);
++          displayErrorToast(msg || t(I18nKey.ERROR$GENERIC));
++        },
++      },
++    );
++  }, [saveSettings, selectedKey, t]);
++
++  return (
++    <div
++      className="flex flex-col gap-6"
++      data-testid="agent-type-settings-screen-wrapper"
++    >
++      <div className="flex flex-col gap-4 rounded-md border border-[color:var(--color-border,rgba(255,255,255,0.1))] p-4">
++        <Typography.H3>{t(I18nKey.SETTINGS$AGENT_TYPE_TITLE)}</Typography.H3>
++        <SettingsDropdownInput
++          testId="agent-type-dropdown"
++          name="agent-type"
++          label={t(I18nKey.SETTINGS$AGENT_TYPE_LABEL)}
++          items={agentTypeItems}
++          selectedKey={selectedKey}
++          isClearable={false}
++          onSelectionChange={(key) => {
++            if (key === "openhands" || key === "acp") {
++              setSelectedKey(key);
++            }
++          }}
++          wrapperClassName="w-full max-w-sm"
++        />
++        <p className="text-sm text-tertiary-alt">
++          {isAcp
++            ? t(I18nKey.SETTINGS$AGENT_TYPE_ACP_DESCRIPTION)
++            : t(I18nKey.SETTINGS$AGENT_TYPE_OPENHANDS_DESCRIPTION)}
++        </p>
++      </div>
++
++      <div className="sticky bottom-0 bg-base py-4">
++        <BrandButton
++          testId="save-button"
++          type="button"
++          variant="primary"
++          isDisabled={isPending || !selectionDirty}
++          onClick={handleSave}
++        >
++          {isPending
++            ? t(I18nKey.SETTINGS$SAVING)
++            : t(I18nKey.SETTINGS$SAVE_CHANGES)}
++        </BrandButton>
++      </div>
++    </div>
++  );
++}
++
++export const clientLoader = createPermissionGuard("view_llm_settings");
++
++export default AgentTypeSettingsScreen;
+diff --git a/frontend/src/routes/llm-settings.tsx b/frontend/src/routes/llm-settings.tsx
+index 87af945da3d3..8b7bf76bbc66 100644
+--- a/frontend/src/routes/llm-settings.tsx
++++ b/frontend/src/routes/llm-settings.tsx
+@@ -499,6 +499,11 @@ export function LlmSettingsScreen({
+         }
+       }
+ 
++      // Saving from the LLM page always commits the LLM variant — the
++      // sidebar-route is the discriminator, so inject ``agent_kind`` on
++      // write. Existing stored ACP settings are replaced.
++      agentSettings.agent_kind = "llm";
++
+       return { agent_settings: agentSettings, ...topLevel };
+     },
+     [
+@@ -511,18 +516,38 @@ export function LlmSettingsScreen({
+     ],
+   );
+ 
++  // When the user previously picked the ACP variant, warn them that
++  // saving this page will overwrite it. Only the active (persisted)
++  // agent_kind matters here — we don't try to infer from form dirtiness.
++  const persistedAgentKind = (
++    settings?.agent_settings as Record<string, unknown> | undefined
++  )?.agent_kind;
++  const acpCurrentlyActive = persistedAgentKind === "acp";
++
+   return (
+-    <SdkSectionPage
+-      scope={scope}
+-      sectionKeys={["llm", "general"]}
+-      excludeKeys={LLM_EXCLUDED_KEYS}
+-      header={buildHeader}
+-      extraDirty={searchApiKeyDirty}
+-      buildPayload={buildPayload}
+-      onSaveSuccess={() => setSearchApiKeyDirty(false)}
+-      getInitialView={getInitialView}
+-      testId="llm-settings-screen"
+-    />
++    <>
++      {acpCurrentlyActive ? (
++        <div
++          role="note"
++          data-testid="llm-settings-acp-active-notice"
++          className="mb-4 rounded-md border border-[color:var(--color-warning-subtle,#8a6d3b)] bg-[color:var(--color-warning-bg,rgba(255,176,0,0.12))] p-4 text-sm"
++        >
++          <p>{t(I18nKey.SETTINGS$LLM_ACP_ACTIVE_NOTICE)}</p>
++        </div>
++      ) : null}
++      <SdkSectionPage
++        scope={scope}
++        sectionKeys={["llm", "general"]}
++        excludeKeys={LLM_EXCLUDED_KEYS}
++        variant="llm"
++        header={buildHeader}
++        extraDirty={searchApiKeyDirty}
++        buildPayload={buildPayload}
++        onSaveSuccess={() => setSearchApiKeyDirty(false)}
++        getInitialView={getInitialView}
++        testId="llm-settings-screen"
++      />
++    </>
+   );
+ }
+ 
+diff --git a/frontend/src/types/settings.ts b/frontend/src/types/settings.ts
+index c209e941590d..fe306108fbe0 100644
+--- a/frontend/src/types/settings.ts
++++ b/frontend/src/types/settings.ts
+@@ -88,12 +88,27 @@ export type SettingsFieldSchema = {
+   prominence: SettingProminence;
+   secret: boolean;
+   required: boolean;
++  /**
++   * When set, this field only applies to the named ``AgentSettings`` variant
++   * ("llm" or "acp"). Fields with ``variant: null`` are shown regardless.
++   */
++  variant?: string | null;
+ };
+ 
+ export type SettingsSectionSchema = {
+   key: string;
+   label: string;
+   fields: SettingsFieldSchema[];
++  /**
++   * When set, this section only applies to the named AgentSettings variant
++   * (currently "llm" or "acp"). Sections with variant === null are always
++   * shown regardless of agent_kind.
++   *
++   * The GUI filters sections by the user's current agent_kind so that the
++   * LLM-only sections (llm, condenser, verification) hide when the user
++   * picks "acp", and the ACP-only section hides when the user picks "llm".
++   */
++  variant?: string | null;
+ };
+ 
+ export type SettingsSchema = {
+diff --git a/frontend/src/utils/sdk-settings-schema.ts b/frontend/src/utils/sdk-settings-schema.ts
+index 89907584ea8c..ceaf1eed606f 100644
+--- a/frontend/src/utils/sdk-settings-schema.ts
++++ b/frontend/src/utils/sdk-settings-schema.ts
+@@ -426,22 +426,52 @@ export function buildSdkSettingsPayloadForView(
+   return payload as SdkSettingsPayload;
+ }
+ 
++/** Whether a section applies to the given ``AgentSettings`` variant.
++ *  Sections with variant == null are always shown; otherwise the
++ *  section variant must match the page's variant. When the page does
++ *  not pass a variant (default), every section is kept — used by pages
++ *  that are not variant-aware. */
++function isSectionVisibleForVariant(
++  section: SettingsSectionSchema,
++  variant: string | null | undefined,
++): boolean {
++  if (variant == null) return true;
++  if (section.variant == null) return true;
++  return section.variant === variant;
++}
++
++/** Whether a field applies to the given ``AgentSettings`` variant.
++ *  Same rules as ``isSectionVisibleForVariant``. */
++function isFieldVisibleForVariant(
++  field: SettingsFieldSchema,
++  variant: string | null | undefined,
++): boolean {
++  if (variant == null) return true;
++  if (field.variant == null) return true;
++  return field.variant === variant;
++}
++
+ /** Return sections with fields filtered for the current view tier.
+- *  Specially-rendered fields are excluded from the generic list. */
++ *  Specially-rendered fields are excluded from the generic list.
++ *  Sections and fields whose ``variant`` does not match the page's
++ *  ``agent_kind`` are hidden. */
+ export function getVisibleSettingsSections(
+   schema: SettingsSchema,
+   values: SettingsFormValues,
+   view: SettingsView,
+   excludeKeys: Set<string> = SPECIALLY_RENDERED_KEYS,
++  variant: string | null | undefined = null,
+ ): SettingsSectionSchema[] {
+   return schema.sections
++    .filter((section) => isSectionVisibleForVariant(section, variant))
+     .map((section) => ({
+       ...section,
+       fields: section.fields.filter(
+         (field) =>
+           !excludeKeys.has(field.key) &&
+           isFieldVisibleInView(field, view) &&
+-          isSettingsFieldVisible(field, values),
++          isSettingsFieldVisible(field, values) &&
++          isFieldVisibleForVariant(field, variant),
+       ),
+     }))
+     .filter((section) => section.fields.length > 0);
+diff --git a/openhands/app_server/app_conversation/app_conversation_models.py b/openhands/app_server/app_conversation/app_conversation_models.py
+index 3a3b8c900da4..b2bd8a675e93 100644
+--- a/openhands/app_server/app_conversation/app_conversation_models.py
++++ b/openhands/app_server/app_conversation/app_conversation_models.py
+@@ -84,6 +84,15 @@ class AppConversationInfo(BaseModel):
+     pr_number: list[int] = Field(default_factory=list)
+     llm_model: str | None = None
+ 
++    # Discriminator for the agent variant that owns this conversation.
++    # Defaults to ``"llm"`` so rows persisted before the ACP variant
++    # shipped round-trip unchanged. Populated from the ``agent_kind`` on
++    # ``AgentSettings`` at conversation-start time. Downstream consumers
++    # (URL builder, live-status poller) branch on this to hit the right
++    # agent-server route — ``/api/conversations`` for ``"llm"``,
++    # ``/api/acp/conversations`` for ``"acp"``.
++    agent_kind: str = 'llm'
++
+     metrics: MetricsSnapshot | None = None
+ 
+     parent_conversation_id: OpenHandsUUID | None = None
+diff --git a/openhands/app_server/app_conversation/live_status_app_conversation_service.py b/openhands/app_server/app_conversation/live_status_app_conversation_service.py
+index bce1a0eab637..5616b3070938 100644
+--- a/openhands/app_server/app_conversation/live_status_app_conversation_service.py
++++ b/openhands/app_server/app_conversation/live_status_app_conversation_service.py
+@@ -15,8 +15,10 @@
+ from pydantic import Field, SecretStr, TypeAdapter
+ 
+ from openhands.agent_server.models import (
++    ACPConversationInfo,
+     ConversationInfo,
+     SendMessageRequest,
++    StartACPConversationRequest,
+     StartConversationRequest,
+     TextContent,
+ )
+@@ -52,10 +54,7 @@
+ from openhands.app_server.app_conversation.sql_app_conversation_info_service import (
+     SQLAppConversationInfoService,
+ )
+-from openhands.app_server.config import (
+-    get_event_callback_service,
+-    resolve_provider_llm_base_url,
+-)
++from openhands.app_server.config import get_event_callback_service
+ from openhands.app_server.errors import SandboxError
+ from openhands.app_server.event.event_service import EventService
+ from openhands.app_server.event_callback.event_callback_models import EventCallback
+@@ -90,6 +89,7 @@
+ from openhands.integrations.provider import PROVIDER_TOKEN_TYPE, ProviderType
+ from openhands.integrations.service_types import SuggestedTask
+ from openhands.sdk import Agent, AgentContext, LocalWorkspace
++from openhands.sdk.agent.acp_agent import ACPAgent
+ from openhands.sdk.hooks import HookConfig
+ from openhands.sdk.llm import LLM
+ from openhands.sdk.plugin import PluginSource
+@@ -108,6 +108,7 @@
+ )
+ from openhands.utils._redact_compat import sanitize_config
+ from openhands.utils.git import ensure_valid_git_branch_name
++from openhands.utils.sdk_settings_compat import ACPAgentSettings
+ 
+ _conversation_info_type_adapter = TypeAdapter(list[ConversationInfo | None])
+ _logger = logging.getLogger(__name__)
+@@ -127,6 +128,28 @@
+ </IMPORTANT_PLANNING_BOUNDARIES>"""
+ 
+ 
++def _agent_kind_to_router_path(agent_kind: str | None) -> str:
++    """Map an ``agent_kind`` to the agent-server conversation router path.
++
++    - ``'acp'`` → ``/api/acp/conversations``
++    - ``'llm'`` / ``None`` (legacy rows) → ``/api/conversations``
++    - Anything else logs a warning and falls back to the LLM path.
++      Routing an unknown kind to ACP would 404 in more cases; routing
++      it to LLM at least lets the GET surface a readable error instead
++      of a 404 on a nonexistent router.
++    """
++    if agent_kind == 'acp':
++        return '/api/acp/conversations'
++    if agent_kind not in (None, 'llm'):
++        _logger.warning(
++            'Unknown agent_kind %r; routing to /api/conversations. '
++            'Add a branch to _agent_kind_to_router_path if this is a '
++            'new variant.',
++            agent_kind,
++        )
++    return '/api/conversations'
++
++
+ @dataclass
+ class LiveStatusAppConversationService(AppConversationServiceBase):
+     """AppConversationService which combines live status info from the sandbox with stored data."""
+@@ -317,15 +340,25 @@ async def _start_app_conversation(
+             task.agent_server_url = agent_server_url
+             yield task
+ 
+-            # Start conversation...
++            # Start conversation — ACP-backed requests go to the ACP
++            # router (``/api/acp/conversations``) which accepts the
++            # ``ACPEnabledAgent`` union; the legacy Agent-only
++            # endpoint stays at ``/api/conversations``.
++            is_acp_request = isinstance(
++                start_conversation_request, StartACPConversationRequest
++            )
++            conversation_path = (
++                '/api/acp/conversations' if is_acp_request else '/api/conversations'
++            )
+             body_json = start_conversation_request.model_dump(
+                 mode='json', context={'expose_secrets': True}
+             )
+-            # Log hook_config to verify it's being passed
+             hook_config_in_request = body_json.get('hook_config')
+             _logger.debug(
+-                f'Sending StartConversationRequest with hook_config: '
+-                f'{hook_config_in_request}'
++                'Sending %s to %s with hook_config: %s',
++                type(start_conversation_request).__name__,
++                conversation_path,
++                hook_config_in_request,
+             )
+             headers = (
+                 {'X-Session-API-Key': sandbox.session_api_key}
+@@ -333,23 +366,40 @@ async def _start_app_conversation(
+                 else {}
+             )
+             response = await self.httpx_client.post(
+-                f'{agent_server_url}/api/conversations',
++                f'{agent_server_url}{conversation_path}',
+                 json=body_json,
+                 headers=headers,
+                 timeout=self.sandbox_startup_timeout,
+             )
+ 
+             response.raise_for_status()
+-            info = ConversationInfo.model_validate(response.json())
++            info: ConversationInfo | ACPConversationInfo
++            if is_acp_request:
++                info = ACPConversationInfo.model_validate(response.json())
++            else:
++                info = ConversationInfo.model_validate(response.json())
+ 
+-            # Store info...
++            # Store info. For ACP agents the ``agent.llm`` field is a
++            # dummy sentinel; prefer ``acp_model`` (the real provider
++            # model) so the conversation list shows a meaningful name.
+             user_id = await self.user_context.get_user_id()
++            agent_obj = start_conversation_request.agent
++            if isinstance(agent_obj, ACPAgent):
++                display_model = agent_obj.acp_model or agent_obj.llm.model
++                agent_kind = 'acp'
++            else:
++                display_model = agent_obj.llm.model
++                agent_kind = 'llm'
+             app_conversation_info = AppConversationInfo(
+                 id=info.id,
+                 title=f'Conversation {info.id.hex[:5]}',
+                 sandbox_id=sandbox.id,
+                 created_by_user_id=user_id,
+-                llm_model=start_conversation_request.agent.llm.model,
++                llm_model=display_model,
++                # Discriminator used downstream (URL builder, live-status
++                # poller) to pick ``/api/conversations`` vs
++                # ``/api/acp/conversations``.
++                agent_kind=agent_kind,
+                 # Git parameters
+                 selected_repository=request.selected_repository,
+                 selected_branch=request.selected_branch,
+@@ -409,6 +459,15 @@ async def _build_app_conversations(
+             app_conversation_infos
+         )
+ 
++        # Map each conversation id to its ACP-vs-LLM discriminator so
++        # ``_get_live_conversation_info`` knows which agent-server route
++        # to call (``/api/conversations`` vs ``/api/acp/conversations``).
++        conversation_kind_by_id: dict[str, str] = {
++            info.id.hex: info.agent_kind
++            for info in app_conversation_infos
++            if info is not None
++        }
++
+         # Get referenced sandboxes in a single batch operation...
+         sandboxes = await self.sandbox_service.batch_get_sandboxes(
+             list(sandbox_id_to_conversation_ids)
+@@ -418,7 +477,9 @@ async def _build_app_conversations(
+         # Gather the running conversations
+         tasks = [
+             self._get_live_conversation_info(
+-                sandbox, sandbox_id_to_conversation_ids.get(sandbox.id)
++                sandbox,
++                sandbox_id_to_conversation_ids.get(sandbox.id),
++                conversation_kind_by_id,
+             )
+             for sandbox in sandboxes
+             if sandbox and sandbox.status == SandboxStatus.RUNNING
+@@ -454,41 +515,59 @@ async def _get_live_conversation_info(
+         self,
+         sandbox: SandboxInfo,
+         conversation_ids: list[str],
++        conversation_kind_by_id: dict[str, str] | None = None,
+     ) -> list[ConversationInfo]:
+-        """Get agent status for multiple conversations from the Agent Server."""
+-        try:
+-            # Build the URL with query parameters
+-            agent_server_url = self._get_agent_server_url(sandbox)
+-            url = f'{agent_server_url.rstrip("/")}/api/conversations'
+-            params = {'ids': conversation_ids}
++        """Get agent status for multiple conversations from the Agent Server.
+ 
+-            # Set up headers
+-            headers = {}
+-            if sandbox.session_api_key:
+-                headers['X-Session-API-Key'] = sandbox.session_api_key
++        The agent-server exposes two routers — ``/api/conversations`` for
++        the LLM agent and ``/api/acp/conversations`` for the ACP variant.
++        A single sandbox can host a mix, so split the id list by
++        ``agent_kind`` and hit each router independently. Missing from
++        the map → treated as ``"llm"`` (back-compat for legacy rows).
++        """
++        if not conversation_ids:
++            return []
++        kind_map = conversation_kind_by_id or {}
++        llm_ids = [c for c in conversation_ids if kind_map.get(c, 'llm') != 'acp']
++        acp_ids = [c for c in conversation_ids if kind_map.get(c, 'llm') == 'acp']
+ 
+-            response = await self.httpx_client.get(url, params=params, headers=headers)
+-            response.raise_for_status()
++        agent_server_url = self._get_agent_server_url(sandbox).rstrip('/')
++        headers: dict[str, str] = {}
++        if sandbox.session_api_key:
++            headers['X-Session-API-Key'] = sandbox.session_api_key
+ 
+-            data = response.json()
+-            conversation_info = _conversation_info_type_adapter.validate_python(data)
+-            conversation_info = [c for c in conversation_info if c]
+-            return conversation_info
+-        except httpx.HTTPStatusError:
+-            # The runtime API stops idle sandboxes all the time and they return a 404 or a 503.
+-            # This is normal and should not be considered an error.
+-            _logger.warning(
+-                f'Error getting conversation status from sandbox {sandbox.id}',
+-                exc_info=True,
+-            )
+-            return []
+-        except Exception:
+-            # Not getting a status is not a fatal error - we just mark the conversation as stopped
+-            _logger.exception(
+-                f'Error getting conversation status from sandbox {sandbox.id}',
+-                stack_info=True,
+-            )
+-            return []
++        async def _fetch(path: str, ids: list[str]) -> list[ConversationInfo]:
++            if not ids:
++                return []
++            try:
++                response = await self.httpx_client.get(
++                    f'{agent_server_url}{path}',
++                    params={'ids': ids},
++                    headers=headers,
++                )
++                response.raise_for_status()
++                data = response.json()
++                infos = _conversation_info_type_adapter.validate_python(data)
++                return [c for c in infos if c]
++            except httpx.HTTPStatusError:
++                # Runtime API stops idle sandboxes all the time; normal.
++                _logger.warning(
++                    f'Error getting conversation status from sandbox {sandbox.id} '
++                    f'at {path}',
++                    exc_info=True,
++                )
++                return []
++            except Exception:
++                _logger.exception(
++                    f'Error getting conversation status from sandbox {sandbox.id} '
++                    f'at {path}',
++                    stack_info=True,
++                )
++                return []
++
++        llm_infos = await _fetch('/api/conversations', llm_ids)
++        acp_infos = await _fetch('/api/acp/conversations', acp_ids)
++        return llm_infos + acp_infos
+ 
+     def _build_conversation(
+         self,
+@@ -514,7 +593,13 @@ def _build_conversation(
+                 None,
+             )
+             if conversation_url:
+-                conversation_url += f'/api/conversations/{app_conversation_info.id.hex}'
++                # ACP conversations live at ``/api/acp/conversations/{id}``;
++                # the legacy ``/api/conversations/{id}`` route 404s for them
++                # because it only accepts the LLM-agent variant. The frontend
++                # polls ``conversation_url`` for live status, so pointing it
++                # at the wrong route makes ACP conversations look stuck.
++                path = _agent_kind_to_router_path(app_conversation_info.agent_kind)
++                conversation_url += f'{path}/{app_conversation_info.id.hex}'
+             session_api_key = sandbox.session_api_key
+ 
+         return AppConversation(
+@@ -893,12 +978,24 @@ def _configure_llm(self, user: UserInfo, llm_model: str | None) -> LLM:
+             or user.agent_settings.llm.model
+             or LLM.model_fields['model'].default
+         )
+-
+-        base_url = resolve_provider_llm_base_url(
+-            model,
+-            user.agent_settings.llm.base_url,
+-            provider_base_url=self.openhands_provider_base_url,
+-        )
++        base_url = user.agent_settings.llm.base_url
++        if model and (
++            model.startswith('openhands/') or model.startswith('litellm_proxy/')
++        ):
++            # The SDK auto-fills base_url with the default public proxy for
++            # openhands/ models.  We need to distinguish "user explicitly set a
++            # custom URL" from "SDK auto-filled the default".
++            #
++            # Priority: user-explicit URL > deployment provider URL > SDK default
++            _SDK_DEFAULT_PROXY = 'https://llm-proxy.app.all-hands.dev/'
++            user_set_custom = base_url and base_url.rstrip(
++                '/'
++            ) != _SDK_DEFAULT_PROXY.rstrip('/')
++            if user_set_custom:
++                pass  # keep user's explicit base_url
++            elif self.openhands_provider_base_url:
++                base_url = self.openhands_provider_base_url
++            # else: keep the SDK default
+ 
+         return LLM(
+             model=model,
+@@ -1216,20 +1313,38 @@ async def _build_start_conversation_request_for_user(
+         remote_workspace: AsyncRemoteWorkspace | None = None,
+         selected_repository: str | None = None,
+         plugins: list[PluginSpec] | None = None,
+-    ) -> StartConversationRequest:
+-        """Build a complete StartConversationRequest for a user.
+-
+-        Resolves LLM, MCP, tools, secrets and agent context, then
+-        builds the ``Agent`` via ``AgentSettings.create_agent()``.
+-        Server-only overrides (system prompts, LLM tracing metadata,
+-        skills, hooks) are applied to the agent after creation.
+-        Finally delegates to ``ConversationSettings.create_request()``.
++    ) -> StartConversationRequest | StartACPConversationRequest:
++        """Build a conversation-start request for the user.
++
++        ``user.agent_settings`` is a discriminated union — either
++        ``LLMAgentSettings`` (standard Agent) or ``ACPAgentSettings``
++        (ACP-delegating ACPAgent). This method dispatches on the
++        variant and returns the matching request type:
++
++        - ``StartConversationRequest`` (LLM agent) — server-only
++          overrides (system prompts, LLM tracing metadata, skills,
++          hooks) are applied to the agent after ``create_agent()``.
++        - ``StartACPConversationRequest`` (ACP agent) — those
++          server-only overrides are **not** applied: the ACP
++          subprocess owns its own system prompt, tools, and agent
++          context, so hooks/skills/MCP do not apply.
+         """
+         user = await self.user_context.get_user_info()
+ 
+         project_dir = get_project_dir(working_dir, selected_repository)
+         workspace = LocalWorkspace(working_dir=project_dir)
+ 
++        # Dispatch on the discriminated-union variant.
++        if isinstance(user.agent_settings, ACPAgentSettings):
++            return await self._build_acp_start_conversation_request(
++                user=user,
++                conversation_id=conversation_id,
++                initial_message=initial_message,
++                workspace=workspace,
++                plugins=plugins,
++            )
++
++        # --- LLM-agent path (default) --------------------------------------
+         # --- secrets --------------------------------------------------------
+         secrets = await self._setup_secrets_for_git_providers(user)
+ 
+@@ -1257,7 +1372,7 @@ async def _build_start_conversation_request_for_user(
+         else:
+             tools = get_default_tools(enable_browser=True)
+ 
+-        # --- build AgentSettings and create agent ---------------------------
++        # --- build LLMAgentSettings and create agent ------------------------
+         from fastmcp.mcp_config import MCPConfig
+ 
+         configured_agent_settings = user.agent_settings.model_copy(
+@@ -1339,6 +1454,141 @@ async def _build_start_conversation_request_for_user(
+         # prompts, LLM metadata, skills) applied after create_agent().
+         return conv_settings.create_request(StartConversationRequest, agent=agent)
+ 
++    @staticmethod
++    def _acp_provider_env(settings: ACPAgentSettings) -> dict[str, str]:
++        """Translate UI-saved LLM credentials into the provider env vars
++        the chosen ACP subprocess expects.
++
++        Each ACP server reads auth + gateway config from environment
++        variables in its native provider's namespace:
++
++        - ``claude-code`` → ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_BASE_URL``
++        - ``codex``       → ``OPENAI_API_KEY``   / ``OPENAI_BASE_URL``
++        - ``gemini-cli``  → ``GEMINI_API_KEY``   / ``GEMINI_BASE_URL``
++
++        ``custom`` receives nothing synthesized — the user is on their
++        own via ``acp_env``.
++
++        Gated on ``llm.api_key``: the base URL alone is NOT a user
++        signal. The LLM settings page persists a provider-default
++        ``base_url`` (e.g. ``https://api.anthropic.com`` for Anthropic
++        models) as soon as the user picks a model, even if they never
++        touched the field. Plumbing that default would clobber any
++        proxy URL coming from ``OH_AGENT_SERVER_ENV`` / the OS env and
++        silently send the ACP subprocess to the wrong endpoint with a
++        proxy key it can't use.
++
++        An explicit ``api_key`` in the UI IS a user signal: the user
++        typed it, so they're declaring "authenticate the ACP subprocess
++        with this and the accompanying base URL". Only then do we
++        synthesize env vars; otherwise we leave the ACP subprocess to
++        inherit from the OS env (where ``OH_AGENT_SERVER_ENV`` lives).
++
++        Callers should ``setdefault`` the resulting keys into a
++        user-supplied ``acp_env`` so explicit ``acp_env`` overrides win.
++        """
++        llm = settings.llm
++        api_key: str | None = None
++        if llm.api_key is not None:
++            raw = llm.api_key
++            if isinstance(raw, SecretStr):
++                api_key = raw.get_secret_value()
++            elif isinstance(raw, str):
++                api_key = raw
++            else:
++                # Unknown type — refuse rather than risk leaking the
++                # repr into env vars. (``str(SecretStr)`` yields the
++                # redacted ``**********`` placeholder, not the secret.)
++                raise TypeError(
++                    f'Unexpected type for llm.api_key: {type(raw).__name__}; '
++                    'expected SecretStr or str.'
++                )
++
++        # Without an explicit api_key the user hasn't opted in — don't
++        # synthesize anything, don't touch base_url. See class docstring.
++        if not api_key:
++            return {}
++
++        base_url = llm.base_url or None
++        env: dict[str, str] = {}
++        if settings.acp_server == 'claude-code':
++            env['ANTHROPIC_API_KEY'] = api_key
++            if base_url:
++                env['ANTHROPIC_BASE_URL'] = base_url
++        elif settings.acp_server == 'codex':
++            env['OPENAI_API_KEY'] = api_key
++            if base_url:
++                env['OPENAI_BASE_URL'] = base_url
++        elif settings.acp_server == 'gemini-cli':
++            env['GEMINI_API_KEY'] = api_key
++            if base_url:
++                env['GEMINI_BASE_URL'] = base_url
++        # 'custom' → nothing: the user already set acp_command + acp_env.
++        return env
++
++    async def _build_acp_start_conversation_request(
++        self,
++        user: UserInfo,
++        conversation_id: UUID,
++        initial_message: SendMessageRequest | None,
++        workspace: LocalWorkspace,
++        plugins: list[PluginSpec] | None,
++    ) -> StartACPConversationRequest:
++        """Build a ``StartACPConversationRequest`` from ACP agent settings.
++
++        The ACP subprocess owns its own system prompt, tools, context,
++        and MCP, so all the LLM-agent-path customization (skills
++        loading, system-prompt overrides, LLM tracing metadata,
++        hook-config discovery in the workspace) is deliberately
++        skipped here.
++
++        Credentials set in the GUI's LLM section (``llm.api_key`` /
++        ``llm.base_url``) are translated into the provider-specific env
++        vars the ACP subprocess expects and merged into ``acp_env``.
++        User-supplied ``acp_env`` entries take precedence so power
++        users can still override.
++        """
++        acp_settings = user.agent_settings
++        assert isinstance(acp_settings, ACPAgentSettings)
++
++        # Merge UI-saved credentials into acp_env. User-supplied entries
++        # win (they come second).
++        derived_env = self._acp_provider_env(acp_settings)
++        if derived_env:
++            merged_env = {**derived_env, **dict(acp_settings.acp_env)}
++            acp_settings = acp_settings.model_copy(update={'acp_env': merged_env})
++
++        agent = acp_settings.create_agent()
++
++        final_initial_message = self._construct_initial_message_with_plugin_params(
++            initial_message, plugins
++        )
++        sdk_plugins: list[PluginSource] | None = None
++        if plugins:
++            sdk_plugins = [
++                PluginSource(
++                    source=p.source,
++                    ref=p.ref,
++                    repo_path=p.repo_path,
++                )
++                for p in plugins
++            ]
++
++        conv_settings = user.conversation_settings.model_copy(
++            update={
++                'agent_settings': acp_settings,
++                'workspace': workspace,
++                'conversation_id': conversation_id,
++                'initial_message': final_initial_message,
++                'plugins': sdk_plugins,
++                # ACP agents do not support hook_config — the subprocess
++                # manages its own tool lifecycle. Leave unset.
++                'hook_config': None,
++            }
++        )
++
++        return conv_settings.create_request(StartACPConversationRequest, agent=agent)
++
+     async def _process_pending_messages(
+         self,
+         task_id: UUID,
+diff --git a/openhands/app_server/app_conversation/sql_app_conversation_info_service.py b/openhands/app_server/app_conversation/sql_app_conversation_info_service.py
+index 204e0eb025e0..44243bebc2be 100644
+--- a/openhands/app_server/app_conversation/sql_app_conversation_info_service.py
++++ b/openhands/app_server/app_conversation/sql_app_conversation_info_service.py
+@@ -95,6 +95,10 @@ class StoredConversationMetadata(Base):  # type: ignore
+     # LLM model used for the conversation
+     llm_model = Column(String, nullable=True)
+ 
++    # Agent-variant discriminator ("llm" or "acp"). Nullable so existing
++    # rows stay valid post-migration; readers coerce null → "llm".
++    agent_kind = Column(String, nullable=True)
++
+     conversation_version = Column(String, nullable=False, default='V0', index=True)
+     sandbox_id = Column(String, nullable=True, index=True)
+     parent_conversation_id = Column(String, nullable=True, index=True)
+@@ -358,6 +362,7 @@ async def save_app_conversation_info(
+             context_window=usage.context_window,
+             per_turn_token=usage.per_turn_token,
+             llm_model=info.llm_model,
++            agent_kind=info.agent_kind,
+             conversation_version='V1',
+             sandbox_id=info.sandbox_id,
+             parent_conversation_id=(
+@@ -546,6 +551,9 @@ def _to_info(
+             trigger=ConversationTrigger(stored.trigger) if stored.trigger else None,
+             pr_number=stored.pr_number,
+             llm_model=stored.llm_model,
++            # Coerce legacy NULL → "llm" so rows written before the ACP
++            # variant shipped validate correctly.
++            agent_kind=stored.agent_kind or 'llm',
+             metrics=metrics,
+             parent_conversation_id=(
+                 UUID(stored.parent_conversation_id)
+diff --git a/openhands/app_server/app_lifespan/alembic/versions/009.py b/openhands/app_server/app_lifespan/alembic/versions/009.py
+new file mode 100644
+index 000000000000..bf59fde949a5
+--- /dev/null
++++ b/openhands/app_server/app_lifespan/alembic/versions/009.py
+@@ -0,0 +1,39 @@
++"""Add agent_kind column to conversation_metadata table
++
++Revision ID: 009
++Revises: 008
++Create Date: 2026-04-17 00:00:00.000000
++
++"""
++
++from typing import Sequence, Union
++
++import sqlalchemy as sa
++from alembic import op
++
++# revision identifiers, used by Alembic.
++revision: str = '009'
++down_revision: Union[str, None] = '008'
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++
++def upgrade() -> None:
++    """Add agent_kind column discriminating between LLM and ACP agents.
++
++    Populated at conversation-start time from ``AgentSettings.agent_kind``.
++    Downstream consumers (conversation-URL builder, live-status poller)
++    branch on this to hit the right agent-server route —
++    ``/api/conversations`` for ``"llm"``, ``/api/acp/conversations`` for
++    ``"acp"``. The column is nullable for backwards compatibility with
++    existing rows; readers coerce NULL → ``"llm"``.
++    """
++    op.add_column(
++        'conversation_metadata',
++        sa.Column('agent_kind', sa.String, nullable=True),
++    )
++
++
++def downgrade() -> None:
++    """Drop the agent_kind column."""
++    op.drop_column('conversation_metadata', 'agent_kind')
+diff --git a/openhands/app_server/sandbox/process_sandbox_service.py b/openhands/app_server/sandbox/process_sandbox_service.py
+index 328c400d1012..a774c3da55f8 100644
+--- a/openhands/app_server/sandbox/process_sandbox_service.py
++++ b/openhands/app_server/sandbox/process_sandbox_service.py
+@@ -133,23 +133,38 @@ async def _start_agent_process(
+             f'Starting agent process for sandbox {sandbox_id}: {" ".join(cmd)}'
+         )
+ 
++        # Redirect stdout/stderr to a log file instead of ``PIPE``. With
++        # ``PIPE`` and no drain loop the subprocess deadlocks as soon as
++        # it fills the 64 KB OS pipe buffer — chatty startups (SDK
++        # banner + debug logs + request traces) hit that quickly. A
++        # file handle lets the child write freely and keeps the output
++        # around for post-mortem.
++        log_path = os.path.join(working_dir, '.openhands-agent-server.log')
+         try:
+-            # Start the process
+-            process = subprocess.Popen(
+-                cmd,
+-                env=env,
+-                cwd=working_dir,
+-                stdout=subprocess.PIPE,
+-                stderr=subprocess.PIPE,
+-            )
++            # ``with`` closes the parent's handle after ``Popen`` dup's
++            # the fd into the child. Without this the parent leaks one
++            # fd per sandbox start — exhausts the fd table under load.
++            with open(log_path, 'a', buffering=1) as log_handle:
++                process = subprocess.Popen(
++                    cmd,
++                    env=env,
++                    cwd=working_dir,
++                    stdout=log_handle,
++                    stderr=log_handle,
++                )
+ 
+             # Wait a moment for the process to start
+             await asyncio.sleep(1)
+ 
+-            # Check if process is still running
++            # Check if process is still running; if it exited, surface the
++            # log file path so the operator can investigate. (We can't use
++            # ``communicate()`` any more — stdout/stderr are redirected to
++            # the log file above.)
+             if process.poll() is not None:
+-                stdout, stderr = process.communicate()
+-                raise SandboxError(f'Agent process failed to start: {stderr.decode()}')
++                raise SandboxError(
++                    f'Agent process failed to start (exit code {process.returncode}). '
++                    f'See {log_path} for details.'
++                )
+ 
+             return process
+ 
+diff --git a/openhands/app_server/settings/settings_router.py b/openhands/app_server/settings/settings_router.py
+index a50e57679a6d..eb6d8c67ca37 100644
+--- a/openhands/app_server/settings/settings_router.py
++++ b/openhands/app_server/settings/settings_router.py
+@@ -15,7 +15,7 @@
+     PROVIDER_TOKEN_TYPE,
+     ProviderType,
+ )
+-from openhands.sdk.settings import AgentSettings, ConversationSettings
++from openhands.sdk.settings import ConversationSettings
+ from openhands.server.routes.secrets import invalidate_legacy_secrets_store
+ from openhands.server.settings import (
+     GETSettingsModel,
+@@ -31,6 +31,7 @@
+ from openhands.storage.secrets.secrets_store import SecretsStore
+ from openhands.storage.settings.settings_store import SettingsStore
+ from openhands.utils.llm import get_provider_api_base, is_openhands_model
++from openhands.utils.sdk_settings_compat import export_agent_settings_schema
+ 
+ LITE_LLM_API_URL = os.environ.get(
+     'LITE_LLM_API_URL', 'https://llm-proxy.app.all-hands.dev'
+@@ -239,8 +240,14 @@ async def store_settings(
+ 
+ @router.get('/agent-schema')
+ async def load_settings_schema() -> dict[str, Any]:
+-    """Load the schema for settings"""
+-    return AgentSettings.export_schema().model_dump(mode='json')
++    """Load the schema for settings.
++
++    ``AgentSettings`` is a discriminated union over ``LLMAgentSettings``
++    and ``ACPAgentSettings``; the combined schema tags sections with a
++    ``variant`` field so the frontend can show LLM-only or ACP-only
++    sections based on the active ``agent_kind`` value.
++    """
++    return export_agent_settings_schema().model_dump(mode='json')
+ 
+ 
+ @router.get('/conversation-schema')
+diff --git a/openhands/storage/data_models/settings.py b/openhands/storage/data_models/settings.py
+index a865e404768f..0e6b527e8f8f 100644
+--- a/openhands/storage/data_models/settings.py
++++ b/openhands/storage/data_models/settings.py
+@@ -16,9 +16,16 @@
+ 
+ from openhands.core.config.llm_config import LLMConfig
+ from openhands.core.config.utils import load_openhands_config
+-from openhands.sdk.settings import AgentSettings, ConversationSettings
++from openhands.sdk.settings import ConversationSettings
+ from openhands.storage.data_models.secrets import Secrets
+ from openhands.utils.jsonpatch_compat import deep_merge
++from openhands.utils.sdk_settings_compat import (
++    ACPAgentSettings,
++    AgentSettingsConfig,
++    LLMAgentSettings,
++    default_agent_settings,
++    validate_agent_settings,
++)
+ 
+ 
+ def _coerce_value(value: Any) -> Any:
+@@ -121,7 +128,7 @@ class Settings(BaseModel):
+     git_user_name: str | None = None
+     git_user_email: str | None = None
+     v1_enabled: bool = True
+-    agent_settings: AgentSettings = Field(default_factory=AgentSettings)
++    agent_settings: AgentSettingsConfig = Field(default_factory=default_agent_settings)
+     conversation_settings: ConversationSettings = Field(
+         default_factory=ConversationSettings
+     )
+@@ -174,9 +181,10 @@ def update(self, payload: dict[str, Any]) -> None:
+                     merged['mcp_config'] = mcp_config
+ 
+                 # Use object.__setattr__ to avoid validate_assignment
+-                # side-effects on other fields.
++                # side-effects on other fields. ``AgentSettings`` is a
++                # discriminated union, so go through the type adapter.
+                 object.__setattr__(
+-                    self, 'agent_settings', AgentSettings.model_validate(merged)
++                    self, 'agent_settings', validate_agent_settings(merged)
+                 )
+ 
+         if 'conversation_settings' in payload:
+@@ -223,7 +231,9 @@ def api_key_serializer(self, api_key: SecretStr | None, info: SerializationInfo)
+ 
+     @field_serializer('agent_settings')
+     def agent_settings_serializer(
+-        self, agent_settings: AgentSettings, info: SerializationInfo
++        self,
++        agent_settings: LLMAgentSettings | ACPAgentSettings,
++        info: SerializationInfo,
+     ) -> dict[str, Any]:
+         context = info.context or {}
+         if context.get('expose_secrets', False):
+@@ -240,10 +250,12 @@ def _normalize_inputs(cls, data: dict | object) -> dict | object:
+             return data
+ 
+         # --- Agent settings: coerce SecretStr leaves to plain strings ---
++        # ``AgentSettings`` is a discriminated union; accept either
++        # concrete variant.
+         agent_settings = data.get('agent_settings')
+         if isinstance(agent_settings, dict):
+             data['agent_settings'] = _coerce_dict_secrets(agent_settings)
+-        elif isinstance(agent_settings, AgentSettings):
++        elif isinstance(agent_settings, (LLMAgentSettings, ACPAgentSettings)):
+             data['agent_settings'] = agent_settings.model_dump(
+                 mode='json', context={'expose_secrets': True}
+             )
+@@ -312,7 +324,10 @@ def from_config() -> Settings | None:
+             remote_runtime_resource_factor=app_config.sandbox.remote_runtime_resource_factor,
+             search_api_key=app_config.search_api_key,
+             max_budget_per_task=app_config.max_budget_per_task,
+-            agent_settings=AgentSettings(**agent_settings_dict),
++            # ``from_config`` only loads LLM-agent fields, so build the LLM
++            # variant directly. To configure an ACP agent, use the GUI or
++            # API to set ``agent_kind='acp'``.
++            agent_settings=LLMAgentSettings(**agent_settings_dict),
+             conversation_settings=ConversationSettings.model_validate(
+                 {
+                     'confirmation_mode': bool(app_config.security.confirmation_mode),
+@@ -323,10 +338,20 @@ def from_config() -> Settings | None:
+         )
+ 
+     def merge_with_config_settings(self) -> 'Settings':
+-        """Merge config.toml MCP settings with stored SDK agent_settings."""
++        """Merge config.toml MCP settings with stored SDK agent_settings.
++
++        MCP config only lives on ``LLMAgentSettings`` — the ACP
++        subprocess manages its own MCP via the ACP server, so when
++        ``agent_kind='acp'`` there's nothing to merge and we skip.
++        """
++        if not isinstance(self.agent_settings, LLMAgentSettings):
++            return self
++
+         config_settings = Settings.from_config()
+         if not config_settings:
+             return self
++        if not isinstance(config_settings.agent_settings, LLMAgentSettings):
++            return self
+ 
+         merged_mcp = _merge_sdk_mcp_configs(
+             config_settings.agent_settings.mcp_config,
+@@ -338,7 +363,7 @@ def merge_with_config_settings(self) -> 'Settings':
+         self.agent_settings.mcp_config = merged_mcp
+         return self
+ 
+-    def to_agent_settings(self) -> AgentSettings:
++    def to_agent_settings(self) -> LLMAgentSettings | ACPAgentSettings:
+         return self.agent_settings
+ 
+     def get_agent_settings_display(self) -> dict[str, Any]:
+diff --git a/openhands/utils/sdk_settings_compat.py b/openhands/utils/sdk_settings_compat.py
+new file mode 100644
+index 000000000000..6a9ea15673bd
+--- /dev/null
++++ b/openhands/utils/sdk_settings_compat.py
+@@ -0,0 +1,83 @@
++"""SDK compatibility shim for the discriminated-union ``AgentSettings`` rework.
++
++The rework (OpenHands/software-agent-sdk#2861) is merged to SDK ``main``
++but not yet on PyPI — ``openhands-sdk==1.17.0`` (the pinned release)
++still exposes only the flat ``AgentSettings`` class. This module
++imports the new symbols when available and falls back to *loud* stubs
++otherwise, so that:
++
++- pre-commit / CI on the pinned release keep type-checking cleanly,
++- editable-install dev envs see the real discriminated union,
++- any runtime attempt to use ACP against SDK 1.17.0 fails fast with a
++  clear error instead of silently coercing to LLM.
++
++Delete this module and import directly from ``openhands.sdk.settings``
++once the SDK ships a release that includes the new symbols.
++"""
++
++from typing import Any
++
++try:
++    from openhands.sdk.settings import (  # type: ignore[attr-defined]
++        ACPAgentSettings,
++        AgentSettingsConfig,
++        LLMAgentSettings,
++        default_agent_settings,
++        export_agent_settings_schema,
++        validate_agent_settings,
++    )
++
++    _HAS_DISCRIMINATED_UNION = True
++
++except ImportError:
++    _HAS_DISCRIMINATED_UNION = False
++    from openhands.sdk.settings import AgentSettings
++
++    # ``LLMAgentSettings`` is the new name for ``AgentSettings`` in the
++    # rework; aliasing keeps type annotations and ``isinstance`` checks
++    # valid without the new symbol.
++    LLMAgentSettings = AgentSettings  # type: ignore[misc, assignment]
++
++    class _ACPAgentSettingsStub:
++        """Sentinel — SDK 1.17.0 cannot produce ACPAgentSettings instances.
++
++        ``isinstance(x, _ACPAgentSettingsStub)`` is always ``False``,
++        which is correct: there is no way to construct an ACP instance
++        under SDK 1.17.0, so the branch it guards is dead code.
++        """
++
++    ACPAgentSettings = _ACPAgentSettingsStub  # type: ignore[misc, assignment]
++    AgentSettingsConfig = AgentSettings  # type: ignore[misc, assignment]
++
++    def default_agent_settings() -> AgentSettings:  # type: ignore[misc]
++        return AgentSettings()
++
++    def validate_agent_settings(  # type: ignore[misc]
++        data: dict[str, Any],
++    ) -> AgentSettings:
++        # Refuse to silently coerce ACP settings to LLM. Without this
++        # guard a user who persists ``kind='acp'`` under SDK 1.17.0
++        # would see the ACP fields dropped and the agent start as LLM
++        # — a silent failure mode the reviewer flagged in #14004.
++        if isinstance(data, dict) and data.get('kind') == 'acp':
++            raise RuntimeError(
++                "Stored settings contain kind='acp' but the installed "
++                'openhands-sdk does not support ACP agents. Upgrade to an '
++                'SDK release that includes the discriminated-union rework '
++                '(OpenHands/software-agent-sdk#2861).'
++            )
++        return AgentSettings.model_validate(data)
++
++    def export_agent_settings_schema():  # type: ignore[misc]
++        return AgentSettings.export_schema()
++
++
++__all__ = [
++    'ACPAgentSettings',
++    'AgentSettingsConfig',
++    'LLMAgentSettings',
++    '_HAS_DISCRIMINATED_UNION',
++    'default_agent_settings',
++    'export_agent_settings_schema',
++    'validate_agent_settings',
++]
+diff --git a/tests/unit/app_server/test_live_status_app_conversation_service.py b/tests/unit/app_server/test_live_status_app_conversation_service.py
+index d6eb2b56ea72..d09d17dc5098 100644
+--- a/tests/unit/app_server/test_live_status_app_conversation_service.py
++++ b/tests/unit/app_server/test_live_status_app_conversation_service.py
+@@ -39,7 +39,12 @@
+ from openhands.sdk import Agent, Event
+ from openhands.sdk.llm import LLM
+ from openhands.sdk.secret import LookupSecret, StaticSecret
+-from openhands.sdk.settings import AgentSettings, ConversationSettings
++from openhands.sdk.settings import ConversationSettings
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ from openhands.sdk.workspace.remote.async_remote_workspace import AsyncRemoteWorkspace
+ from openhands.server.types import AppMode
+ from openhands.storage.data_models.conversation_metadata import ConversationTrigger
+@@ -3025,3 +3030,245 @@ async def test_load_hooks_from_workspace_base_dir(self):
+             },
+             timeout=30.0,
+         )
++
++
++class TestAcpProviderEnv:
++    """Unit tests for ``LiveStatusAppConversationService._acp_provider_env`` —
++    the helper that translates UI-saved LLM credentials into the
++    provider env vars the chosen ACP subprocess expects.
++    """
++
++    @pytest.fixture
++    def _acp_settings_factory(self):
++        from pydantic import SecretStr
++
++        try:
++            from openhands.sdk.settings import (
++                ACPAgentSettings,  # type: ignore[attr-defined]
++            )
++        except ImportError:
++            pytest.skip('ACPAgentSettings not available in this SDK build')
++
++        def _make(
++            *,
++            acp_server: str = 'claude-code',
++            api_key: str | None = None,
++            base_url: str | None = None,
++            acp_env: dict[str, str] | None = None,
++        ):
++            return ACPAgentSettings(
++                acp_server=acp_server,  # type: ignore[arg-type]
++                llm=LLM(
++                    model='claude-sonnet-4-5',
++                    api_key=SecretStr(api_key) if api_key else None,
++                    base_url=base_url,
++                ),
++                acp_env=acp_env or {},
++            )
++
++        return _make
++
++    def test_claude_code_translates_to_anthropic_vars(self, _acp_settings_factory):
++        s = _acp_settings_factory(
++            acp_server='claude-code',
++            api_key='sk-test-anthropic',
++            base_url='https://proxy.example.com',
++        )
++        env = LiveStatusAppConversationService._acp_provider_env(s)
++        assert env == {
++            'ANTHROPIC_API_KEY': 'sk-test-anthropic',
++            'ANTHROPIC_BASE_URL': 'https://proxy.example.com',
++        }
++
++    def test_codex_translates_to_openai_vars(self, _acp_settings_factory):
++        s = _acp_settings_factory(
++            acp_server='codex',
++            api_key='sk-test-openai',
++            base_url='https://proxy.example.com',
++        )
++        env = LiveStatusAppConversationService._acp_provider_env(s)
++        assert env == {
++            'OPENAI_API_KEY': 'sk-test-openai',
++            'OPENAI_BASE_URL': 'https://proxy.example.com',
++        }
++
++    def test_gemini_translates_to_gemini_vars(self, _acp_settings_factory):
++        s = _acp_settings_factory(
++            acp_server='gemini-cli',
++            api_key='sk-test-gemini',
++            base_url='https://proxy.example.com',
++        )
++        env = LiveStatusAppConversationService._acp_provider_env(s)
++        assert env == {
++            'GEMINI_API_KEY': 'sk-test-gemini',
++            'GEMINI_BASE_URL': 'https://proxy.example.com',
++        }
++
++    def test_custom_server_returns_empty(self, _acp_settings_factory):
++        """For acp_server='custom', the user is on their own via acp_env."""
++        s = _acp_settings_factory(
++            acp_server='custom',
++            api_key='sk-test',
++            base_url='https://proxy.example.com',
++        )
++        env = LiveStatusAppConversationService._acp_provider_env(s)
++        assert env == {}
++
++    def test_no_credentials_returns_empty(self, _acp_settings_factory):
++        """No api_key + no base_url → nothing synthesized."""
++        s = _acp_settings_factory(acp_server='claude-code')
++        env = LiveStatusAppConversationService._acp_provider_env(s)
++        assert env == {}
++
++    def test_base_url_alone_is_ignored(self, _acp_settings_factory):
++        """base_url without api_key → no plumbing.
++
++        The LLM settings page persists a provider-default ``base_url``
++        as soon as the user picks a model. Plumbing that default would
++        clobber a real proxy URL set via ``OH_AGENT_SERVER_ENV`` and
++        silently route the ACP subprocess to the wrong endpoint with a
++        proxy key it can't use. Require an explicit ``api_key`` as the
++        user's opt-in signal before plumbing anything.
++        """
++        s = _acp_settings_factory(
++            acp_server='claude-code', base_url='https://api.anthropic.com'
++        )
++        env = LiveStatusAppConversationService._acp_provider_env(s)
++        assert env == {}
++
++    def test_api_key_alone_is_plumbed(self, _acp_settings_factory):
++        """api_key alone → plumb the key (provider default URL comes
++        from the SDK / OS env, not from us)."""
++        s = _acp_settings_factory(acp_server='claude-code', api_key='sk-test')
++        env = LiveStatusAppConversationService._acp_provider_env(s)
++        assert env == {'ANTHROPIC_API_KEY': 'sk-test'}
++
++    def test_unexpected_api_key_type_raises(self, _acp_settings_factory):
++        """Anything other than ``SecretStr`` / ``str`` for the api_key
++        raises. ``str(SecretStr)`` yields ``**********``; silently
++        falling back would plumb the placeholder as the credential.
++        """
++        s = _acp_settings_factory(acp_server='claude-code', api_key='sk-test')
++        # Swap in a non-string, non-SecretStr sentinel to simulate a
++        # future LLM config that stores api_key as (e.g.) a Provider
++        # object. Bypass Pydantic validation via __dict__.
++        s.llm.__dict__['api_key'] = object()  # type: ignore[assignment]
++
++        with pytest.raises(TypeError, match='Unexpected type for llm.api_key'):
++            LiveStatusAppConversationService._acp_provider_env(s)
++
++
++class TestAgentKindConversationUrl:
++    """Regression tests for the conversation_url / live-status route
++    dispatch — ``/api/conversations`` for LLM, ``/api/acp/conversations``
++    for ACP. Getting this wrong makes ACP conversations look stuck on
++    "Loading" because the frontend polls the wrong route and 404s."""
++
++    def test_build_conversation_url_llm(self):
++        from uuid import UUID
++
++        from openhands.app_server.app_conversation.app_conversation_models import (
++            AppConversationInfo,
++        )
++        from openhands.app_server.sandbox.sandbox_models import (
++            AGENT_SERVER,
++            ExposedUrl,
++            SandboxInfo,
++            SandboxStatus,
++        )
++
++        # Instantiate a stripped service (no deps needed for _build_conversation).
++        service = LiveStatusAppConversationService.__new__(
++            LiveStatusAppConversationService
++        )
++
++        info = AppConversationInfo(
++            id=UUID('11111111-1111-1111-1111-111111111111'),
++            created_by_user_id=None,
++            sandbox_id='sandbox-a',
++            agent_kind='llm',
++        )
++        sandbox = SandboxInfo(
++            id='sandbox-a',
++            created_by_user_id=None,
++            sandbox_spec_id='spec',
++            status=SandboxStatus.RUNNING,
++            session_api_key='sk',
++            exposed_urls=[
++                ExposedUrl(name=AGENT_SERVER, url='http://localhost:8000', port=8000),
++            ],
++        )
++        result = service._build_conversation(info, sandbox, None)
++        assert result is not None
++        assert result.conversation_url == (
++            'http://localhost:8000/api/conversations/11111111111111111111111111111111'
++        )
++
++    def test_build_conversation_url_acp(self):
++        from uuid import UUID
++
++        from openhands.app_server.app_conversation.app_conversation_models import (
++            AppConversationInfo,
++        )
++        from openhands.app_server.sandbox.sandbox_models import (
++            AGENT_SERVER,
++            ExposedUrl,
++            SandboxInfo,
++            SandboxStatus,
++        )
++
++        service = LiveStatusAppConversationService.__new__(
++            LiveStatusAppConversationService
++        )
++
++        info = AppConversationInfo(
++            id=UUID('22222222-2222-2222-2222-222222222222'),
++            created_by_user_id=None,
++            sandbox_id='sandbox-a',
++            agent_kind='acp',
++        )
++        sandbox = SandboxInfo(
++            id='sandbox-a',
++            created_by_user_id=None,
++            sandbox_spec_id='spec',
++            status=SandboxStatus.RUNNING,
++            session_api_key='sk',
++            exposed_urls=[
++                ExposedUrl(name=AGENT_SERVER, url='http://localhost:8000', port=8000),
++            ],
++        )
++        result = service._build_conversation(info, sandbox, None)
++        assert result is not None
++        assert result.conversation_url == (
++            'http://localhost:8000/api/acp/conversations/'
++            '22222222222222222222222222222222'
++        )
++
++    def test_agent_kind_to_router_path_known_kinds(self):
++        """``'llm'`` / ``None`` → legacy route, ``'acp'`` → ACP route."""
++        from openhands.app_server.app_conversation.live_status_app_conversation_service import (  # noqa: E501
++            _agent_kind_to_router_path,
++        )
++
++        assert _agent_kind_to_router_path('llm') == '/api/conversations'
++        assert _agent_kind_to_router_path(None) == '/api/conversations'
++        assert _agent_kind_to_router_path('acp') == '/api/acp/conversations'
++
++    def test_agent_kind_to_router_path_unknown_warns_and_falls_back(self):
++        """Unknown variants warn and fall back to the LLM route.
++
++        Routing an unknown kind to ACP would 404 in more cases; the LLM
++        route at least returns a readable 4xx instead of a bare 404.
++        """
++        from unittest.mock import patch
++
++        from openhands.app_server.app_conversation import (  # noqa: E501
++            live_status_app_conversation_service as service_module,
++        )
++
++        with patch.object(service_module._logger, 'warning') as mock_warning:
++            path = service_module._agent_kind_to_router_path('future-variant')
++
++        assert path == '/api/conversations'
++        mock_warning.assert_called_once()
++        assert 'future-variant' in str(mock_warning.call_args)
+diff --git a/tests/unit/app_server/test_sandbox_secrets_router.py b/tests/unit/app_server/test_sandbox_secrets_router.py
+index 65ca901f215a..2d213c8e3f52 100644
+--- a/tests/unit/app_server/test_sandbox_secrets_router.py
++++ b/tests/unit/app_server/test_sandbox_secrets_router.py
+@@ -36,7 +36,11 @@
+ from openhands.integrations.service_types import ProviderType
+ from openhands.sdk.llm import LLM
+ from openhands.sdk.secret import StaticSecret
+-from openhands.sdk.settings import AgentSettings
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ 
+ SANDBOX_ID = 'sb-test-123'
+ USER_ID = 'test-user-id'
+diff --git a/tests/unit/app_server/test_settings_api.py b/tests/unit/app_server/test_settings_api.py
+index 61091fa1fc91..fd07c7e76908 100644
+--- a/tests/unit/app_server/test_settings_api.py
++++ b/tests/unit/app_server/test_settings_api.py
+@@ -10,10 +10,15 @@
+ from openhands.integrations.service_types import UserGitInfo
+ from openhands.sdk.llm import LLM
+ from openhands.sdk.settings import (
+-    AgentSettings,
+     ConversationSettings,
++    LLMAgentSettings as AgentSettings,
+     VerificationSettings,
+ )
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ from openhands.server.app import app
+ from openhands.server.user_auth.user_auth import UserAuth
+ from openhands.storage.data_models.secrets import Secrets
+diff --git a/tests/unit/core/config/test_mcp_settings_merge.py b/tests/unit/core/config/test_mcp_settings_merge.py
+index 79969a4a6894..b914c38c55d1 100644
+--- a/tests/unit/core/config/test_mcp_settings_merge.py
++++ b/tests/unit/core/config/test_mcp_settings_merge.py
+@@ -11,7 +11,11 @@
+     StdioMCPServer,
+ )
+ from openhands.sdk.llm import LLM
+-from openhands.sdk.settings import AgentSettings
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ from openhands.storage.data_models.settings import Settings
+ 
+ 
+diff --git a/tests/unit/mcp/test_mcp_integration.py b/tests/unit/mcp/test_mcp_integration.py
+index 4c2fd439fa79..f6e25363422c 100644
+--- a/tests/unit/mcp/test_mcp_integration.py
++++ b/tests/unit/mcp/test_mcp_integration.py
+@@ -6,7 +6,11 @@
+ 
+ from openhands.core.config.mcp_config import MCPConfig, RemoteMCPServer
+ from openhands.sdk.llm import LLM
+-from openhands.sdk.settings import AgentSettings
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ from openhands.server.user_auth.default_user_auth import DefaultUserAuth
+ from openhands.storage.data_models.settings import Settings
+ from openhands.storage.settings.file_settings_store import FileSettingsStore
+diff --git a/tests/unit/server/routes/test_settings_store_functions.py b/tests/unit/server/routes/test_settings_store_functions.py
+index fa82ac75d9b2..bdc2f0597f2a 100644
+--- a/tests/unit/server/routes/test_settings_store_functions.py
++++ b/tests/unit/server/routes/test_settings_store_functions.py
+@@ -13,9 +13,13 @@
+ from openhands.sdk.llm import LLM
+ from openhands.sdk.settings import (
+     AGENT_SETTINGS_SCHEMA_VERSION,
+-    AgentSettings,
+     ConversationSettings,
+ )
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ from openhands.server.routes.secrets import (
+     app as secrets_router,
+ )
+diff --git a/tests/unit/storage/data_models/test_settings.py b/tests/unit/storage/data_models/test_settings.py
+index b202861eb270..2ab70fc7b28c 100644
+--- a/tests/unit/storage/data_models/test_settings.py
++++ b/tests/unit/storage/data_models/test_settings.py
+@@ -11,9 +11,13 @@
+ from openhands.sdk.llm import LLM
+ from openhands.sdk.settings import (
+     AGENT_SETTINGS_SCHEMA_VERSION,
+-    AgentSettings,
+     ConversationSettings,
+ )
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ from openhands.sdk.settings.model import CondenserSettings, VerificationSettings
+ from openhands.storage.data_models.settings import Settings
+ 
+diff --git a/tests/unit/storage/settings/test_file_settings_store.py b/tests/unit/storage/settings/test_file_settings_store.py
+index 38500db701be..dc21e912fb90 100644
+--- a/tests/unit/storage/settings/test_file_settings_store.py
++++ b/tests/unit/storage/settings/test_file_settings_store.py
+@@ -6,7 +6,12 @@
+ 
+ from openhands.core.config.openhands_config import OpenHandsConfig
+ from openhands.sdk.llm import LLM
+-from openhands.sdk.settings import AgentSettings, ConversationSettings
++from openhands.sdk.settings import ConversationSettings
++
++try:
++    from openhands.sdk.settings import LLMAgentSettings as AgentSettings
++except ImportError:
++    from openhands.sdk.settings import AgentSettings
+ from openhands.storage.data_models.settings import Settings
+ from openhands.storage.files import FileStore
+ from openhands.storage.settings.file_settings_store import FileSettingsStore
+diff --git a/tests/unit/utils/test_sdk_settings_compat.py b/tests/unit/utils/test_sdk_settings_compat.py
+new file mode 100644
+index 000000000000..40a7a585008f
+--- /dev/null
++++ b/tests/unit/utils/test_sdk_settings_compat.py
+@@ -0,0 +1,43 @@
++"""Tests for the SDK settings compatibility shim.
++
++Exercise the fallback path only (SDK 1.17.0) — the real-symbol path is
++covered by the rest of the suite that imports from
++``openhands.utils.sdk_settings_compat`` and uses the imported names.
++"""
++
++import pytest
++
++from openhands.utils.sdk_settings_compat import (
++    _HAS_DISCRIMINATED_UNION,
++    validate_agent_settings,
++)
++
++
++@pytest.mark.skipif(
++    _HAS_DISCRIMINATED_UNION,
++    reason='Loud-fallback behaviour only applies when the SDK lacks ACP.',
++)
++def test_validate_agent_settings_refuses_acp_kind_on_old_sdk():
++    """SDK 1.17.0 cannot honour ``kind='acp'`` — refuse loudly instead
++    of silently coercing the payload to an LLM agent (which is what the
++    reviewer flagged as a landmine in #14004).
++    """
++    with pytest.raises(RuntimeError, match='does not support ACP agents'):
++        validate_agent_settings({'kind': 'acp', 'acp_server': 'claude-code'})
++
++
++@pytest.mark.skipif(
++    _HAS_DISCRIMINATED_UNION,
++    reason='Fallback-only: on newer SDKs ``kind=llm`` is recognised by the union.',
++)
++def test_validate_agent_settings_accepts_llm_kind_on_old_sdk():
++    """LLM settings still validate under the fallback — the sentinel is
++    only about ACP kinds, not any-kind rejection.
++    """
++    # An empty dict should at minimum not raise the ACP RuntimeError;
++    # real Pydantic validation of the flat AgentSettings shape still
++    # applies.
++    try:
++        validate_agent_settings({})
++    except RuntimeError as exc:  # pragma: no cover — guard only
++        assert 'does not support ACP' not in str(exc)

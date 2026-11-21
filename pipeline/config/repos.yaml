@@ -1,0 +1,156 @@
+# evolution2watch 样本池配置（v2.0，20 仓库）
+window:
+  start: "2025-05-01"
+  end: "2026-11-20"
+
+# 右截断：合入率分析中排除创建时间晚于该日期的 PR（给 60 天合并窗口）
+merge_rate_cutoff: "2026-09-21"
+
+repos:
+  # ---- CLI / Terminal-native ----
+  - slug: openai/codex
+    category: cli
+    language: Rust
+    archived_at: null
+  - slug: google-gemini/gemini-cli
+    category: cli
+    language: TypeScript
+    archived_at: null
+  - slug: QwenLM/qwen-code
+    category: cli
+    language: TypeScript
+    archived_at: null
+    notes: "gemini-cli 的下游分叉"
+  - slug: anomalyco/opencode
+    category: cli
+    language: TypeScript/Go
+    archived_at: null
+    aliases: ["sst/opencode"]
+  - slug: aaif-goose/goose
+    category: cli
+    language: Rust/TypeScript
+    archived_at: null
+    aliases: ["block/goose"]
+  - slug: Aider-AI/aider
+    category: cli
+    language: Python
+    archived_at: "2026-05-22"
+    notes: "低频维护，历史基线"
+
+  # ---- IDE-integrated / Multi-surface ----
+  - slug: cline/cline
+    category: ide
+    language: TypeScript
+    archived_at: null
+  - slug: continuedev/continue
+    category: ide
+    language: TypeScript
+    archived_at: "2026-07-20"
+    notes: "2026-07 后无提交，按静默期处理"
+  - slug: RooCodeInc/Roo-Code
+    category: ide
+    language: TypeScript
+    archived_at: "2026-05-15"
+
+  # ---- Autonomous / Async SWE ----
+  - slug: OpenHands/OpenHands
+    category: autonomous
+    language: Python/TypeScript
+    archived_at: null
+    notes: "2026-07-27 #15397 清空 Python 后端，迁至 software-agent-sdk"
+  - slug: OpenHands/software-agent-sdk
+    category: autonomous
+    language: Python
+    archived_at: null
+  - slug: SWE-agent/SWE-agent
+    category: autonomous
+    language: Python
+    archived_at: "2026-07-16"
+  - slug: SWE-agent/mini-swe-agent
+    category: autonomous
+    language: Python
+    archived_at: "2026-09-03"
+  - slug: browser-use/browser-use
+    category: autonomous
+    language: Python
+    archived_at: null
+    notes: "浏览器 Agent Harness"
+
+  # ---- Framework / SDK runtime ----
+  - slug: openai/openai-agents-python
+    category: framework
+    language: Python
+    archived_at: null
+  - slug: mastra-ai/mastra
+    category: framework
+    language: TypeScript
+    archived_at: null
+  - slug: crewAIInc/crewAI
+    category: framework
+    language: Python
+    archived_at: null
+  - slug: langchain-ai/langgraph
+    category: framework
+    language: Python
+    archived_at: null
+  - slug: google/adk-python
+    category: framework
+    language: Python
+    archived_at: null
+  - slug: huggingface/smolagents
+    category: framework
+    language: Python
+    archived_at: null
+
+# 依赖/发布机器人：整条 PR 排除，不进入 Tier 归因
+exclude_bots:
+  - dependabot[bot]
+  - dependabot-preview[bot]
+  - renovate[bot]
+  - renovate-bot
+  - github-actions[bot]
+  - release-please[bot]
+  - changeset-bot[bot]
+  - semantic-release-bot
+  - pre-commit-ci[bot]
+  - mergify[bot]
+  - openhands-release-bot[bot]
+  - dane-ai-mastra[bot]
+  - mastra-platform[bot]
+  - copyberry
+  - copyberry[bot]
+  - copybara-service
+  - copybara-service[bot]
+  - aikido-autofix
+  - aikido-autofix[bot]
+  - all-hands-bot
+  - detail-app[bot]
+  - continue-development-app[bot]
+
+# Agent 账号 → agent_family（Tier 1）
+agent_bots:
+  "copilot-swe-agent[bot]": github_copilot
+  "copilot[bot]": github_copilot
+  "devin-ai-integration[bot]": devin
+  "devin[bot]": devin
+  "swe-agent[bot]": swe_agent
+  "sweagent[bot]": swe_agent
+  "openhands-agent[bot]": openhands
+  "openhands[bot]": openhands
+  "google-labs-jules[bot]": jules
+  "jules[bot]": jules
+  "codegen-sh[bot]": codegen
+  "codegen[bot]": codegen
+  "cursor[bot]": cursor
+  "cursor-agent[bot]": cursor
+  "claude[bot]": claude_code
+  "claude-code[bot]": claude_code
+  "aider[bot]": aider
+  "aider-agent[bot]": aider
+  "codex[bot]": codex
+  "openai-codex[bot]": codex
+  "gemini-cli[bot]": gemini_cli
+  "gemini-agent[bot]": gemini_cli
+  "gemini-cli": gemini_cli
+  "opencode-agent[bot]": opencode
+  "continue[bot]": continue_agent

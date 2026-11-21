@@ -1,0 +1,130 @@
+diff --git a/src/crewai/cli/install_crew.py b/src/crewai/cli/install_crew.py
+index d1d0ab9dae..9b7dcdc87a 100644
+--- a/src/crewai/cli/install_crew.py
++++ b/src/crewai/cli/install_crew.py
+@@ -1,19 +1,37 @@
++import logging
+ import subprocess
++from typing import List
+ 
+ import click
+ 
++UV_COMMAND = "uv"
++SYNC_COMMAND = "sync"
++ACTIVE_FLAG = "--active"
+ 
+-def install_crew(proxy_options: list[str]) -> None:
++logger = logging.getLogger(__name__)
++
++def install_crew(proxy_options: List[str]) -> None:
+     """
+     Install the crew by running the UV command to lock and install.
++    
++    Args:
++        proxy_options (List[str]): List of proxy-related command options.
++    
++    Note:
++        Uses --active flag to ensure proper virtual environment detection.
+     """
++    if not isinstance(proxy_options, list):
++        raise ValueError("proxy_options must be a list")
++
+     try:
+-        command = ["uv", "sync"] + proxy_options
++        command = [UV_COMMAND, SYNC_COMMAND, ACTIVE_FLAG] + proxy_options
++        logger.debug(f"Executing command: {' '.join(command)}")
+         subprocess.run(command, check=True, capture_output=False, text=True)
+ 
+     except subprocess.CalledProcessError as e:
+         click.echo(f"An error occurred while running the crew: {e}", err=True)
+-        click.echo(e.output, err=True)
++        if e.output is not None:
++            click.echo(e.output, err=True)
+ 
+     except Exception as e:
+         click.echo(f"An unexpected error occurred: {e}", err=True)
+diff --git a/tests/cli/install_crew_test.py b/tests/cli/install_crew_test.py
+new file mode 100644
+index 0000000000..6fe02bee22
+--- /dev/null
++++ b/tests/cli/install_crew_test.py
+@@ -0,0 +1,79 @@
++from unittest import mock
++from typing import List, Any
++import pytest
++import subprocess
++
++from crewai.cli.install_crew import install_crew, UV_COMMAND, SYNC_COMMAND, ACTIVE_FLAG
++
++
++@pytest.mark.parametrize(
++    "proxy_options,expected_command",
++    [
++        ([], [UV_COMMAND, SYNC_COMMAND, ACTIVE_FLAG]),
++        (
++            ["--index-url", "https://custom-pypi.org/simple"],
++            [UV_COMMAND, SYNC_COMMAND, ACTIVE_FLAG, "--index-url", "https://custom-pypi.org/simple"],
++        ),
++    ],
++)
++@mock.patch("subprocess.run")
++def test_install_crew_with_options(
++    mock_subprocess: mock.MagicMock, proxy_options: List[str], expected_command: List[str]
++) -> None:
++    """Test that install_crew correctly passes options to the command."""
++    install_crew(proxy_options)
++    mock_subprocess.assert_called_once_with(
++        expected_command, check=True, capture_output=False, text=True
++    )
++
++
++@mock.patch("subprocess.run")
++@mock.patch("click.echo")
++def test_install_crew_with_subprocess_error(
++    mock_echo: mock.MagicMock, mock_subprocess: mock.MagicMock
++) -> None:
++    """Test that install_crew handles subprocess errors correctly."""
++    error = subprocess.CalledProcessError(1, f"{UV_COMMAND} {SYNC_COMMAND} {ACTIVE_FLAG}")
++    error.output = "Error output"
++    mock_subprocess.side_effect = error
++    
++    install_crew([])
++    
++    assert mock_echo.call_count == 2
++    mock_echo.assert_any_call(f"An error occurred while running the crew: {error}", err=True)
++    mock_echo.assert_any_call("Error output", err=True)
++
++
++@mock.patch("subprocess.run")
++@mock.patch("click.echo")
++def test_install_crew_with_subprocess_error_empty_output(
++    mock_echo: mock.MagicMock, mock_subprocess: mock.MagicMock
++) -> None:
++    """Test that install_crew handles subprocess errors with empty output correctly."""
++    error = subprocess.CalledProcessError(1, f"{UV_COMMAND} {SYNC_COMMAND} {ACTIVE_FLAG}")
++    error.output = None
++    mock_subprocess.side_effect = error
++    
++    install_crew([])
++    
++    mock_echo.assert_called_once_with(f"An error occurred while running the crew: {error}", err=True)
++
++
++@mock.patch("subprocess.run")
++@mock.patch("click.echo")
++def test_install_crew_with_generic_exception(
++    mock_echo: mock.MagicMock, mock_subprocess: mock.MagicMock
++) -> None:
++    """Test that install_crew handles generic exceptions correctly."""
++    error = Exception("Generic error")
++    mock_subprocess.side_effect = error
++    
++    install_crew([])
++    
++    mock_echo.assert_called_once_with(f"An unexpected error occurred: {error}", err=True)
++
++
++def test_install_crew_with_invalid_proxy_options() -> None:
++    """Test that install_crew validates the proxy_options parameter."""
++    with pytest.raises(ValueError, match="proxy_options must be a list"):
++        install_crew("not a list")  # type: ignore

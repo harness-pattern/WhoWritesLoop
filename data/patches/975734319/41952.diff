@@ -1,0 +1,16 @@
+diff --git a/packages/web/src/content/docs/custom-tools.mdx b/packages/web/src/content/docs/custom-tools.mdx
+index d89922b1f876..4e6fc21107b4 100644
+--- a/packages/web/src/content/docs/custom-tools.mdx
++++ b/packages/web/src/content/docs/custom-tools.mdx
+@@ -20,6 +20,11 @@ They can be defined:
+ - Locally by placing them in the `.opencode/tools/` directory of your project.
+ - Or globally, by placing them in `~/.config/opencode/tools/`.
+ 
++:::note
++`tools/` is the canonical name. The singular `tool/` is also loaded for
++backwards compatibility with the config directory convention.
++:::
++
+ ---
+ 
+ ### Structure

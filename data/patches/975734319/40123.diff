@@ -1,0 +1,39 @@
+diff --git a/packages/tui/src/config/v1/keybind.ts b/packages/tui/src/config/v1/keybind.ts
+index b75c2d06a557..46a37a932694 100644
+--- a/packages/tui/src/config/v1/keybind.ts
++++ b/packages/tui/src/config/v1/keybind.ts
+@@ -187,8 +187,8 @@ export const Definitions = {
+   input_visual_line_end: keybind("alt+e", "Move to end of visual line in input"),
+   input_select_visual_line_home: keybind("alt+shift+a", "Select to start of visual line in input"),
+   input_select_visual_line_end: keybind("alt+shift+e", "Select to end of visual line in input"),
+-  input_buffer_home: keybind("home", "Move to start of buffer in input"),
+-  input_buffer_end: keybind("end", "Move to end of buffer in input"),
++  input_buffer_home: keybind("none", "Move to start of buffer in input"),
++  input_buffer_end: keybind("none", "Move to end of buffer in input"),
+   input_select_buffer_home: keybind("shift+home", "Select to start of buffer in input"),
+   input_select_buffer_end: keybind("shift+end", "Select to end of buffer in input"),
+   input_delete_line: keybind("ctrl+shift+d", "Delete line in input"),
+diff --git a/packages/tui/test/config.test.tsx b/packages/tui/test/config.test.tsx
+index a9d5a007fefb..8dfa87ae367d 100644
+--- a/packages/tui/test/config.test.tsx
++++ b/packages/tui/test/config.test.tsx
+@@ -97,6 +97,19 @@ test("resolves message navigation defaults", () => {
+   expect(config.keybinds.get("session.messages_last_user")).toMatchObject([{ key: "alt+end" }])
+ })
+ 
++test("reserves home and end for navigation", () => {
++  const config = resolve({}, { terminalSuspend: true })
++
++  expect(config.keybinds.get("input.buffer.home")).toEqual([])
++  expect(config.keybinds.get("input.buffer.end")).toEqual([])
++  expect(config.keybinds.get("input.select.buffer.home")).toMatchObject([{ key: "shift+home" }])
++  expect(config.keybinds.get("input.select.buffer.end")).toMatchObject([{ key: "shift+end" }])
++  expect(config.keybinds.get("input.line.home")).toMatchObject([{ key: "ctrl+a" }])
++  expect(config.keybinds.get("input.line.end")).toMatchObject([{ key: "ctrl+e" }])
++  expect(config.keybinds.get("input.visual.line.home")).toMatchObject([{ key: "alt+a" }])
++  expect(config.keybinds.get("input.visual.line.end")).toMatchObject([{ key: "alt+e" }])
++})
++
+ test("opens the subagent picker with down", () => {
+   const config = resolve({}, { terminalSuspend: true })
+ 

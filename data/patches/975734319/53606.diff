@@ -1,0 +1,73 @@
+diff --git a/packages/tui/src/context/session-tabs.tsx b/packages/tui/src/context/session-tabs.tsx
+index 87f1069eddb5..01f0288c8173 100644
+--- a/packages/tui/src/context/session-tabs.tsx
++++ b/packages/tui/src/context/session-tabs.tsx
+@@ -332,11 +332,6 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
+       const closed = closeSessionTab(state().tabs, target)
+       const selected = navigate && current() === target
+       if (closed.tabs === state().tabs && !selected) return
+-      const previous = selected
+-        ? moveSessionTabHistory(recordSessionTabHistory(history, target), closed.tabs, target, -1)
+-        : { history, sessionID: undefined }
+-      const next = previous.sessionID ?? closed.next
+-      history = previous.history
+       update((draft) => {
+         draft.tabs = closeSessionTab(draft.tabs, target).tabs
+       })
+@@ -346,7 +341,8 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
+         delete next[target]
+         return next
+       })
+-      if (selected) route.navigate(next ? { type: "session", sessionID: next } : { type: "home" })
++      // Like a browser, closing the active tab selects its right neighbor, or its left one at the end.
++      if (selected) route.navigate(closed.next ? { type: "session", sessionID: closed.next } : { type: "home" })
+     }
+ 
+     return {
+diff --git a/packages/tui/test/context/session-tabs-model.test.ts b/packages/tui/test/context/session-tabs-model.test.ts
+index a744c2966e53..792bccd78bc8 100644
+--- a/packages/tui/test/context/session-tabs-model.test.ts
++++ b/packages/tui/test/context/session-tabs-model.test.ts
+@@ -181,7 +181,7 @@ describe("session tabs", () => {
+     expect(moveSessionTabHistory(history, tabs, undefined, -1).sessionID).toBe("b")
+   })
+ 
+-  test("returns to the previous selected open tab after closing the active tab", () => {
++  test("history skips tabs that are no longer open", () => {
+     const tabs = ["a", "b", "c"].map((sessionID) => ({ sessionID }))
+     const history = ["a", "c"].reduce(recordSessionTabHistory, { entries: [], index: -1 })
+     const closed = closeSessionTab(tabs, "b")
+diff --git a/packages/tui/test/context/session-tabs.test.tsx b/packages/tui/test/context/session-tabs.test.tsx
+index 56c52c5b0985..dbfe14520bf9 100644
+--- a/packages/tui/test/context/session-tabs.test.tsx
++++ b/packages/tui/test/context/session-tabs.test.tsx
+@@ -323,6 +323,29 @@ test("keeps each visited session open", async () => {
+   }
+ })
+ 
++test("closing the active tab selects its neighbor instead of the previously visited tab", async () => {
++  const setup = await renderSessionTabs("first", { persisted: ["first", "second", "third", "fourth"] })
++  try {
++    await wait(() => setup.tabs.tabs().length === 4)
++    setup.route.navigate({ type: "session", sessionID: "fourth" })
++    await wait(() => setup.tabs.current() === "fourth")
++    setup.route.navigate({ type: "session", sessionID: "second" })
++    await wait(() => setup.tabs.current() === "second")
++
++    setup.tabs.close()
++    await wait(() => setup.tabs.tabs().length === 3)
++    await wait(() => setup.tabs.current() === "third")
++
++    setup.route.navigate({ type: "session", sessionID: "fourth" })
++    await wait(() => setup.tabs.current() === "fourth")
++    setup.tabs.close()
++    await wait(() => setup.tabs.tabs().length === 2)
++    await wait(() => setup.tabs.current() === "third")
++  } finally {
++    await setup.destroy()
++  }
++})
++
+ test("lists closed tabs newest first and reopens a selected entry", async () => {
+   const setup = await renderSessionTabs("first", { persisted: ["first", "second", "third"] })
+   try {

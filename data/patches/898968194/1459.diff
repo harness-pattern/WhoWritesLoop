@@ -1,0 +1,294 @@
+diff --git a/docs/source/en/tutorials/building_good_agents.mdx b/docs/source/en/tutorials/building_good_agents.mdx
+index dec546305..d897e8300 100644
+--- a/docs/source/en/tutorials/building_good_agents.mdx
++++ b/docs/source/en/tutorials/building_good_agents.mdx
+@@ -329,8 +329,8 @@ Above example were using notional tools that might not exist for you. On top of
+ 
+ {%- if managed_agents and managed_agents.values() | list %}
+ You can also give tasks to team members.
+-Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-Given that this team member is a real human, you should be very verbose in your task.
++Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++You can also include any relevant variables or context using the 'additional_args' argument.
+ Here is a list of the team members that you can call:
+ {%- for agent in managed_agents.values() %}
+ - {{ agent.name }}: {{ agent.description }}
+@@ -368,8 +368,8 @@ So while you can overwrite this system prompt template by passing your custom pr
+   ```
+   {%- if managed_agents and managed_agents.values() | list %}
+   You can also give tasks to team members.
+-  Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-  Given that this team member is a real human, you should be very verbose in your task.
++  Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++  You can also include any relevant variables or context using the 'additional_args' argument.
+   Here is a list of the team members that you can call:
+   {%- for agent in managed_agents.values() %}
+   - {{ agent.name }}: {{ agent.description }}
+diff --git a/docs/source/hi/tutorials/building_good_agents.mdx b/docs/source/hi/tutorials/building_good_agents.mdx
+index e074f14ad..da0a31d3e 100644
+--- a/docs/source/hi/tutorials/building_good_agents.mdx
++++ b/docs/source/hi/tutorials/building_good_agents.mdx
+@@ -335,8 +335,8 @@ Above example were using notional tools that might not exist for you. On top of
+ 
+ {%- if managed_agents and managed_agents.values() | list %}
+ You can also give tasks to team members.
+-Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-Given that this team member is a real human, you should be very verbose in your task.
++Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++You can also include any relevant variables or context using the 'additional_args' argument.
+ Here is a list of the team members that you can call:
+ {%- for agent in managed_agents.values() %}
+ - {{ agent.name }}: {{ agent.description }}
+@@ -373,8 +373,8 @@ Now Begin! If you solve the task correctly, you will receive a reward of $1,000,
+   ```
+   {%- if managed_agents and managed_agents.values() | list %}
+   You can also give tasks to team members.
+-  Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-  Given that this team member is a real human, you should be very verbose in your task.
++  Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++  You can also include any relevant variables or context using the 'additional_args' argument.
+   Here is a list of the team members that you can call:
+   {%- for agent in managed_agents.values() %}
+   - {{ agent.name }}: {{ agent.description }}
+diff --git a/docs/source/zh/tutorials/building_good_agents.mdx b/docs/source/zh/tutorials/building_good_agents.mdx
+index 5fca995b7..61603abb5 100644
+--- a/docs/source/zh/tutorials/building_good_agents.mdx
++++ b/docs/source/zh/tutorials/building_good_agents.mdx
+@@ -333,8 +333,8 @@ Above example were using notional tools that might not exist for you. On top of
+ 
+ {%- if managed_agents and managed_agents.values() | list %}
+ You can also give tasks to team members.
+-Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-Given that this team member is a real human, you should be very verbose in your task.
++Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++You can also include any relevant variables or context using the 'additional_args' argument.
+ Here is a list of the team members that you can call:
+ {%- for agent in managed_agents.values() %}
+ - {{ agent.name }}: {{ agent.description }}
+@@ -371,8 +371,8 @@ Now Begin! If you solve the task correctly, you will receive a reward of $1,000,
+   ```
+   {%- if managed_agents and managed_agents.values() | list %}
+   You can also give tasks to team members.
+-  Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-  Given that this team member is a real human, you should be very verbose in your task.
++  Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++  You can also include any relevant variables or context using the 'additional_args' argument.
+   Here is a list of the team members that you can call:
+   {%- for agent in managed_agents.values() %}
+   - {{ agent.name }}: {{ agent.description }}
+diff --git a/src/smolagents/agents.py b/src/smolagents/agents.py
+index 45c2f9f82..fd7059225 100644
+--- a/src/smolagents/agents.py
++++ b/src/smolagents/agents.py
+@@ -326,7 +326,13 @@ def _setup_managed_agents(self, managed_agents: list | None = None) -> None:
+             self.managed_agents = {agent.name: agent for agent in managed_agents}
+             # Ensure managed agents can be called as tools by the model: set their inputs and output_type
+             for agent in self.managed_agents.values():
+-                agent.inputs = {"task": {"type": "string", "description": "Long detailed description of the task."}}
++                agent.inputs = {
++                    "task": {"type": "string", "description": "Long detailed description of the task."},
++                    "additional_args": {
++                        "type": "object",
++                        "description": "Dictionary of extra inputs to pass to the managed agent, e.g. images, dataframes, or any other contextual data it may need.",
++                    },
++                }
+                 agent.output_type = "string"
+ 
+     def _setup_tools(self, tools, add_base_tools):
+diff --git a/src/smolagents/prompts/code_agent.yaml b/src/smolagents/prompts/code_agent.yaml
+index 89ae77f3b..62ee19399 100644
+--- a/src/smolagents/prompts/code_agent.yaml
++++ b/src/smolagents/prompts/code_agent.yaml
+@@ -145,16 +145,17 @@ system_prompt: |-
+ 
+   {%- if managed_agents and managed_agents.values() | list %}
+   You can also give tasks to team members.
+-  Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task'.
+-  Given that this team member is a real human, you should be very verbose in your task, it should be a long string providing informations as detailed as necessary.
++  Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++  You can also include any relevant variables or context using the 'additional_args' argument.
+   Here is a list of the team members that you can call:
+   ```python
+   {%- for agent in managed_agents.values() %}
+-  def {{ agent.name }}(task: str) -> str:
++  def {{ agent.name }}(task: str, additional_args: dict[str, Any]) -> str:
+       """{{ agent.description }}
+ 
+       Args:
+           task: Long detailed description of the task.
++          additional_args: Dictionary of extra inputs to pass to the managed agent, e.g. images, dataframes, or any other contextual data it may need.
+       """
+   {% endfor %}
+   ```
+@@ -219,13 +220,18 @@ planning:
+ 
+     {%- if managed_agents and managed_agents.values() | list %}
+     You can also give tasks to team members.
+-    Calling a team member works similarly to calling a tool: provide the task as the 'task' argument. You can also include any relevant variables or context using the 'additional_args' argument.
+-    Given that this team member is a real human, you should be very verbose in your task, it should be a long string providing informations as detailed as necessary.
++    Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++    You can also include any relevant variables or context using the 'additional_args' argument.
+     Here is a list of the team members that you can call:
+     ```python
+     {%- for agent in managed_agents.values() %}
+-    def {{ agent.name }}("Your query goes here.") -> str:
+-        """{{ agent.description }}"""
++    def {{ agent.name }}(task: str, additional_args: dict[str, Any]) -> str:
++        """{{ agent.description }}
++
++        Args:
++            task: Long detailed description of the task.
++            additional_args: Dictionary of extra inputs to pass to the managed agent, e.g. images, dataframes, or any other contextual data it may need.
++        """
+     {% endfor %}
+     ```
+     {%- endif %}
+@@ -281,13 +287,18 @@ planning:
+ 
+     {%- if managed_agents and managed_agents.values() | list %}
+     You can also give tasks to team members.
+-        Calling a team member works similarly to calling a tool: provide the task as the 'task' argument. You can also include any relevant variables or context using the 'additional_args' argument.
+-    Given that this team member is a real human, you should be very verbose in your task, it should be a long string providing informations as detailed as necessary.
++    Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++    You can also include any relevant variables or context using the 'additional_args' argument.
+     Here is a list of the team members that you can call:
+     ```python
+     {%- for agent in managed_agents.values() %}
+-    def {{ agent.name }}("Your query goes here.") -> str:
+-        """{{ agent.description }}"""
++    def {{ agent.name }}(task: str, additional_args: dict[str, Any]) -> str:
++        """{{ agent.description }}
++
++        Args:
++            task: Long detailed description of the task.
++            additional_args: Dictionary of extra inputs to pass to the managed agent, e.g. images, dataframes, or any other contextual data it may need.
++        """
+     {% endfor %}
+     ```
+     {%- endif %}
+diff --git a/src/smolagents/prompts/structured_code_agent.yaml b/src/smolagents/prompts/structured_code_agent.yaml
+index 3fae4a61e..ffde814b8 100644
+--- a/src/smolagents/prompts/structured_code_agent.yaml
++++ b/src/smolagents/prompts/structured_code_agent.yaml
+@@ -91,16 +91,17 @@ system_prompt: |-
+ 
+   {%- if managed_agents and managed_agents.values() | list %}
+   You can also give tasks to team members.
+-  Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task'.
+-  Given that this team member is a real human, you should be very verbose in your task, it should be a long string providing informations as detailed as necessary.
++  Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++  You can also include any relevant variables or context using the 'additional_args' argument.
+   Here is a list of the team members that you can call:
+   ```python
+   {%- for agent in managed_agents.values() %}
+-  def {{ agent.name }}(task: str) -> str:
++  def {{ agent.name }}(task: str, additional_args: dict[str, Any]) -> str:
+       """{{ agent.description }}
+ 
+       Args:
+           task: Long detailed description of the task.
++          additional_args: Dictionary of extra inputs to pass to the managed agent, e.g. images, dataframes, or any other contextual data it may need.
+       """
+   {% endfor %}
+   ```
+@@ -164,13 +165,18 @@ planning:
+ 
+     {%- if managed_agents and managed_agents.values() | list %}
+     You can also give tasks to team members.
+-    Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task'.
+-    Given that this team member is a real human, you should be very verbose in your task, it should be a long string providing informations as detailed as necessary.
++    Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++    You can also include any relevant variables or context using the 'additional_args' argument.
+     Here is a list of the team members that you can call:
+     ```python
+     {%- for agent in managed_agents.values() %}
+-    def {{ agent.name }}("Your query goes here.") -> str:
+-        """{{ agent.description }}"""
++    def {{ agent.name }}(task: str, additional_args: dict[str, Any]) -> str:
++        """{{ agent.description }}
++
++        Args:
++            task: Long detailed description of the task.
++            additional_args: Dictionary of extra inputs to pass to the managed agent, e.g. images, dataframes, or any other contextual data it may need.
++        """
+     {% endfor %}
+     ```
+     {%- endif %}
+@@ -226,13 +232,18 @@ planning:
+ 
+     {%- if managed_agents and managed_agents.values() | list %}
+     You can also give tasks to team members.
+-    Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task'.
+-    Given that this team member is a real human, you should be very verbose in your task, it should be a long string providing informations as detailed as necessary.
++    Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++    You can also include any relevant variables or context using the 'additional_args' argument.
+     Here is a list of the team members that you can call:
+     ```python
+     {%- for agent in managed_agents.values() %}
+-    def {{ agent.name }}("Your query goes here.") -> str:
+-        """{{ agent.description }}"""
++    def {{ agent.name }}(task: str, additional_args: dict[str, Any]) -> str:
++        """{{ agent.description }}
++
++        Args:
++            task: Long detailed description of the task.
++            additional_args: Dictionary of extra inputs to pass to the managed agent, e.g. images, dataframes, or any other contextual data it may need.
++        """
+     {% endfor %}
+     ```
+     {%- endif %}
+diff --git a/src/smolagents/prompts/toolcalling_agent.yaml b/src/smolagents/prompts/toolcalling_agent.yaml
+index 605e8ac34..68c5480c4 100644
+--- a/src/smolagents/prompts/toolcalling_agent.yaml
++++ b/src/smolagents/prompts/toolcalling_agent.yaml
+@@ -98,13 +98,13 @@ system_prompt: |-
+ 
+   {%- if managed_agents and managed_agents.values() | list %}
+   You can also give tasks to team members.
+-  Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-  Given that this team member is a real human, you should be very verbose in your task.
++  Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++  You can also include any relevant variables or context using the 'additional_args' argument.
+   Here is a list of the team members that you can call:
+   {%- for agent in managed_agents.values() %}
+   - {{ agent.name }}: {{ agent.description }}
+-      Takes inputs: {{agent.inputs}}
+-      Returns an output of type: {{agent.output_type}}
++    - Takes inputs: {{agent.inputs}}
++    - Returns an output of type: {{agent.output_type}}
+   {%- endfor %}
+   {%- endif %}
+ 
+@@ -155,11 +155,14 @@ planning:
+ 
+     {%- if managed_agents and managed_agents.values() | list %}
+     You can also give tasks to team members.
+-    Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task', a long string explaining your task.
+-    Given that this team member is a real human, you should be very verbose in your task.
++    Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++    You can also include any relevant variables or context using the 'additional_args' argument.
+     Here is a list of the team members that you can call:
+     {%- for agent in managed_agents.values() %}
+     - {{ agent.name }}: {{ agent.description }}
++    - {{ agent.name }}: {{ agent.description }}
++      - Takes inputs: {{agent.inputs}}
++      - Returns an output of type: {{agent.output_type}}
+     {%- endfor %}
+     {%- endif %}
+ 
+@@ -208,11 +211,13 @@ planning:
+ 
+     {%- if managed_agents and managed_agents.values() | list %}
+     You can also give tasks to team members.
+-    Calling a team member works the same as for calling a tool: simply, the only argument you can give in the call is 'task'.
+-    Given that this team member is a real human, you should be very verbose in your task, it should be a long string providing informations as detailed as necessary.
++    Calling a team member works similarly to calling a tool: provide the task description as the 'task' argument. Since this team member is a real human, be as detailed and verbose as necessary in your task description.
++    You can also include any relevant variables or context using the 'additional_args' argument.
+     Here is a list of the team members that you can call:
+     {%- for agent in managed_agents.values() %}
+     - {{ agent.name }}: {{ agent.description }}
++      - Takes inputs: {{agent.inputs}}
++      - Returns an output of type: {{agent.output_type}}
+     {%- endfor %}
+     {%- endif %}
+ 

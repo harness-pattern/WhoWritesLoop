@@ -1,0 +1,24 @@
+diff --git a/packages/opencode/src/session/index.ts b/packages/opencode/src/session/index.ts
+index 4b66cdee3746..4474bf1ce408 100644
+--- a/packages/opencode/src/session/index.ts
++++ b/packages/opencode/src/session/index.ts
+@@ -1141,6 +1141,7 @@ export namespace Session {
+     const proc = spawn(shell, args, {
+       cwd: app.path.cwd,
+       signal: abort.signal,
++      detached: true,
+       stdio: ["ignore", "pipe", "pipe"],
+       env: {
+         ...process.env,
+@@ -1148,6 +1149,11 @@ export namespace Session {
+       },
+     })
+ 
++    abort.signal.addEventListener("abort", () => {
++      if (!proc.pid) return
++      process.kill(-proc.pid)
++    })
++
+     let output = ""
+ 
+     proc.stdout?.on("data", (chunk) => {

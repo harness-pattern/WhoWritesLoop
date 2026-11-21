@@ -1,0 +1,574 @@
+diff --git a/packages/cli/src/ui/AppContainer.test.tsx b/packages/cli/src/ui/AppContainer.test.tsx
+index 237bbff4faa..3ee4e89ea50 100644
+--- a/packages/cli/src/ui/AppContainer.test.tsx
++++ b/packages/cli/src/ui/AppContainer.test.tsx
+@@ -21,7 +21,6 @@ import { act, useContext, type ReactElement } from 'react';
+ import { AppContainer } from './AppContainer.js';
+ import { SettingsContext } from './contexts/SettingsContext.js';
+ import { type TrackedToolCall } from './hooks/useReactToolScheduler.js';
+-import { MessageType } from './types.js';
+ import {
+   type Config,
+   makeFakeConfig,
+@@ -29,8 +28,6 @@ import {
+   type UserFeedbackPayload,
+   type ResumedSessionData,
+   AuthType,
+-  UserAccountManager,
+-  type ContentGeneratorConfig,
+   type AgentDefinition,
+ } from '@google/gemini-cli-core';
+ 
+@@ -47,11 +44,6 @@ const mockIdeClient = vi.hoisted(() => ({
+   getInstance: vi.fn().mockReturnValue(new Promise(() => {})),
+ }));
+ 
+-// Mock UserAccountManager
+-const mockUserAccountManager = vi.hoisted(() => ({
+-  getCachedGoogleAccount: vi.fn().mockReturnValue(null),
+-}));
+-
+ // Mock stdout
+ const mocks = vi.hoisted(() => ({
+   mockStdout: { write: vi.fn() },
+@@ -81,9 +73,6 @@ vi.mock('@google/gemini-cli-core', async (importOriginal) => {
+     })),
+     enableMouseEvents: vi.fn(),
+     disableMouseEvents: vi.fn(),
+-    UserAccountManager: vi
+-      .fn()
+-      .mockImplementation(() => mockUserAccountManager),
+     FileDiscoveryService: vi.fn().mockImplementation(() => ({
+       initialize: vi.fn(),
+     })),
+@@ -428,7 +417,6 @@ describe('AppContainer State Management', () => {
+           ...defaultMergedSettings.ui,
+           showStatusInTitle: false,
+           hideWindowTitle: false,
+-          showUserIdentity: true,
+         },
+         useAlternateBuffer: false,
+       },
+@@ -500,162 +488,6 @@ describe('AppContainer State Management', () => {
+     });
+   });
+ 
+-  describe('Authentication Check', () => {
+-    it('displays correct message for LOGIN_WITH_GOOGLE auth type', async () => {
+-      // Explicitly mock implementation to ensure we control the instance
+-      (UserAccountManager as unknown as Mock).mockImplementation(
+-        () => mockUserAccountManager,
+-      );
+-
+-      mockUserAccountManager.getCachedGoogleAccount.mockReturnValue(
+-        'test@example.com',
+-      );
+-      const mockAddItem = vi.fn();
+-      mockedUseHistory.mockReturnValue({
+-        history: [],
+-        addItem: mockAddItem,
+-        updateItem: vi.fn(),
+-        clearItems: vi.fn(),
+-        loadHistory: vi.fn(),
+-      });
+-
+-      // Explicitly enable showUserIdentity
+-      mockSettings.merged.ui = {
+-        ...mockSettings.merged.ui,
+-        showUserIdentity: true,
+-      };
+-
+-      // Need to ensure config.getContentGeneratorConfig() returns appropriate authType
+-      const authConfig = makeFakeConfig();
+-      // Mock getTargetDir as well since makeFakeConfig might not set it up fully for the component
+-      vi.spyOn(authConfig, 'getTargetDir').mockReturnValue('/test/workspace');
+-      vi.spyOn(authConfig, 'initialize').mockResolvedValue(undefined);
+-      vi.spyOn(authConfig, 'getExtensionLoader').mockReturnValue(
+-        mockExtensionManager,
+-      );
+-
+-      vi.spyOn(authConfig, 'getContentGeneratorConfig').mockReturnValue({
+-        authType: AuthType.LOGIN_WITH_GOOGLE,
+-      } as unknown as ContentGeneratorConfig);
+-      vi.spyOn(authConfig, 'getUserTierName').mockReturnValue('Standard Tier');
+-
+-      let unmount: () => void;
+-      await act(async () => {
+-        const result = renderAppContainer({ config: authConfig });
+-        unmount = result.unmount;
+-      });
+-
+-      await waitFor(() => {
+-        expect(UserAccountManager).toHaveBeenCalled();
+-        expect(
+-          mockUserAccountManager.getCachedGoogleAccount,
+-        ).toHaveBeenCalled();
+-        expect(mockAddItem).toHaveBeenCalledWith(
+-          expect.objectContaining({
+-            text: 'Logged in with Google: test@example.com (Plan: Standard Tier)',
+-          }),
+-        );
+-      });
+-      await act(async () => {
+-        unmount!();
+-      });
+-    });
+-    it('displays correct message for USE_GEMINI auth type', async () => {
+-      // Explicitly mock implementation to ensure we control the instance
+-      (UserAccountManager as unknown as Mock).mockImplementation(
+-        () => mockUserAccountManager,
+-      );
+-
+-      mockUserAccountManager.getCachedGoogleAccount.mockReturnValue(null);
+-      const mockAddItem = vi.fn();
+-      mockedUseHistory.mockReturnValue({
+-        history: [],
+-        addItem: mockAddItem,
+-        updateItem: vi.fn(),
+-        clearItems: vi.fn(),
+-        loadHistory: vi.fn(),
+-      });
+-
+-      const authConfig = makeFakeConfig();
+-      vi.spyOn(authConfig, 'getTargetDir').mockReturnValue('/test/workspace');
+-      vi.spyOn(authConfig, 'initialize').mockResolvedValue(undefined);
+-      vi.spyOn(authConfig, 'getExtensionLoader').mockReturnValue(
+-        mockExtensionManager,
+-      );
+-
+-      vi.spyOn(authConfig, 'getContentGeneratorConfig').mockReturnValue({
+-        authType: AuthType.USE_GEMINI,
+-      } as unknown as ContentGeneratorConfig);
+-      vi.spyOn(authConfig, 'getUserTierName').mockReturnValue('Standard Tier');
+-
+-      let unmount: () => void;
+-      await act(async () => {
+-        const result = renderAppContainer({ config: authConfig });
+-        unmount = result.unmount;
+-      });
+-
+-      await waitFor(() => {
+-        expect(mockAddItem).toHaveBeenCalledWith(
+-          expect.objectContaining({
+-            text: expect.stringContaining('Authenticated with gemini-api-key'),
+-          }),
+-        );
+-      });
+-      await act(async () => {
+-        unmount!();
+-      });
+-    });
+-
+-    it('does not display authentication message if showUserIdentity is false', async () => {
+-      mockUserAccountManager.getCachedGoogleAccount.mockReturnValue(
+-        'test@example.com',
+-      );
+-      const mockAddItem = vi.fn();
+-      mockedUseHistory.mockReturnValue({
+-        history: [],
+-        addItem: mockAddItem,
+-        updateItem: vi.fn(),
+-        clearItems: vi.fn(),
+-        loadHistory: vi.fn(),
+-      });
+-
+-      mockSettings.merged.ui = {
+-        ...mockSettings.merged.ui,
+-        showUserIdentity: false,
+-      };
+-
+-      const authConfig = makeFakeConfig();
+-      vi.spyOn(authConfig, 'getTargetDir').mockReturnValue('/test/workspace');
+-      vi.spyOn(authConfig, 'initialize').mockResolvedValue(undefined);
+-      vi.spyOn(authConfig, 'getExtensionLoader').mockReturnValue(
+-        mockExtensionManager,
+-      );
+-
+-      vi.spyOn(authConfig, 'getContentGeneratorConfig').mockReturnValue({
+-        authType: AuthType.LOGIN_WITH_GOOGLE,
+-      } as unknown as ContentGeneratorConfig);
+-
+-      let unmount: () => void;
+-      await act(async () => {
+-        const result = renderAppContainer({ config: authConfig });
+-        unmount = result.unmount;
+-      });
+-
+-      // Give it some time to potentially call addItem
+-      await new Promise((resolve) => setTimeout(resolve, 100));
+-
+-      expect(mockAddItem).not.toHaveBeenCalledWith(
+-        expect.objectContaining({
+-          type: MessageType.INFO,
+-        }),
+-      );
+-
+-      await act(async () => {
+-        unmount!();
+-      });
+-    });
+-  });
+-
+   describe('Context Providers', () => {
+     it('provides AppContext with correct values', async () => {
+       let unmount: () => void;
+diff --git a/packages/cli/src/ui/AppContainer.tsx b/packages/cli/src/ui/AppContainer.tsx
+index 1909065a801..b7f4060c15a 100644
+--- a/packages/cli/src/ui/AppContainer.tsx
++++ b/packages/cli/src/ui/AppContainer.tsx
+@@ -44,7 +44,6 @@ import {
+   getErrorMessage,
+   getAllGeminiMdFilenames,
+   AuthType,
+-  UserAccountManager,
+   clearCachedCredentialFile,
+   type ResumedSessionData,
+   recordExitFail,
+@@ -191,51 +190,6 @@ export const AppContainer = (props: AppContainerProps) => {
+   const historyManager = useHistory({
+     chatRecordingService: config.getGeminiClient()?.getChatRecordingService(),
+   });
+-  const { addItem } = historyManager;
+-
+-  const authCheckPerformed = useRef(false);
+-  useEffect(() => {
+-    if (authCheckPerformed.current) return;
+-    authCheckPerformed.current = true;
+-
+-    if (resumedSessionData || settings.merged.ui.showUserIdentity === false) {
+-      return;
+-    }
+-    const authType = config.getContentGeneratorConfig()?.authType;
+-
+-    // Run this asynchronously to avoid blocking the event loop.
+-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
+-    (async () => {
+-      try {
+-        const userAccountManager = new UserAccountManager();
+-        const email = userAccountManager.getCachedGoogleAccount();
+-        const tierName = config.getUserTierName();
+-
+-        if (authType) {
+-          let message =
+-            authType === AuthType.LOGIN_WITH_GOOGLE
+-              ? email
+-                ? `Logged in with Google: ${email}`
+-                : 'Logged in with Google'
+-              : `Authenticated with ${authType}`;
+-          if (tierName) {
+-            message += ` (Plan: ${tierName})`;
+-          }
+-          addItem({
+-            type: MessageType.INFO,
+-            text: message,
+-          });
+-        }
+-      } catch (_e) {
+-        // Ignore errors during initial auth check
+-      }
+-    })();
+-  }, [
+-    config,
+-    resumedSessionData,
+-    settings.merged.ui.showUserIdentity,
+-    addItem,
+-  ]);
+ 
+   useMemoryMonitor(historyManager);
+   const isAlternateBuffer = useAlternateBuffer();
+diff --git a/packages/cli/src/ui/components/AppHeader.tsx b/packages/cli/src/ui/components/AppHeader.tsx
+index 77042c6e3ae..01eac444965 100644
+--- a/packages/cli/src/ui/components/AppHeader.tsx
++++ b/packages/cli/src/ui/components/AppHeader.tsx
+@@ -7,6 +7,7 @@
+ import { Box } from 'ink';
+ import { Header } from './Header.js';
+ import { Tips } from './Tips.js';
++import { UserIdentity } from './UserIdentity.js';
+ import { useSettings } from '../contexts/SettingsContext.js';
+ import { useConfig } from '../contexts/ConfigContext.js';
+ import { useUIState } from '../contexts/UIStateContext.js';
+@@ -40,6 +41,9 @@ export const AppHeader = ({ version }: AppHeaderProps) => {
+           )}
+         </>
+       )}
++      {settings.merged.ui.showUserIdentity !== false && (
++        <UserIdentity config={config} />
++      )}
+       {!(settings.merged.ui.hideTips || config.getScreenReader()) &&
+         showTips && <Tips config={config} />}
+     </Box>
+diff --git a/packages/cli/src/ui/components/UserIdentity.test.tsx b/packages/cli/src/ui/components/UserIdentity.test.tsx
+new file mode 100644
+index 00000000000..dcc37c55639
+--- /dev/null
++++ b/packages/cli/src/ui/components/UserIdentity.test.tsx
+@@ -0,0 +1,139 @@
++/**
++ * @license
++ * Copyright 2025 Google LLC
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++import { renderWithProviders } from '../../test-utils/render.js';
++import { UserIdentity } from './UserIdentity.js';
++import { describe, it, expect, vi, beforeEach } from 'vitest';
++import {
++  makeFakeConfig,
++  AuthType,
++  UserAccountManager,
++  type ContentGeneratorConfig,
++} from '@google/gemini-cli-core';
++
++// Mock UserAccountManager to control cached account
++vi.mock('@google/gemini-cli-core', async (importOriginal) => {
++  const original =
++    await importOriginal<typeof import('@google/gemini-cli-core')>();
++  return {
++    ...original,
++    UserAccountManager: vi.fn().mockImplementation(() => ({
++      getCachedGoogleAccount: () => 'test@example.com',
++    })),
++  };
++});
++
++describe('<UserIdentity />', () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++  });
++
++  it('should render login message and auth indicator', () => {
++    const mockConfig = makeFakeConfig();
++    vi.spyOn(mockConfig, 'getContentGeneratorConfig').mockReturnValue({
++      authType: AuthType.LOGIN_WITH_GOOGLE,
++      model: 'gemini-pro',
++    } as unknown as ContentGeneratorConfig);
++    vi.spyOn(mockConfig, 'getUserTierName').mockReturnValue(undefined);
++
++    const { lastFrame, unmount } = renderWithProviders(
++      <UserIdentity config={mockConfig} />,
++    );
++
++    const output = lastFrame();
++    expect(output).toContain('Logged in with Google: test@example.com');
++    expect(output).toContain('/auth');
++    unmount();
++  });
++
++  it('should render login message without colon if email is missing', () => {
++    // Modify the mock for this specific test
++    vi.mocked(UserAccountManager).mockImplementationOnce(
++      () =>
++        ({
++          getCachedGoogleAccount: () => undefined,
++        }) as unknown as UserAccountManager,
++    );
++
++    const mockConfig = makeFakeConfig();
++    vi.spyOn(mockConfig, 'getContentGeneratorConfig').mockReturnValue({
++      authType: AuthType.LOGIN_WITH_GOOGLE,
++      model: 'gemini-pro',
++    } as unknown as ContentGeneratorConfig);
++    vi.spyOn(mockConfig, 'getUserTierName').mockReturnValue(undefined);
++
++    const { lastFrame, unmount } = renderWithProviders(
++      <UserIdentity config={mockConfig} />,
++    );
++
++    const output = lastFrame();
++    expect(output).toContain('Logged in with Google');
++    expect(output).not.toContain('Logged in with Google:');
++    expect(output).toContain('/auth');
++    unmount();
++  });
++
++  it('should render plan name on a separate line if provided', () => {
++    const mockConfig = makeFakeConfig();
++    vi.spyOn(mockConfig, 'getContentGeneratorConfig').mockReturnValue({
++      authType: AuthType.LOGIN_WITH_GOOGLE,
++      model: 'gemini-pro',
++    } as unknown as ContentGeneratorConfig);
++    vi.spyOn(mockConfig, 'getUserTierName').mockReturnValue('Premium Plan');
++
++    const { lastFrame, unmount } = renderWithProviders(
++      <UserIdentity config={mockConfig} />,
++    );
++
++    const output = lastFrame();
++    expect(output).toContain('Logged in with Google: test@example.com');
++    expect(output).toContain('/auth');
++    expect(output).toContain('Plan: Premium Plan');
++
++    // Check for two lines (or more if wrapped, but here it should be separate)
++    const lines = output?.split('\n').filter((line) => line.trim().length > 0);
++    expect(lines?.some((line) => line.includes('Logged in with Google'))).toBe(
++      true,
++    );
++    expect(lines?.some((line) => line.includes('Plan: Premium Plan'))).toBe(
++      true,
++    );
++
++    unmount();
++  });
++
++  it('should not render if authType is missing', () => {
++    const mockConfig = makeFakeConfig();
++    vi.spyOn(mockConfig, 'getContentGeneratorConfig').mockReturnValue(
++      {} as unknown as ContentGeneratorConfig,
++    );
++
++    const { lastFrame, unmount } = renderWithProviders(
++      <UserIdentity config={mockConfig} />,
++    );
++
++    expect(lastFrame()).toBe('');
++    unmount();
++  });
++
++  it('should render non-Google auth message', () => {
++    const mockConfig = makeFakeConfig();
++    vi.spyOn(mockConfig, 'getContentGeneratorConfig').mockReturnValue({
++      authType: AuthType.USE_GEMINI,
++      model: 'gemini-pro',
++    } as unknown as ContentGeneratorConfig);
++    vi.spyOn(mockConfig, 'getUserTierName').mockReturnValue(undefined);
++
++    const { lastFrame, unmount } = renderWithProviders(
++      <UserIdentity config={mockConfig} />,
++    );
++
++    const output = lastFrame();
++    expect(output).toContain(`Authenticated with ${AuthType.USE_GEMINI}`);
++    expect(output).toContain('/auth');
++    unmount();
++  });
++});
+diff --git a/packages/cli/src/ui/components/UserIdentity.tsx b/packages/cli/src/ui/components/UserIdentity.tsx
+new file mode 100644
+index 00000000000..ba7473723ff
+--- /dev/null
++++ b/packages/cli/src/ui/components/UserIdentity.tsx
+@@ -0,0 +1,61 @@
++/**
++ * @license
++ * Copyright 2025 Google LLC
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++import type React from 'react';
++import { useMemo } from 'react';
++import { Box, Text } from 'ink';
++import { theme } from '../semantic-colors.js';
++import {
++  type Config,
++  UserAccountManager,
++  AuthType,
++} from '@google/gemini-cli-core';
++
++interface UserIdentityProps {
++  config: Config;
++}
++
++export const UserIdentity: React.FC<UserIdentityProps> = ({ config }) => {
++  const authType = config.getContentGeneratorConfig()?.authType;
++
++  const { email, tierName } = useMemo(() => {
++    if (!authType) {
++      return { email: undefined, tierName: undefined };
++    }
++    const userAccountManager = new UserAccountManager();
++    return {
++      email: userAccountManager.getCachedGoogleAccount(),
++      tierName: config.getUserTierName(),
++    };
++  }, [config, authType]);
++
++  if (!authType) {
++    return null;
++  }
++
++  return (
++    <Box marginY={1} flexDirection="column">
++      <Box>
++        <Text color={theme.text.primary}>
++          {authType === AuthType.LOGIN_WITH_GOOGLE ? (
++            <Text>
++              <Text bold>Logged in with Google{email ? ':' : ''}</Text>
++              {email ? ` ${email}` : ''}
++            </Text>
++          ) : (
++            `Authenticated with ${authType}`
++          )}
++        </Text>
++        <Text color={theme.text.secondary}> /auth</Text>
++      </Box>
++      {tierName && (
++        <Text color={theme.text.primary}>
++          <Text bold>Plan:</Text> {tierName}
++        </Text>
++      )}
++    </Box>
++  );
++};
+diff --git a/packages/core/src/code_assist/setup.ts b/packages/core/src/code_assist/setup.ts
+index bf948f1f935..67e3d1c1c41 100644
+--- a/packages/core/src/code_assist/setup.ts
++++ b/packages/core/src/code_assist/setup.ts
+@@ -121,8 +121,8 @@ export async function setupUser(
+       if (projectId) {
+         return {
+           projectId,
+-          userTier: loadRes.currentTier.id,
+-          userTierName: loadRes.currentTier.name,
++          userTier: loadRes.paidTier?.id ?? loadRes.currentTier.id,
++          userTierName: loadRes.paidTier?.name ?? loadRes.currentTier.name,
+         };
+       }
+ 
+@@ -137,8 +137,8 @@ export async function setupUser(
+     }
+     return {
+       projectId: loadRes.cloudaicompanionProject,
+-      userTier: loadRes.currentTier.id,
+-      userTierName: loadRes.currentTier.name,
++      userTier: loadRes.paidTier?.id ?? loadRes.currentTier.id,
++      userTierName: loadRes.paidTier?.name ?? loadRes.currentTier.name,
+     };
+   }
+ 
+diff --git a/packages/core/src/code_assist/types.ts b/packages/core/src/code_assist/types.ts
+index ccf54921cf9..6f697a61f37 100644
+--- a/packages/core/src/code_assist/types.ts
++++ b/packages/core/src/code_assist/types.ts
+@@ -53,6 +53,7 @@ export interface LoadCodeAssistResponse {
+   allowedTiers?: GeminiUserTier[] | null;
+   ineligibleTiers?: IneligibleTier[] | null;
+   cloudaicompanionProject?: string | null;
++  paidTier?: GeminiUserTier | null;
+ }
+ 
+ /**
+@@ -109,13 +110,17 @@ export enum IneligibleTierReasonCode {
+ /**
+  * UserTierId represents IDs returned from the Cloud Code Private API representing a user's tier
+  *
+- * //depot/google3/cloud/developer_experience/cloudcode/pa/service/usertier.go;l=16
++ * http://google3/cloud/developer_experience/codeassist/shared/usertier/tiers.go
++ * This is a subset of all available tiers. Since the source list is frequently updated,
++ * only add a tierId here if specific client-side handling is required.
+  */
+-export enum UserTierId {
+-  FREE = 'free-tier',
+-  LEGACY = 'legacy-tier',
+-  STANDARD = 'standard-tier',
+-}
++export const UserTierId = {
++  FREE: 'free-tier',
++  LEGACY: 'legacy-tier',
++  STANDARD: 'standard-tier',
++} as const;
++
++export type UserTierId = (typeof UserTierId)[keyof typeof UserTierId] | string;
+ 
+ /**
+  * PrivacyNotice reflects the structure received from the CodeAssist in regards to a tier

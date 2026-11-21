@@ -1,0 +1,168 @@
+diff --git a/.changeset/fiery-icons-appear.md b/.changeset/fiery-icons-appear.md
+new file mode 100644
+index 000000000000..e4bbaf1fb9d9
+--- /dev/null
++++ b/.changeset/fiery-icons-appear.md
+@@ -0,0 +1,5 @@
++---
++'mastracode': patch
++---
++
++Improve README by adding links and screenshots
+diff --git a/docs/src/content/en/docs/memory/observational-memory.mdx b/docs/src/content/en/docs/memory/observational-memory.mdx
+index 0c5233bdcfed..d0a5f113b870 100644
+--- a/docs/src/content/en/docs/memory/observational-memory.mdx
++++ b/docs/src/content/en/docs/memory/observational-memory.mdx
+@@ -483,3 +483,4 @@ In practical terms, OM replaces both working memory and message history, and has
+ - [Memory Overview](/docs/memory/overview)
+ - [Message History](/docs/memory/message-history)
+ - [Memory Processors](/docs/memory/memory-processors)
++- [Mastra Code](https://code.mastra.ai/): A coding agent using Observational Memory
+diff --git a/docs/src/content/en/docs/memory/overview.mdx b/docs/src/content/en/docs/memory/overview.mdx
+index e73b086810cc..ce492ac5f828 100644
+--- a/docs/src/content/en/docs/memory/overview.mdx
++++ b/docs/src/content/en/docs/memory/overview.mdx
+@@ -247,3 +247,4 @@ Visit [Request Context](/docs/server/request-context) for more information.
+ - [`Memory` reference](/reference/memory/memory-class)
+ - [Tracing](/docs/observability/tracing/overview)
+ - [Request Context](/docs/server/request-context)
++- [Mastra Code](https://code.mastra.ai/): A coding agent using Mastra's memory system
+diff --git a/docs/src/content/en/reference/harness/harness-class.mdx b/docs/src/content/en/reference/harness/harness-class.mdx
+index 7e4b1fb3f2b5..2643690920d4 100644
+--- a/docs/src/content/en/reference/harness/harness-class.mdx
++++ b/docs/src/content/en/reference/harness/harness-class.mdx
+@@ -13,6 +13,8 @@ packages:
+ 
+ The `Harness` class is in alpha stage and subject to change. It won't follow semantic versioning guarantees until it graduates from experimental status. Use with caution and expect breaking changes in minor versions.
+ 
++[Mastra Code](https://code.mastra.ai/) is the flagship implementation of the `Harness` class, showcasing how it can be used to build a powerful terminal-based coding agent with multi-model support, persistent conversations, and built-in tools.
++
+ :::
+ 
+ The `Harness` class orchestrates multiple agent modes, shared state, memory, and storage. It provides a control layer that a TUI or other UI can drive to manage threads, switch models and modes, send messages, handle tool approvals, and track events.
+diff --git a/docs/src/mastra-code/index.mdx b/docs/src/mastra-code/index.mdx
+index 4a425d4e22be..bacf14088c12 100644
+--- a/docs/src/mastra-code/index.mdx
++++ b/docs/src/mastra-code/index.mdx
+@@ -1,13 +1,13 @@
+ ---
+ title: 'Mastra Code'
+-description: 'Mastra Code is a terminal-based AI coding agent built with Mastra. It provides multi-model support, persistent conversations, coding tools, and a polished TUI.'
++description: 'Mastra Code is a terminal-based AI coding agent that never compacts. It provides multi-model support, persistent conversations, coding tools, and Observational Memory built-in.'
+ packages:
+   - 'mastracode'
+ ---
+ 
+ # Mastra Code
+ 
+-Mastra Code is a terminal-based AI coding agent built on Mastra's [Harness](https://mastra.ai/reference/harness/harness-class), [Agent](https://mastra.ai/docs/agents/overview), and [Memory](https://mastra.ai/docs/memory/overview) primitives. It runs in your terminal, connects to thousands of AI models, and provides tools for reading, searching, editing, and executing code.
++Mastra Code is a terminal-based AI coding agent that never compacts. Built on Mastra's [Harness](https://mastra.ai/reference/harness/harness-class), [Agent](https://mastra.ai/docs/agents/overview), and [Memory](https://mastra.ai/docs/memory/overview) primitives. It runs in your terminal, connects to thousands of AI models, and provides tools for reading, searching, editing, and executing code.
+ 
+ Mastra Code organizes its capabilities around these areas:
+ 
+@@ -16,8 +16,19 @@ Mastra Code organizes its capabilities around these areas:
+ - [**Configuration**](/configuration): Project-scoped threads, MCP servers, hooks, custom commands, skills, and database settings.
+ - [**Customization**](/customization): Extend Mastra Code programmatically with custom modes, tools, subagents, and storage.
+ 
++In this demo, you'll see Mastra Code in action:
++
++<VideoPlayer
++  url="https://res.cloudinary.com/mastra-assets/video/upload/v1778051861/mastracode-demo_thoxc9.mp4"
++  title="Mastra Code Demo Video"
++/>
++
++Learn how Mastra Code came to be on [YouTube](https://www.youtube.com/watch?v=Hbgh3Iyd3Mk).
++
+ ## When to use Mastra Code
+ 
++- **Long-running projects**: Mastra Code's persistent threads and [Observational Memory](https://mastra.ai/docs/memory/observational-memory) make it ideal for ongoing projects where context builds up over time.
++- **No compaction headaches**: With Observational Memory, you never have to worry about losing important context due to token limits. Mastra Code automatically manages what to remember and what to forget.
+ - **Day-to-day coding**: Ask questions about your codebase, make edits, run tests, and manage Git.
+ - **Code exploration**: Use Plan mode to analyze architecture and create implementation plans before writing code.
+ - **Quick lookups**: Switch to Fast mode for brief answers and small edits with minimal latency.
+@@ -126,12 +137,6 @@ Mastra Code is built on four layers:
+ 1. **Mastra Agent**: Dynamic model selection, tool execution, memory integration, subagents
+ 1. **LibSQL Storage**: Thread persistence, message history, token usage tracking, observational memory
+ 
+-## Demo Video
+-
+-In this demo, you'll see Mastra Code in action and learn how it came to be.
+-
+-<YouTube id="Hbgh3Iyd3Mk" />
+-
+ ## Next steps
+ 
+ - [Modes](/modes)
+diff --git a/mastracode/README.md b/mastracode/README.md
+index 7fc2480c4caa..f3db713cda44 100644
+--- a/mastracode/README.md
++++ b/mastracode/README.md
+@@ -1,16 +1,21 @@
+ # Mastra Code
+ 
+-A terminal-based coding agent TUI built with [Mastra](https://mastra.ai) and [pi-tui](https://github.com/badlogic/pi-mono).
++A coding agent that never compacts. Built with [Mastra](https://mastra.ai) and [pi-tui](https://github.com/badlogic/pi-mono).
++
++Learn more in the [documentation](https://code.mastra.ai/) and [announcement post](https://mastra.ai/blog/announcing-mastra-code).
++
++![Screenshot of the Mastra Code TUI. At the top it shows in green letters "Mastra Code". It then displays the version, project, resource ID, and user. The user and assistant message have green borders. At the bottom is a green input field. Below the input is on the left the current mode and model displayed. In the middle the Observational Memory status is shown. On the right is the current directory.](https://res.cloudinary.com/mastra-assets/image/upload/v1778048981/mastracode-init_tny2pb.png)
+ 
+ ## Features
+ 
+-- 🤖 **Multi-model support**: Use Claude, GPT, Gemini, and 70+ other models via Mastra's unified model router
+-- 🔐 **OAuth login**: Authenticate with Anthropic (Claude Max) and OpenAI (ChatGPT Plus/Codex)
+-- 💾 **Persistent conversations**: Threads are saved per-project and resume automatically
+-- 🛠️ **Coding tools**: View files, edit code, run shell commands
+-- 📋 **Plan persistence**: Approved plans are saved as markdown files for future reference
+-- 📊 **Token tracking**: Monitor usage with persistent token counts per thread
+-- 🎨 **Beautiful TUI**: Polished terminal interface with streaming responses
++- **Observational Memory built-in**: Never deal with compaction again. [Observational Memory](https://mastra.ai/docs/memory/observational-memory) automatically extracts and stores observations from every conversation, then injects relevant context into future requests.
++- **Multi-model support**: Use Claude, GPT, Gemini, and thousands of other models via Mastra's unified model router
++- **OAuth login**: Authenticate with Anthropic (Claude Max) and OpenAI (ChatGPT Plus/Codex)
++- **Persistent conversations**: Threads are saved per-project and resume automatically
++- **Coding tools**: View files, edit code, run shell commands
++- **Plan persistence**: Approved plans are saved as markdown files for future reference
++- **Token tracking**: Monitor usage with persistent token counts per thread
++- **Beautiful TUI**: Polished terminal interface with streaming responses
+ 
+ ## Installation
+ 
+@@ -28,10 +33,10 @@ npx mastracode
+ 
+ On first launch, an interactive onboarding wizard guides you through:
+ 
+-1. **Authentication** — log in with your AI provider (Anthropic, OpenAI, etc.)
+-2. **Model packs** — choose default models for each mode (build / plan / fast)
+-3. **Observational Memory** — pick a model for OM (learns about you over time)
+-4. **YOLO mode** — auto-approve tool calls, or require manual confirmation
++1. **Authentication**: Log in with your AI provider (Anthropic, OpenAI, etc.)
++2. **Model packs**: Choose default models for each mode (build / plan / fast)
++3. **Observational Memory**: Pick a model for OM (learns about you over time)
++4. **YOLO mode**: Auto-approve tool calls, or require manual confirmation
+ 
+ You can re-run setup anytime with `/setup`.
+ 
+@@ -140,8 +145,8 @@ The SQLite database is stored in your system's application data directory:
+ 
+ For **Anthropic** models, mastracode supports two authentication methods:
+ 
+-1. **Claude Max OAuth (primary)** — Use `/login` to authenticate with a Claude Pro/Max subscription.
+-2. **API key (fallback)** — Set the `ANTHROPIC_API_KEY` environment variable for direct API access. This is used when not logged in via OAuth.
++1. **Claude Max OAuth (primary)**: Use `/login` to authenticate with a Claude Pro/Max subscription.
++2. **API key (fallback)**: Set the `ANTHROPIC_API_KEY` environment variable for direct API access. This is used when not logged in via OAuth.
+ 
+ When both are available, Claude Max OAuth takes priority.
+ 
+@@ -237,9 +242,9 @@ pnpm build
+ 
+ ## Credits
+ 
+-- [Mastra](https://mastra.ai) - AI agent framework
+-- [pi-mono](https://github.com/badlogic/pi-mono) - TUI primitives and inspiration
+-- [OpenCode](https://github.com/sst/opencode) - OAuth provider patterns
++- [Mastra](https://mastra.ai): AI agent framework
++- [pi-mono](https://github.com/badlogic/pi-mono): TUI primitives and inspiration
++- [OpenCode](https://github.com/sst/opencode): OAuth provider patterns
+ 
+ ## License
+ 

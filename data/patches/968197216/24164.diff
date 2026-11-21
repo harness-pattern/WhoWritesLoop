@@ -1,0 +1,206 @@
+diff --git a/packages/cli/src/commands/extensions/disable.test.ts b/packages/cli/src/commands/extensions/disable.test.ts
+index 47fc1190c0f..4b386913db1 100644
+--- a/packages/cli/src/commands/extensions/disable.test.ts
++++ b/packages/cli/src/commands/extensions/disable.test.ts
+@@ -151,7 +151,7 @@ describe('extensions disable command', () => {
+     const command = disableCommand;
+ 
+     it('should have correct command and describe', () => {
+-      expect(command.command).toBe('disable [--scope] <name>');
++      expect(command.command).toBe('disable <name>');
+       expect(command.describe).toBe('Disables an extension.');
+     });
+ 
+diff --git a/packages/cli/src/commands/extensions/disable.ts b/packages/cli/src/commands/extensions/disable.ts
+index dae97ea5846..cea6a19b300 100644
+--- a/packages/cli/src/commands/extensions/disable.ts
++++ b/packages/cli/src/commands/extensions/disable.ts
+@@ -46,7 +46,7 @@ export async function handleDisable(args: DisableArgs) {
+ }
+ 
+ export const disableCommand: CommandModule = {
+-  command: 'disable [--scope] <name>',
++  command: 'disable <name>',
+   describe: 'Disables an extension.',
+   builder: (yargs) =>
+     yargs
+diff --git a/packages/cli/src/commands/extensions/enable.test.ts b/packages/cli/src/commands/extensions/enable.test.ts
+index aafb5193e44..b70681fb253 100644
+--- a/packages/cli/src/commands/extensions/enable.test.ts
++++ b/packages/cli/src/commands/extensions/enable.test.ts
+@@ -202,7 +202,7 @@ describe('extensions enable command', () => {
+     const command = enableCommand;
+ 
+     it('should have correct command and describe', () => {
+-      expect(command.command).toBe('enable [--scope] <name>');
++      expect(command.command).toBe('enable <name>');
+       expect(command.describe).toBe('Enables an extension.');
+     });
+ 
+diff --git a/packages/cli/src/commands/extensions/enable.ts b/packages/cli/src/commands/extensions/enable.ts
+index e0976aa10a8..b1bf17384ed 100644
+--- a/packages/cli/src/commands/extensions/enable.ts
++++ b/packages/cli/src/commands/extensions/enable.ts
+@@ -73,7 +73,7 @@ export async function handleEnable(args: EnableArgs) {
+ }
+ 
+ export const enableCommand: CommandModule = {
+-  command: 'enable [--scope] <name>',
++  command: 'enable <name>',
+   describe: 'Enables an extension.',
+   builder: (yargs) =>
+     yargs
+diff --git a/packages/cli/src/commands/extensions/install.ts b/packages/cli/src/commands/extensions/install.ts
+index cf135a93668..01c89868bcd 100644
+--- a/packages/cli/src/commands/extensions/install.ts
++++ b/packages/cli/src/commands/extensions/install.ts
+@@ -170,10 +170,11 @@ export async function handleInstall(args: InstallArgs) {
+ }
+ 
+ export const installCommand: CommandModule = {
+-  command: 'install <source> [--auto-update] [--pre-release]',
++  command: 'install <source>',
+   describe: 'Installs an extension from a git repository URL or a local path.',
+   builder: (yargs) =>
+     yargs
++      .usage('gemini extensions install <source>')
+       .positional('source', {
+         describe: 'The github URL or local path of the extension to install.',
+         type: 'string',
+diff --git a/packages/cli/src/commands/extensions/update.test.ts b/packages/cli/src/commands/extensions/update.test.ts
+index 886a7d2b0c1..d2f12362232 100644
+--- a/packages/cli/src/commands/extensions/update.test.ts
++++ b/packages/cli/src/commands/extensions/update.test.ts
+@@ -196,7 +196,7 @@ describe('extensions update command', () => {
+     const command = updateCommand;
+ 
+     it('should have correct command and describe', () => {
+-      expect(command.command).toBe('update [<name>] [--all]');
++      expect(command.command).toBe('update [<name>]');
+       expect(command.describe).toBe(
+         'Updates all extensions or a named extension to the latest version.',
+       );
+diff --git a/packages/cli/src/commands/extensions/update.ts b/packages/cli/src/commands/extensions/update.ts
+index 2459b5d7c4c..c5c430042f5 100644
+--- a/packages/cli/src/commands/extensions/update.ts
++++ b/packages/cli/src/commands/extensions/update.ts
+@@ -136,7 +136,7 @@ export async function handleUpdate(args: UpdateArgs) {
+ }
+ 
+ export const updateCommand: CommandModule = {
+-  command: 'update [<name>] [--all]',
++  command: 'update [<name>]',
+   describe:
+     'Updates all extensions or a named extension to the latest version.',
+   builder: (yargs) =>
+diff --git a/packages/cli/src/commands/skills/disable.test.ts b/packages/cli/src/commands/skills/disable.test.ts
+index 531a08d21b5..635a6dc8dac 100644
+--- a/packages/cli/src/commands/skills/disable.test.ts
++++ b/packages/cli/src/commands/skills/disable.test.ts
+@@ -135,7 +135,7 @@ describe('skills disable command', () => {
+ 
+   describe('disableCommand', () => {
+     it('should have correct command and describe', () => {
+-      expect(disableCommand.command).toBe('disable <name> [--scope]');
++      expect(disableCommand.command).toBe('disable <name>');
+       expect(disableCommand.describe).toBe('Disables an agent skill.');
+     });
+   });
+diff --git a/packages/cli/src/commands/skills/disable.ts b/packages/cli/src/commands/skills/disable.ts
+index 59a74fd3c52..b52f1dbbc66 100644
+--- a/packages/cli/src/commands/skills/disable.ts
++++ b/packages/cli/src/commands/skills/disable.ts
+@@ -31,7 +31,7 @@ export async function handleDisable(args: DisableArgs) {
+ }
+ 
+ export const disableCommand: CommandModule = {
+-  command: 'disable <name> [--scope]',
++  command: 'disable <name>',
+   describe: 'Disables an agent skill.',
+   builder: (yargs) =>
+     yargs
+diff --git a/packages/cli/src/commands/skills/install.test.ts b/packages/cli/src/commands/skills/install.test.ts
+index db2548950d2..c0d03df85b2 100644
+--- a/packages/cli/src/commands/skills/install.test.ts
++++ b/packages/cli/src/commands/skills/install.test.ts
+@@ -45,9 +45,7 @@ describe('skill install command', () => {
+ 
+   describe('installCommand', () => {
+     it('should have correct command and describe', () => {
+-      expect(installCommand.command).toBe(
+-        'install <source> [--scope] [--path]',
+-      );
++      expect(installCommand.command).toBe('install <source>');
+       expect(installCommand.describe).toBe(
+         'Installs an agent skill from a git repository URL or a local path.',
+       );
+diff --git a/packages/cli/src/commands/skills/install.ts b/packages/cli/src/commands/skills/install.ts
+index 75dad58f0f4..2f8db4546c2 100644
+--- a/packages/cli/src/commands/skills/install.ts
++++ b/packages/cli/src/commands/skills/install.ts
+@@ -69,11 +69,12 @@ export async function handleInstall(args: InstallArgs) {
+ }
+ 
+ export const installCommand: CommandModule = {
+-  command: 'install <source> [--scope] [--path]',
++  command: 'install <source>',
+   describe:
+     'Installs an agent skill from a git repository URL or a local path.',
+   builder: (yargs) =>
+     yargs
++      .usage('gemini skills install <source>')
+       .positional('source', {
+         describe:
+           'The git repository URL or local path of the skill to install.',
+diff --git a/packages/cli/src/commands/skills/list.test.ts b/packages/cli/src/commands/skills/list.test.ts
+index 391749242b7..1e578387462 100644
+--- a/packages/cli/src/commands/skills/list.test.ts
++++ b/packages/cli/src/commands/skills/list.test.ts
+@@ -173,7 +173,7 @@ describe('skills list command', () => {
+     const command = listCommand;
+ 
+     it('should have correct command and describe', () => {
+-      expect(command.command).toBe('list [--all]');
++      expect(command.command).toBe('list');
+       expect(command.describe).toBe('Lists discovered agent skills.');
+     });
+   });
+diff --git a/packages/cli/src/commands/skills/list.ts b/packages/cli/src/commands/skills/list.ts
+index 49fc3a54f1d..ce982562a23 100644
+--- a/packages/cli/src/commands/skills/list.ts
++++ b/packages/cli/src/commands/skills/list.ts
+@@ -64,7 +64,7 @@ export async function handleList(args: { all?: boolean }) {
+ }
+ 
+ export const listCommand: CommandModule = {
+-  command: 'list [--all]',
++  command: 'list',
+   describe: 'Lists discovered agent skills.',
+   builder: (yargs) =>
+     yargs.option('all', {
+diff --git a/packages/cli/src/commands/skills/uninstall.test.ts b/packages/cli/src/commands/skills/uninstall.test.ts
+index e12bda53537..ecded134c51 100644
+--- a/packages/cli/src/commands/skills/uninstall.test.ts
++++ b/packages/cli/src/commands/skills/uninstall.test.ts
+@@ -36,7 +36,7 @@ describe('skill uninstall command', () => {
+ 
+   describe('uninstallCommand', () => {
+     it('should have correct command and describe', () => {
+-      expect(uninstallCommand.command).toBe('uninstall <name> [--scope]');
++      expect(uninstallCommand.command).toBe('uninstall <name>');
+       expect(uninstallCommand.describe).toBe(
+         'Uninstalls an agent skill by name.',
+       );
+diff --git a/packages/cli/src/commands/skills/uninstall.ts b/packages/cli/src/commands/skills/uninstall.ts
+index cfcb67da214..a68f660eca8 100644
+--- a/packages/cli/src/commands/skills/uninstall.ts
++++ b/packages/cli/src/commands/skills/uninstall.ts
+@@ -40,7 +40,7 @@ export async function handleUninstall(args: UninstallArgs) {
+ }
+ 
+ export const uninstallCommand: CommandModule = {
+-  command: 'uninstall <name> [--scope]',
++  command: 'uninstall <name>',
+   describe: 'Uninstalls an agent skill by name.',
+   builder: (yargs) =>
+     yargs

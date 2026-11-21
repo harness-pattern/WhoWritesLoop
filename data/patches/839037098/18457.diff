@@ -1,0 +1,418 @@
+diff --git a/.changeset/twelve-schools-grow.md b/.changeset/twelve-schools-grow.md
+new file mode 100644
+index 000000000000..1a004b4fab11
+--- /dev/null
++++ b/.changeset/twelve-schools-grow.md
+@@ -0,0 +1,21 @@
++---
++'mastra': minor
++---
++
++Added a `--server-api-prefix` flag to `mastra api` so the CLI can reach a Mastra server mounted under a custom API route prefix. Previously `mastra api` always targeted `<url>/api/<route>`, so it could not talk to servers mounted under a non-default prefix (for example a `@mastra/fastify` `MastraServer` with `prefix: "/api/mastra-studio"`). This matches the `--server-api-prefix` flag that `mastra studio` already supports.
++
++The prefix can also be set with the `MASTRA_API_PREFIX` environment variable.
++
++**Before** (the prefix could not be placed between the host and the route):
++
++```bash
++# → GET https://example.com/api/agents → 404
++mastra api --url https://example.com agent list
++```
++
++**After**:
++
++```bash
++# → GET https://example.com/api/mastra-studio/agents
++mastra api --url https://example.com --server-api-prefix /api/mastra-studio agent list
++```
+diff --git a/docs/src/content/en/reference/cli/mastra.mdx b/docs/src/content/en/reference/cli/mastra.mdx
+index 239760035520..d11d0c0fe8e1 100644
+--- a/docs/src/content/en/reference/cli/mastra.mdx
++++ b/docs/src/content/en/reference/cli/mastra.mdx
+@@ -678,6 +678,14 @@ Target a specific Mastra server URL.
+ mastra api --url https://example.com agent list
+ ```
+ 
++#### `--server-api-prefix <prefix>`
++
++Set the API route prefix of the target server. Defaults to `/api`. Use this when the server is mounted under a custom prefix (for example a `@mastra/fastify` `MastraServer` with `prefix: "/api/mastra-studio"`), the same way `mastra studio` accepts `--server-api-prefix`. You can also set the `MASTRA_API_PREFIX` environment variable instead of passing the flag.
++
++```bash
++mastra api --url https://example.com --server-api-prefix /api/mastra-studio agent list
++```
++
+ #### `--header <"Key: Value">`
+ 
+ Send a custom HTTP header. Repeat the flag to send multiple headers.
+diff --git a/packages/cli/src/commands/api/api.test.ts b/packages/cli/src/commands/api/api.test.ts
+index d0070be9073e..2f3f792ae22d 100644
+--- a/packages/cli/src/commands/api/api.test.ts
++++ b/packages/cli/src/commands/api/api.test.ts
+@@ -110,6 +110,31 @@ describe('api command executor', () => {
+     });
+   });
+ 
++  it('routes requests through --server-api-prefix', async () => {
++    fetchMock.mockResolvedValueOnce(jsonResponse([{ id: 'agent-1' }]));
++
++    const program = new Command();
++    registerApiCommand(program);
++
++    await program.parseAsync([
++      'node',
++      'mastra',
++      'api',
++      '--url',
++      'https://example.com',
++      '--server-api-prefix',
++      '/api/mastra-studio',
++      'agent',
++      'list',
++    ]);
++
++    expect(fetchMock).toHaveBeenCalledWith('https://example.com/api/mastra-studio/agents', {
++      method: 'GET',
++      headers: {},
++      signal: expect.any(AbortSignal),
++    });
++  });
++
+   it('runs an agent with JSON body and writes concise normalized output', async () => {
+     fetchMock.mockResolvedValueOnce(
+       jsonResponse({
+diff --git a/packages/cli/src/commands/api/client.test.ts b/packages/cli/src/commands/api/client.test.ts
+index 5af0b7f27abc..5e8b5f0d5c92 100644
+--- a/packages/cli/src/commands/api/client.test.ts
++++ b/packages/cli/src/commands/api/client.test.ts
+@@ -94,6 +94,22 @@ describe('buildUrl', () => {
+       expect.objectContaining({ code: 'MISSING_ARGUMENT', details: { argument: 'agentId' } }),
+     );
+   });
++
++  it('uses a custom API prefix instead of the default /api', () => {
++    expect(buildUrl('https://example.com', '/agents', {}, undefined, '/api/mastra-studio')).toBe(
++      'https://example.com/api/mastra-studio/agents',
++    );
++  });
++
++  it('does not duplicate a custom prefix already present on the base URL', () => {
++    expect(buildUrl('https://example.com/api/mastra-studio', '/agents', {}, undefined, '/api/mastra-studio')).toBe(
++      'https://example.com/api/mastra-studio/agents',
++    );
++  });
++
++  it('omits any prefix when given an empty string', () => {
++    expect(buildUrl('https://example.com', '/agents', {}, undefined, '')).toBe('https://example.com/agents');
++  });
+ });
+ 
+ describe('requestApi', () => {
+@@ -127,6 +143,25 @@ describe('requestApi', () => {
+     });
+   });
+ 
++  it('routes requests through a custom API prefix', async () => {
++    fetchMock.mockResolvedValueOnce(jsonResponse({ items: [] }));
++
++    await requestApi({
++      baseUrl: 'https://example.com',
++      headers: {},
++      timeoutMs: 1000,
++      descriptor: descriptor({ method: 'GET', path: '/agents' }),
++      pathParams: {},
++      apiPrefix: '/api/mastra-studio',
++    });
++
++    expect(fetchMock).toHaveBeenCalledWith('https://example.com/api/mastra-studio/agents', {
++      method: 'GET',
++      headers: {},
++      signal: expect.any(AbortSignal),
++    });
++  });
++
+   it('sends non-GET query/body split input with JSON content type', async () => {
+     fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
+ 
+@@ -242,6 +277,18 @@ describe('fetchSchemaManifest', () => {
+       signal: expect.any(AbortSignal),
+     });
+   });
++
++  it('fetches the schema manifest through a custom API prefix', async () => {
++    fetchMock.mockResolvedValueOnce(jsonResponse({ routes: [] }));
++
++    await fetchSchemaManifest('https://example.com', {}, 1000, '/api/mastra-studio');
++
++    expect(fetchMock).toHaveBeenCalledWith('https://example.com/api/mastra-studio/system/api-schema', {
++      method: 'GET',
++      headers: {},
++      signal: expect.any(AbortSignal),
++    });
++  });
+ });
+ 
+ function jsonResponse(body: unknown, status = 200) {
+diff --git a/packages/cli/src/commands/api/client.ts b/packages/cli/src/commands/api/client.ts
+index e844d456cf97..8839420cacad 100644
+--- a/packages/cli/src/commands/api/client.ts
++++ b/packages/cli/src/commands/api/client.ts
+@@ -8,6 +8,8 @@ export interface ApiRequestOptions {
+   descriptor: ApiCommandDescriptor;
+   pathParams: Record<string, string>;
+   input?: Record<string, unknown>;
++  /** Server API route prefix (e.g. `/api/mastra-studio`). Defaults to `/api`. */
++  apiPrefix?: string;
+ }
+ 
+ export async function requestApi(options: ApiRequestOptions): Promise<unknown> {
+@@ -16,7 +18,7 @@ export async function requestApi(options: ApiRequestOptions): Promise<unknown> {
+ 
+   try {
+     const { queryInput, bodyInput } = splitInput(options.descriptor, options.input);
+-    const url = buildUrl(options.baseUrl, options.descriptor.path, options.pathParams, queryInput);
++    const url = buildUrl(options.baseUrl, options.descriptor.path, options.pathParams, queryInput, options.apiPrefix);
+     const init: RequestInit = {
+       method: options.descriptor.method,
+       headers: { ...options.headers },
+@@ -56,6 +58,7 @@ export function buildUrl(
+   path: string,
+   pathParams: Record<string, string>,
+   input?: Record<string, unknown>,
++  apiPrefix?: string,
+ ): string {
+   const pathParamNames = new Set<string>();
+   const resolvedPath = path.replace(/:([A-Za-z0-9_]+)/g, (_, name: string) => {
+@@ -66,7 +69,7 @@ export function buildUrl(
+     }
+     return encodeURIComponent(value);
+   });
+-  const url = new URL(joinUrl(baseUrl, resolvedPath));
++  const url = new URL(joinUrl(baseUrl, resolvedPath, apiPrefix));
+ 
+   for (const [key, value] of Object.entries(pathParams)) {
+     if (!pathParamNames.has(key)) url.searchParams.set(key, value);
+@@ -123,6 +126,7 @@ export async function fetchSchemaManifest(
+   baseUrl: string,
+   headers: Record<string, string>,
+   timeoutMs: number,
++  apiPrefix?: string,
+ ): Promise<any> {
+   const descriptor: ApiCommandDescriptor = {
+     key: 'schema',
+@@ -138,7 +142,7 @@ export async function fetchSchemaManifest(
+     queryParams: [],
+     bodyParams: [],
+   };
+-  return requestApi({ baseUrl, headers, timeoutMs, descriptor, pathParams: {} });
++  return requestApi({ baseUrl, headers, timeoutMs, descriptor, pathParams: {}, apiPrefix });
+ }
+ 
+ async function parseResponse(response: Response): Promise<unknown> {
+@@ -151,9 +155,10 @@ async function parseResponse(response: Response): Promise<unknown> {
+   }
+ }
+ 
+-function joinUrl(baseUrl: string, path: string): string {
++function joinUrl(baseUrl: string, path: string, apiPrefix = '/api'): string {
+   const normalizedBase = baseUrl.replace(/\/$/, '');
+   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+-  if (normalizedBase.endsWith('/api')) return `${normalizedBase}${normalizedPath}`;
+-  return `${normalizedBase}/api${normalizedPath}`;
++  if (!apiPrefix) return `${normalizedBase}${normalizedPath}`;
++  if (normalizedBase.endsWith(apiPrefix)) return `${normalizedBase}${normalizedPath}`;
++  return `${normalizedBase}${apiPrefix}${normalizedPath}`;
+ }
+diff --git a/packages/cli/src/commands/api/index.ts b/packages/cli/src/commands/api/index.ts
+index 1d892124f3c1..ca9ebf96aa2d 100644
+--- a/packages/cli/src/commands/api/index.ts
++++ b/packages/cli/src/commands/api/index.ts
+@@ -25,6 +25,10 @@ export function registerApiCommand(program: CommanderCommand): void {
+     .command('api')
+     .description('Call Mastra APIs')
+     .option('--url <url>', 'target Mastra server URL')
++    .option(
++      '--server-api-prefix <serverApiPrefix>',
++      'API route prefix of the Mastra server (default: /api; also honors MASTRA_API_PREFIX)',
++    )
+     .option('--header <header>', 'custom HTTP header (repeatable)', collect, [])
+     .option('--timeout <ms>', 'client-side request timeout')
+     .option('--pretty', 'pretty-print JSON output', false);
+@@ -653,6 +657,7 @@ export async function executeDescriptor(
+       descriptor: requestDescriptor,
+       pathParams,
+       input: requestInput,
++      apiPrefix: target.apiPrefix,
+     };
+     let response: unknown;
+     let effectiveDescriptor = requestDescriptor;
+diff --git a/packages/cli/src/commands/api/schema.ts b/packages/cli/src/commands/api/schema.ts
+index fa87d83f99e0..9173f452c6ac 100644
+--- a/packages/cli/src/commands/api/schema.ts
++++ b/packages/cli/src/commands/api/schema.ts
+@@ -8,7 +8,7 @@ export async function getCommandSchema(descriptor: ApiCommandDescriptor, target:
+     throw new ApiCliError('SCHEMA_UNAVAILABLE', 'This command does not accept JSON input');
+   }
+ 
+-  const manifest = await fetchSchemaManifest(target.baseUrl, target.headers, target.timeoutMs);
++  const manifest = await fetchSchemaManifest(target.baseUrl, target.headers, target.timeoutMs, target.apiPrefix);
+   if (!manifest || typeof manifest !== 'object' || !Array.isArray((manifest as { routes?: unknown }).routes)) {
+     throw new ApiCliError('SCHEMA_UNAVAILABLE', 'Target server returned an invalid schema manifest', {
+       reason: 'invalid_manifest',
+diff --git a/packages/cli/src/commands/api/target.test.ts b/packages/cli/src/commands/api/target.test.ts
+index 9e18fc093267..298ec542159b 100644
+--- a/packages/cli/src/commands/api/target.test.ts
++++ b/packages/cli/src/commands/api/target.test.ts
+@@ -74,6 +74,58 @@ describe('resolveTarget', () => {
+     expect(mocks.fetchServerProjects).not.toHaveBeenCalled();
+   });
+ 
++  it('carries a normalized custom API prefix from --server-api-prefix', async () => {
++    await expect(
++      resolveTarget(options({ url: 'https://runtime.example.com', serverApiPrefix: 'api/mastra-studio/' })),
++    ).resolves.toEqual({
++      baseUrl: 'https://runtime.example.com',
++      headers: {},
++      timeoutMs: 30_000,
++      apiPrefix: '/api/mastra-studio',
++    });
++  });
++
++  it('reads the API prefix from MASTRA_API_PREFIX when the flag is absent', async () => {
++    process.env.MASTRA_API_PREFIX = '/api/mastra-studio';
++
++    try {
++      await expect(resolveTarget(options({ url: 'https://runtime.example.com' }))).resolves.toMatchObject({
++        apiPrefix: '/api/mastra-studio',
++      });
++    } finally {
++      delete process.env.MASTRA_API_PREFIX;
++    }
++  });
++
++  it('omits apiPrefix when the prefix resolves to the default /api', async () => {
++    await expect(
++      resolveTarget(options({ url: 'https://runtime.example.com', serverApiPrefix: '/api' })),
++    ).resolves.toEqual({
++      baseUrl: 'https://runtime.example.com',
++      headers: {},
++      timeoutMs: 30_000,
++    });
++  });
++
++  it('probes localhost using the custom API prefix', async () => {
++    const cancel = vi.fn();
++    fetchMock.mockResolvedValueOnce({ ok: true, body: { cancel } });
++
++    await expect(
++      resolveTarget(options({ serverApiPrefix: '/api/mastra-studio' }), fetchMock as typeof fetch),
++    ).resolves.toEqual({
++      baseUrl: 'http://localhost:4111',
++      headers: {},
++      timeoutMs: 30_000,
++      apiPrefix: '/api/mastra-studio',
++    });
++
++    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4111/api/mastra-studio/system/api-schema', {
++      method: 'GET',
++      signal: expect.any(AbortSignal),
++    });
++  });
++
+   it('uses the hosted observability endpoint with env credentials for observability routes', async () => {
+     process.env.MASTRA_PLATFORM_ACCESS_TOKEN = 'env-token';
+     process.env.MASTRA_PROJECT_ID = 'env-project';
+diff --git a/packages/cli/src/commands/api/target.ts b/packages/cli/src/commands/api/target.ts
+index 8e3563e5febf..49523ace25fc 100644
+--- a/packages/cli/src/commands/api/target.ts
++++ b/packages/cli/src/commands/api/target.ts
+@@ -18,6 +18,7 @@ export interface ApiGlobalOptions {
+   timeout?: string;
+   pretty: boolean;
+   schema?: boolean;
++  serverApiPrefix?: string;
+ }
+ 
+ export interface ResolvedTarget {
+@@ -25,6 +26,8 @@ export interface ResolvedTarget {
+   headers: Record<string, string>;
+   timeoutMs: number;
+   fallbackHeaders?: Record<string, string>;
++  /** API route prefix of the target server (e.g. `/api/mastra-studio`). Undefined when the default `/api` applies. */
++  apiPrefix?: string;
+ }
+ 
+ export async function resolveTarget(
+@@ -34,17 +37,18 @@ export async function resolveTarget(
+ ): Promise<ResolvedTarget> {
+   const timeoutMs = parseTimeout(options.timeout);
+   const customHeaders = parseHeaders(options.header);
++  const apiPrefix = resolveApiPrefix(options);
+ 
+   if (isObservabilityPath(path)) {
+     return resolveObservabilityTarget(options, customHeaders, timeoutMs);
+   }
+ 
+   if (options.url) {
+-    return { baseUrl: options.url, headers: customHeaders, timeoutMs };
++    return { baseUrl: options.url, headers: customHeaders, timeoutMs, apiPrefix };
+   }
+ 
+-  if (await canReachLocal(timeoutMs, fetchFn)) {
+-    return { baseUrl: LOCAL_URL, headers: customHeaders, timeoutMs };
++  if (await canReachLocal(timeoutMs, fetchFn, apiPrefix)) {
++    return { baseUrl: LOCAL_URL, headers: customHeaders, timeoutMs, apiPrefix };
+   }
+ 
+   const config = await loadProjectConfig(process.cwd());
+@@ -71,6 +75,7 @@ export async function resolveTarget(
+       baseUrl,
+       headers: { Authorization: `Bearer ${token}`, ...customHeaders },
+       timeoutMs,
++      apiPrefix,
+     };
+   } catch (error) {
+     if (error instanceof ApiCliError) throw error;
+@@ -142,6 +147,26 @@ function getHeader(headers: Record<string, string>, name: string): string | unde
+   return entry?.[1];
+ }
+ 
++/**
++ * Resolves the server API route prefix from the `--server-api-prefix` flag or the `MASTRA_API_PREFIX`
++ * env var, normalizing it to a leading-slash, no-trailing-slash form. Returns undefined when the
++ * default `/api` prefix applies so callers can omit it from the resolved target.
++ */
++function resolveApiPrefix(options: ApiGlobalOptions): string | undefined {
++  const raw = options.serverApiPrefix ?? process.env.MASTRA_API_PREFIX;
++  if (!raw) return undefined;
++  const normalized = normalizeApiPrefix(raw);
++  return normalized === '/api' ? undefined : normalized;
++}
++
++function normalizeApiPrefix(prefix: string): string {
++  const value = prefix.trim();
++  if (!value) return '/api';
++  const withLeadingSlash = value.startsWith('/') ? value : `/${value}`;
++  const trimmed = withLeadingSlash.replace(/\/+$/, '');
++  return trimmed || '/api';
++}
++
+ function parseTimeout(timeout?: string): number {
+   if (!timeout) return 30_000;
+   const parsed = Number(timeout);
+@@ -149,11 +174,14 @@ function parseTimeout(timeout?: string): number {
+   return parsed;
+ }
+ 
+-async function canReachLocal(timeoutMs: number, fetchFn: typeof fetch): Promise<boolean> {
++async function canReachLocal(timeoutMs: number, fetchFn: typeof fetch, apiPrefix?: string): Promise<boolean> {
+   const controller = new AbortController();
+   const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, 1_000));
+   try {
+-    const response = await fetchFn(`${LOCAL_URL}/api/system/api-schema`, { method: 'GET', signal: controller.signal });
++    const response = await fetchFn(`${LOCAL_URL}${apiPrefix ?? '/api'}/system/api-schema`, {
++      method: 'GET',
++      signal: controller.signal,
++    });
+     await response.body?.cancel();
+     return response.ok;
+   } catch {

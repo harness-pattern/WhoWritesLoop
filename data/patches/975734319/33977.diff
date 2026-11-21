@@ -1,0 +1,218 @@
+diff --git a/packages/core/src/config/mcp.ts b/packages/core/src/config/mcp.ts
+index 54998e185062..f3a5ac9b256b 100644
+--- a/packages/core/src/config/mcp.ts
++++ b/packages/core/src/config/mcp.ts
+@@ -3,6 +3,15 @@ export * as ConfigMCP from "./mcp"
+ import { Schema } from "effect"
+ import { PositiveInt } from "../schema"
+ 
++export class Timeout extends Schema.Class<Timeout>("ConfigV2.MCP.Timeout")({
++  startup: PositiveInt.pipe(Schema.optional).annotate({
++    description: "Maximum time in milliseconds to establish and initialize the MCP server.",
++  }),
++  request: PositiveInt.pipe(Schema.optional).annotate({
++    description: "Maximum time in milliseconds to wait for each MCP request after initialization.",
++  }),
++}) {}
++
+ export class Local extends Schema.Class<Local>("ConfigV2.MCP.Local")({
+   type: Schema.Literal("local"),
+   command: Schema.String.pipe(Schema.Array),
+@@ -11,7 +20,7 @@ export class Local extends Schema.Class<Local>("ConfigV2.MCP.Local")({
+   }),
+   environment: Schema.Record(Schema.String, Schema.String).pipe(Schema.optional),
+   disabled: Schema.Boolean.pipe(Schema.optional),
+-  timeout: PositiveInt.pipe(Schema.optional),
++  timeout: Timeout.pipe(Schema.optional),
+ }) {}
+ 
+ export class OAuth extends Schema.Class<OAuth>("ConfigV2.MCP.OAuth")({
+@@ -28,12 +37,12 @@ export class Remote extends Schema.Class<Remote>("ConfigV2.MCP.Remote")({
+   headers: Schema.Record(Schema.String, Schema.String).pipe(Schema.optional),
+   oauth: Schema.Union([OAuth, Schema.Literal(false)]).pipe(Schema.optional),
+   disabled: Schema.Boolean.pipe(Schema.optional),
+-  timeout: PositiveInt.pipe(Schema.optional),
++  timeout: Timeout.pipe(Schema.optional),
+ }) {}
+ 
+ export const Server = Schema.Union([Local, Remote]).pipe(Schema.toTaggedUnion("type"))
+ 
+ export class Info extends Schema.Class<Info>("ConfigV2.MCP")({
+-  timeout: PositiveInt.pipe(Schema.optional),
++  timeout: Timeout.pipe(Schema.optional),
+   servers: Schema.Record(Schema.String, Server).pipe(Schema.optional),
+ }) {}
+diff --git a/packages/core/src/v1/config/migrate.ts b/packages/core/src/v1/config/migrate.ts
+index d0cc465e576c..ebe1b905ff87 100644
+--- a/packages/core/src/v1/config/migrate.ts
++++ b/packages/core/src/v1/config/migrate.ts
+@@ -132,7 +132,7 @@ function mcp(info: typeof ConfigV1.Info.Type) {
+   )
+   const timeout = info.experimental?.mcp_timeout
+   if (!timeout && !Object.keys(servers).length) return undefined
+-  return { timeout, servers }
++  return { timeout: timeout === undefined ? undefined : { request: timeout }, servers }
+ }
+ 
+ function migrateMcp(info: ConfigMCPV1.Info) {
+@@ -144,7 +144,7 @@ function migrateMcp(info: ConfigMCPV1.Info) {
+       cwd: info.cwd,
+       environment: info.environment,
+       disabled,
+-      timeout: info.timeout,
++      timeout: info.timeout === undefined ? undefined : { request: info.timeout },
+     }
+   return {
+     type: info.type,
+@@ -158,7 +158,7 @@ function migrateMcp(info: ConfigMCPV1.Info) {
+       redirect_uri: info.oauth.redirectUri,
+     },
+     disabled,
+-    timeout: info.timeout,
++    timeout: info.timeout === undefined ? undefined : { request: info.timeout },
+   }
+ }
+ 
+diff --git a/packages/core/test/config/config.test.ts b/packages/core/test/config/config.test.ts
+index 4b31835726cd..3e23e20c7081 100644
+--- a/packages/core/test/config/config.test.ts
++++ b/packages/core/test/config/config.test.ts
+@@ -298,14 +298,14 @@ describe("Config", () => {
+                 },
+                 tool_output: { max_lines: 1000, max_bytes: 32768 },
+                 mcp: {
+-                  timeout: 5000,
++                  timeout: { startup: 5000, request: 60000 },
+                   servers: {
+                     local: {
+                       type: "local",
+                       command: ["node", "./mcp/server.js"],
+                       environment: { API_KEY: "secret" },
+                       disabled: false,
+-                      timeout: 10000,
++                      timeout: { request: 10000 },
+                     },
+                     remote: {
+                       type: "remote",
+@@ -313,6 +313,7 @@ describe("Config", () => {
+                       headers: { Authorization: "Bearer token" },
+                       oauth: { client_id: "client", scope: "read write", callback_port: 19876 },
+                       disabled: true,
++                      timeout: { startup: 15000 },
+                     },
+                   },
+                 },
+@@ -383,14 +384,14 @@ describe("Config", () => {
+             })
+             expect(documents[0]?.info.tool_output).toEqual({ max_lines: 1000, max_bytes: 32768 })
+             expect(documents[0]?.info.mcp).toEqual({
+-              timeout: 5000,
++              timeout: { startup: 5000, request: 60000 },
+               servers: {
+                 local: {
+                   type: "local",
+                   command: ["node", "./mcp/server.js"],
+                   environment: { API_KEY: "secret" },
+                   disabled: false,
+-                  timeout: 10000,
++                  timeout: { request: 10000 },
+                 },
+                 remote: {
+                   type: "remote",
+@@ -398,6 +399,7 @@ describe("Config", () => {
+                   headers: { Authorization: "Bearer token" },
+                   oauth: { client_id: "client", scope: "read write", callback_port: 19876 },
+                   disabled: true,
++                  timeout: { startup: 15000 },
+                 },
+               },
+             })
+@@ -541,11 +543,12 @@ describe("Config", () => {
+                 compaction: { auto: true, tail_turns: 3, preserve_recent_tokens: 2000, reserved: 10000 },
+                 experimental: { mcp_timeout: 5000 },
+                 mcp: {
+-                  local: { type: "local", command: ["node", "server.js"], enabled: false },
++                  local: { type: "local", command: ["node", "server.js"], enabled: false, timeout: 10000 },
+                   remote: {
+                     type: "remote",
+                     url: "https://mcp.example.com",
+                     oauth: { clientId: "client", callbackPort: 19876 },
++                    timeout: 20000,
+                   },
+                 },
+               }),
+@@ -623,13 +626,19 @@ describe("Config", () => {
+               buffer: 10000,
+             })
+             expect(documents[0]?.info.mcp).toMatchObject({
+-              timeout: 5000,
++              timeout: { request: 5000 },
+               servers: {
+-                local: { type: "local", command: ["node", "server.js"], disabled: true },
++                local: {
++                  type: "local",
++                  command: ["node", "server.js"],
++                  disabled: true,
++                  timeout: { request: 10000 },
++                },
+                 remote: {
+                   type: "remote",
+                   url: "https://mcp.example.com",
+                   oauth: { client_id: "client", callback_port: 19876 },
++                  timeout: { request: 20000 },
+                 },
+               },
+             })
+diff --git a/specs/v2/config.md b/specs/v2/config.md
+index 9804b14be633..9254af2094c4 100644
+--- a/specs/v2/config.md
++++ b/specs/v2/config.md
+@@ -304,23 +304,25 @@ Rename legacy `permission` to `permissions` and expose the normalized ordered ru
+ 
+ External protocol and server integration configuration.
+ 
+-| Field | Current Purpose                       | Status   | Notes                                                                                                                                             |
+-| ----- | ------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| `mcp` | MCP server definitions and enablement | redesign | Keep opencode's explicit local/remote server entry format, nested under `mcp.servers`; use `disabled` for inactive entries and move timeout here. |
++| Field | Current Purpose                       | Status   | Notes                                                                                                                                                      |
++| ----- | ------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `mcp` | MCP server definitions and enablement | redesign | Keep opencode's explicit local/remote server entry format, nested under `mcp.servers`; use `disabled` for inactive entries and move timeout defaults here. |
+ 
+-Keep the opencode MCP server entry format instead of adopting the common `mcpServers` copy/paste shape. Local servers remain explicit `type: "local"` entries with command arrays and `environment`; remote servers remain explicit `type: "remote"` entries with `url`, `headers`, and optional `oauth`. Nest the server map under `mcp.servers` so protocol-wide settings such as default timeout can live under the same subsystem.
++Keep the opencode MCP server entry format instead of adopting the common `mcpServers` copy/paste shape. Local servers remain explicit `type: "local"` entries with command arrays and `environment`; remote servers remain explicit `type: "remote"` entries with `url`, `headers`, and optional `oauth`. Nest the server map under `mcp.servers` so protocol-wide settings such as timeout defaults can live under the same subsystem.
++
++MCP timeouts have separate startup and request budgets, expressed in milliseconds. `startup` covers establishing the transport and completing MCP initialization. `request` applies independently to each post-initialization MCP request. A server may override either default without repeating the other.
+ 
+ ```jsonc
+ {
+   "mcp": {
+-    "timeout": 5000,
++    "timeout": { "startup": 30000, "request": 300000 },
+     "servers": {
+       "github": {
+         "type": "local",
+         "command": ["npx", "-y", "@github/github-mcp-server"],
+         "environment": { "GITHUB_TOKEN": "{env:GITHUB_TOKEN}" },
+         "disabled": false,
+-        "timeout": 10000,
++        "timeout": { "startup": 60000 },
+       },
+       "docs": {
+         "type": "remote",
+@@ -334,6 +336,7 @@ Keep the opencode MCP server entry format instead of adopting the common `mcpSer
+           "redirect_uri": "http://127.0.0.1:19876/mcp/oauth/callback",
+         },
+         "disabled": false,
++        "timeout": { "request": 600000 },
+       },
+     },
+   },
+@@ -375,7 +378,7 @@ Fields that should not be ported by inertia; each needs an explicit justificatio
+ | `experimental.openTelemetry`         | Enable AI SDK telemetry spans           | remove   | Do not port; observability is process-level and should use standard OpenTelemetry environment or declarative configuration. |
+ | `experimental.primary_tools`         | Restrict tools to primary agents        | remove   | Do not port obsolete gating; agent tool access is configured through permissions.                                           |
+ | `experimental.continue_loop_on_deny` | Continue loop after denied tool call    | remove   | Do not port legacy denied-tool loop behavior.                                                                               |
+-| `experimental.mcp_timeout`           | MCP request timeout                     | redesign | Move to `mcp.timeout` for the default and `mcp.servers.<name>.timeout` for per-server overrides.                            |
++| `experimental.mcp_timeout`           | MCP request timeout                     | redesign | Move to `mcp.timeout.request` for the default and `mcp.servers.<name>.timeout.request` for per-server overrides.            |
+ 
+ ## Review Order
+ 

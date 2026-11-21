@@ -1,0 +1,2494 @@
+diff --git a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
+index 73a44854d175..3cbe50a49d17 100644
+--- a/packages/tui/src/app.tsx
++++ b/packages/tui/src/app.tsx
+@@ -66,7 +66,7 @@ import { DialogHelp } from "./ui/dialog-help"
+ import { DialogAgent } from "./component/dialog-agent"
+ import { DialogSessionList } from "./component/dialog-session-list"
+ import { ThemeErrorToast } from "./component/theme-error-toast"
+-import { ThemeProvider, useTheme } from "./context/theme"
++import { ThemeProvider, useTheme, useThemes } from "./context/theme"
+ import { Home } from "./routes/home"
+ import { Session } from "./routes/session"
+ import { PromptHistoryProvider } from "./component/prompt/history"
+@@ -423,8 +423,8 @@ function App(props: { pair?: DialogPairCredentials }) {
+   const event = useEvent()
+   const client = useClient()
+   const toast = useToast()
+-  const themeState = useTheme()
+-  const { themeV2, mode, supports, setMode, locked, lock, unlock } = themeState
++  const theme = useTheme()
++  const { mode, supports, setMode, locked, lock, unlock } = useThemes()
+   const data = useData()
+   const location = useLocation()
+   const exit = useExit()
+@@ -1090,7 +1090,7 @@ function App(props: { pair?: DialogPairCredentials }) {
+       width={dimensions().width}
+       height={dimensions().height}
+       flexDirection="column"
+-      backgroundColor={themeV2.background.default}
++      backgroundColor={theme.background.default}
+       onMouseDown={(evt) => {
+         if (copyOnSelectEnabled()) return
+         if (evt.button !== MouseButton.RIGHT) return
+diff --git a/packages/tui/src/component/bg-pulse.tsx b/packages/tui/src/component/bg-pulse.tsx
+index 064cc314f93a..b4635a279060 100644
+--- a/packages/tui/src/component/bg-pulse.tsx
++++ b/packages/tui/src/component/bg-pulse.tsx
+@@ -7,7 +7,7 @@ import {
+ } from "@opentui/core"
+ import { extend, useRenderer } from "@opentui/solid"
+ import { onCleanup, onMount } from "solid-js"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { tint } from "../theme/color"
+ import { GoUpsellArtPainter } from "./bg-pulse-render"
+ 
+@@ -70,7 +70,9 @@ declare module "@opentui/solid" {
+ extend({ go_upsell_art: GoUpsellArtRenderable })
+ 
+ export function BgPulse() {
+-  const { themeV2, mode } = useTheme().contextual("elevated")
++  const themes = useThemes()
++  const theme = themes.contextual("elevated")
++  const mode = themes.mode
+   const renderer = useRenderer()
+   let targetFps = renderer.targetFps
+   let maxFps = renderer.maxFps
+@@ -91,9 +93,9 @@ export function BgPulse() {
+     <go_upsell_art
+       width="100%"
+       height="100%"
+-      backgroundPanel={themeV2.background.default}
+-      primary={themeV2.hue.interactive[mode() === "light" ? 800 : 200]}
+-      logoBase={tint(themeV2.background.default, themeV2.text.default, 0.62)}
++      backgroundPanel={theme.background.default}
++      primary={theme.hue.interactive[mode() === "light" ? 800 : 200]}
++      logoBase={tint(theme.background.default, theme.text.default, 0.62)}
+       live
+     />
+   )
+diff --git a/packages/tui/src/component/devtools-bar.tsx b/packages/tui/src/component/devtools-bar.tsx
+index 8fa55144e1b1..abd9525a7732 100644
+--- a/packages/tui/src/component/devtools-bar.tsx
++++ b/packages/tui/src/component/devtools-bar.tsx
+@@ -11,7 +11,7 @@ import { useData } from "../context/data"
+ import { useLocation } from "../context/location"
+ import { useRoute } from "../context/route"
+ import { Keymap } from "../context/keymap"
+-import { useTheme } from "../context/theme"
++import { useTheme, useThemes } from "../context/theme"
+ import { DevTools } from "../devtools"
+ import { usePlugin } from "../plugin/context"
+ import { errorMessage } from "../util/error"
+@@ -31,12 +31,12 @@ export function DevToolsBar() {
+   const location = useLocation()
+   const route = useRoute()
+   const plugins = usePlugin()
+-  const theme = useTheme()
++  const themes = useThemes()
+   const keymap = Keymap.use()
+   const renderer = useRenderer()
+   const dimensions = useTerminalDimensions()
+-  const { themeV2, mode, supports, setMode } = theme
+-  const elevatedTheme = theme.contextual("elevated").themeV2
++  const { current: theme, mode, supports, setMode } = themes
++  const elevatedTheme = themes.contextual("elevated")
+   const [panel, setPanel] = createSignal<Panel>()
+   const [dumping, setDumping] = createSignal(false)
+   const [dumpPath, setDumpPath] = createSignal<string>()
+@@ -196,8 +196,8 @@ export function DevToolsBar() {
+             })),
+           },
+           theme: {
+-            name: theme.selected,
+-            mode: theme.mode(),
++            name: themes.selected,
++            mode: themes.mode(),
+           },
+         },
+         null,
+@@ -213,7 +213,7 @@ export function DevToolsBar() {
+   }
+ 
+   return (
+-    <box height={1} flexShrink={0} flexDirection="row" backgroundColor={themeV2.raise(themeV2.background.default)}>
++    <box height={1} flexShrink={0} flexDirection="row" backgroundColor={theme.raise(theme.background.default)}>
+       <Show when={panel()}>
+         <box
+           position="absolute"
+@@ -230,12 +230,12 @@ export function DevToolsBar() {
+         <text
+           fg={
+             panel() === "server"
+-              ? themeV2.text.action.primary.focused
++              ? theme.text.action.primary.focused
+               : serverIndicator().state === "connected"
+-                ? themeV2.text.feedback.success.default
++                ? theme.text.feedback.success.default
+                 : serverIndicator().state === "disconnected"
+-                  ? themeV2.text.feedback.error.default
+-                  : themeV2.text.default
++                  ? theme.text.feedback.error.default
++                  : theme.text.default
+           }
+         >
+           {serverIndicator().icon}
+@@ -243,10 +243,10 @@ export function DevToolsBar() {
+         <text
+           fg={
+             panel() === "server"
+-              ? themeV2.text.action.primary.focused
++              ? theme.text.action.primary.focused
+               : serverIndicator().state === "disconnected"
+-                ? themeV2.text.feedback.error.default
+-                : themeV2.text.subdued
++                ? theme.text.feedback.error.default
++                : theme.text.subdued
+           }
+         >
+           {" "}
+@@ -279,10 +279,10 @@ export function DevToolsBar() {
+         <text
+           fg={
+             panel() === "ui"
+-              ? themeV2.text.action.primary.focused
++              ? theme.text.action.primary.focused
+               : runtime() === "high"
+-                ? themeV2.text.feedback.error.default
+-                : themeV2.text.subdued
++                ? theme.text.feedback.error.default
++                : theme.text.subdued
+           }
+         >
+           {statusIcon(runtime())}
+@@ -290,10 +290,10 @@ export function DevToolsBar() {
+         <text
+           fg={
+             panel() === "ui"
+-              ? themeV2.text.action.primary.focused
++              ? theme.text.action.primary.focused
+               : runtime() === "high"
+-                ? themeV2.text.feedback.error.default
+-                : themeV2.text.subdued
++                ? theme.text.feedback.error.default
++                : theme.text.subdued
+           }
+         >
+           {" "}
+@@ -320,11 +320,11 @@ export function DevToolsBar() {
+         </Show>
+       </BarItem>
+       <BarItem active={panel() === "theme"} onClick={() => toggle("theme")}>
+-        <text fg={panel() === "theme" ? themeV2.text.action.primary.focused : themeV2.text.subdued}>Theme</text>
++        <text fg={panel() === "theme" ? theme.text.action.primary.focused : theme.text.subdued}>Theme</text>
+         <Show when={panel() === "theme"}>
+           <PanelBox>
+             <PanelTitle>Theme</PanelTitle>
+-            <Row label="Name" value={theme.selected} />
++            <Row label="Name" value={themes.selected} />
+             <Row label="Mode" value={mode()} />
+             <For each={themePerformance()}>{(entry) => <Row label={entry.key} value={String(entry.value)} />}</For>
+             <Show when={canSwitchMode()}>
+@@ -336,7 +336,7 @@ export function DevToolsBar() {
+         </Show>
+       </BarItem>
+       <BarItem active={panel() === "tools"} onClick={() => toggle("tools")}>
+-        <text fg={panel() === "tools" ? themeV2.text.action.primary.focused : themeV2.text.subdued}>Tools</text>
++        <text fg={panel() === "tools" ? theme.text.action.primary.focused : theme.text.subdued}>Tools</text>
+         <Show when={panel() === "tools"}>
+           <PanelBox>
+             <PanelTitle>Tools</PanelTitle>
+@@ -406,14 +406,14 @@ export function DevToolsBar() {
+         </Show>
+       </BarItem>
+       <box flexGrow={1} minWidth={0}>
+-        <TimeToFirstDraw visible={timing()} width="100%" fg={themeV2.text.subdued} label="Time to first draw" />
++        <TimeToFirstDraw visible={timing()} width="100%" fg={theme.text.subdued} label="Time to first draw" />
+       </box>
+     </box>
+   )
+ }
+ 
+ function BarItem(props: ParentProps<{ active: boolean; onClick: () => void }>) {
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+   const renderer = useRenderer()
+   return (
+     <box
+@@ -423,7 +423,7 @@ function BarItem(props: ParentProps<{ active: boolean; onClick: () => void }>) {
+       flexDirection="row"
+       paddingLeft={1}
+       paddingRight={1}
+-      backgroundColor={props.active ? themeV2.background.action.primary.focused : undefined}
++      backgroundColor={props.active ? theme.background.action.primary.focused : undefined}
+       onMouseUp={() => {
+         if (renderer.getSelection()?.getSelectedText()) return
+         props.onClick()
+@@ -435,7 +435,7 @@ function BarItem(props: ParentProps<{ active: boolean; onClick: () => void }>) {
+ }
+ 
+ function PanelBox(props: ParentProps) {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const renderer = useRenderer()
+   return (
+     <box
+@@ -448,7 +448,7 @@ function PanelBox(props: ParentProps) {
+       paddingRight={2}
+       paddingTop={1}
+       paddingBottom={1}
+-      backgroundColor={themeV2.background.default}
++      backgroundColor={theme.background.default}
+       flexDirection="column"
+       onMouseUp={(event) => {
+         if (renderer.getSelection()?.getSelectedText()) return
+@@ -461,32 +461,32 @@ function PanelBox(props: ParentProps) {
+ }
+ 
+ function PanelTitle(props: ParentProps) {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   return (
+-    <text fg={themeV2.text.default} attributes={TextAttributes.BOLD} marginBottom={1}>
++    <text fg={theme.text.default} attributes={TextAttributes.BOLD} marginBottom={1}>
+       {props.children}
+     </text>
+   )
+ }
+ 
+ function Row(props: { label: string; value: string }) {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   return (
+     <box flexDirection="row">
+-      <text fg={themeV2.text.subdued}>{props.label}</text>
++      <text fg={theme.text.subdued}>{props.label}</text>
+       <box flexGrow={1} />
+-      <text fg={themeV2.text.default}>{props.value}</text>
++      <text fg={theme.text.default}>{props.value}</text>
+     </box>
+   )
+ }
+ 
+ function Action(props: ParentProps<{ onClick: () => void; disabled?: boolean; hoverBackground?: boolean }>) {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const [hovered, setHovered] = createSignal(false)
+   return (
+     <box
+       backgroundColor={
+-        props.hoverBackground && hovered() && !props.disabled ? themeV2.background.action.primary.hovered : undefined
++        props.hoverBackground && hovered() && !props.disabled ? theme.background.action.primary.hovered : undefined
+       }
+       onMouseOver={() => setHovered(true)}
+       onMouseOut={() => setHovered(false)}
+@@ -495,7 +495,7 @@ function Action(props: ParentProps<{ onClick: () => void; disabled?: boolean; ho
+         if (!props.disabled) props.onClick()
+       }}
+     >
+-      <text fg={props.disabled ? themeV2.text.subdued : themeV2.text.action.primary.default}>{props.children}</text>
++      <text fg={props.disabled ? theme.text.subdued : theme.text.action.primary.default}>{props.children}</text>
+     </box>
+   )
+ }
+@@ -506,7 +506,7 @@ function cpuPercent(microseconds: number, milliseconds: number) {
+ }
+ 
+ function ProcessStat(props: { label: string; values: readonly number[]; unit: string; decimals?: number }) {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const value = () => {
+     const value = props.values.at(-1)
+     if (value === undefined) return "--"
+@@ -515,13 +515,13 @@ function ProcessStat(props: { label: string; values: readonly number[]; unit: st
+   return (
+     <box flexDirection="row">
+       <box width={7}>
+-        <text fg={themeV2.text.subdued}>{props.label}</text>
++        <text fg={theme.text.subdued}>{props.label}</text>
+       </box>
+       <box flexGrow={1}>
+-        <text fg={props.values.length ? themeV2.text.default : themeV2.text.subdued}>{brailleGraph(props.values)}</text>
++        <text fg={props.values.length ? theme.text.default : theme.text.subdued}>{brailleGraph(props.values)}</text>
+       </box>
+       <box width={8} alignItems="flex-end">
+-        <text fg={props.values.length ? themeV2.text.default : themeV2.text.subdued}>{value()}</text>
++        <text fg={props.values.length ? theme.text.default : theme.text.subdued}>{value()}</text>
+       </box>
+     </box>
+   )
+diff --git a/packages/tui/src/component/dialog-config.tsx b/packages/tui/src/component/dialog-config.tsx
+index 49d5f93650ef..e62ce18d248e 100644
+--- a/packages/tui/src/component/dialog-config.tsx
++++ b/packages/tui/src/component/dialog-config.tsx
+@@ -1,6 +1,6 @@
+ import { createMemo, createSignal } from "solid-js"
+ import { useConfig } from "../config"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { DialogSelect } from "../ui/dialog-select"
+ import { useToast } from "../ui/toast"
+ 
+@@ -267,7 +267,7 @@ export function settingID(setting: Setting) {
+ export function DialogConfig(props: { current?: string }) {
+   const config = useConfig()
+   const toast = useToast()
+-  const themeState = useTheme()
++  const themes = useThemes()
+   const current = Math.max(
+     0,
+     settings.findIndex((setting) => settingID(setting) === props.current),
+@@ -280,12 +280,12 @@ export function DialogConfig(props: { current?: string }) {
+       if (!result || typeof result !== "object") return undefined
+       return (result as Record<string, unknown>)[key]
+     }, config.data)
+-    if (setting.path.join(".") === "theme.name") return current ?? themeState.selected
++    if (setting.path.join(".") === "theme.name") return current ?? themes.selected
+     return current ?? setting.default
+   }
+   const values = (setting: Setting) =>
+     setting.path.join(".") === "theme.name"
+-      ? Object.keys(themeState.all()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
++      ? Object.keys(themes.all()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+       : setting.values
+   const display = (setting: Setting) => {
+     const current = value(setting)
+diff --git a/packages/tui/src/component/dialog-debug.tsx b/packages/tui/src/component/dialog-debug.tsx
+index ed13a8ffe053..fcf2673187fd 100644
+--- a/packages/tui/src/component/dialog-debug.tsx
++++ b/packages/tui/src/component/dialog-debug.tsx
+@@ -11,7 +11,7 @@ import { describeOS, describeTerminal } from "../util/system"
+ import { useTuiApp } from "../context/runtime"
+ 
+ export function DialogDebug() {
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+   const dialog = useDialog()
+   const route = useRoute()
+   const local = useLocal()
+@@ -55,10 +55,10 @@ export function DialogDebug() {
+   return (
+     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
++        <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+           Debug
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc
+         </text>
+       </box>
+@@ -68,10 +68,10 @@ export function DialogDebug() {
+         <For each={entries()}>
+           {(entry) => (
+             <box flexDirection="row" gap={1}>
+-              <text flexShrink={0} fg={themeV2.text.subdued}>
++              <text flexShrink={0} fg={theme.text.subdued}>
+                 {entry.label.padEnd(10)}
+               </text>
+-              <text fg={themeV2.text.default} wrapMode="word">
++              <text fg={theme.text.default} wrapMode="word">
+                 {entry.value}
+               </text>
+             </box>
+@@ -79,12 +79,12 @@ export function DialogDebug() {
+         </For>
+       </box>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text fg={themeV2.text.subdued}>Share this when reporting an issue.</text>
++        <text fg={theme.text.subdued}>Share this when reporting an issue.</text>
+         <text onMouseUp={copy}>
+-          <span style={{ fg: copied() ? themeV2.text.feedback.success.default : themeV2.text.default }}>
++          <span style={{ fg: copied() ? theme.text.feedback.success.default : theme.text.default }}>
+             <b>{copied() ? "✓ copied" : "copy"}</b>{" "}
+           </span>
+-          <span style={{ fg: themeV2.text.subdued }}>enter</span>
++          <span style={{ fg: theme.text.subdued }}>enter</span>
+         </text>
+       </box>
+     </box>
+diff --git a/packages/tui/src/component/dialog-integration.tsx b/packages/tui/src/component/dialog-integration.tsx
+index 8a168b457d3f..5a32abe28611 100644
+--- a/packages/tui/src/component/dialog-integration.tsx
++++ b/packages/tui/src/component/dialog-integration.tsx
+@@ -11,7 +11,7 @@ import { useClipboard } from "../context/clipboard"
+ import { useData } from "../context/data"
+ import { useClient } from "../context/client"
+ import { Keymap } from "../context/keymap"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useDialog } from "../ui/dialog"
+ import { DialogPrompt } from "../ui/dialog-prompt"
+ import { DialogSelect } from "../ui/dialog-select"
+@@ -64,7 +64,7 @@ export function DialogIntegration(
+ ) {
+   const data = useData()
+   const dialog = useDialog()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const options = createMemo(() => {
+     const providers = data.location.websearch.list() ?? []
+     const providersByID = new Map(providers.map((provider) => [provider.id, provider]))
+@@ -87,7 +87,7 @@ export function DialogIntegration(
+         disabled: methods.length === 0 && credentials.length === 0,
+         gutter:
+           integration.connections.length > 0
+-            ? () => <text fg={themeV2.text.feedback.success.default}>✓</text>
++            ? () => <text fg={theme.text.feedback.success.default}>✓</text>
+             : undefined,
+         onSelect: () => {
+           if (credentials.length) return manageConnections(integration, methods, dialog, props.onConnected)
+@@ -103,12 +103,12 @@ export function DialogIntegration(
+       options={options()}
+       emptyView={
+         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-          <text fg={themeV2.text.subdued}>No integrations available</text>
++          <text fg={theme.text.subdued}>No integrations available</text>
+         </box>
+       }
+       noMatchView={
+         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-          <text fg={themeV2.text.subdued}>No integrations found</text>
++          <text fg={theme.text.subdued}>No integrations found</text>
+         </box>
+       }
+     />
+@@ -303,16 +303,16 @@ function CommandPending(props: {
+ 
+ function CommandView(props: { title: string; output: string; message: string }) {
+   const dialog = useDialog()
+-  const { themeV2 } = useTheme().contextual("elevated")
+-  const { themeV2: overlayTheme } = useTheme().contextual("overlay")
++  const theme = useThemes().contextual("elevated")
++  const overlayTheme = useThemes().contextual("overlay")
+   onMount(() => dialog.setSize("large"))
+   return (
+     <box gap={1} paddingBottom={1}>
+       <box flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2}>
+-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
++        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
+           {props.title}
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc close
+         </text>
+       </box>
+@@ -326,7 +326,7 @@ function CommandView(props: { title: string; output: string; message: string })
+         <text fg={overlayTheme.text.default}>{props.output.trim()}</text>
+       </box>
+       <box paddingLeft={2} paddingRight={2}>
+-        <text fg={themeV2.text.subdued}>{props.message}</text>
++        <text fg={theme.text.subdued}>{props.message}</text>
+       </box>
+     </box>
+   )
+@@ -341,7 +341,7 @@ function KeyMethod(props: {
+   const dialog = useDialog()
+   const client = useClient()
+   const toast = useToast()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const [error, setError] = createSignal<string>()
+ 
+   return (
+@@ -360,7 +360,7 @@ function KeyMethod(props: {
+           .catch((cause) => setError(message(cause)))
+       }}
+       description={() => (
+-        <Show when={error()}>{(value) => <text fg={themeV2.text.feedback.error.default}>{value()}</text>}</Show>
++        <Show when={error()}>{(value) => <text fg={theme.text.feedback.error.default}>{value()}</text>}</Show>
+       )}
+     />
+   )
+@@ -516,7 +516,7 @@ function OAuthCode(props: {
+   const dialog = useDialog()
+   const client = useClient()
+   const toast = useToast()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const [error, setError] = createSignal<string>()
+   let settled = false
+ 
+@@ -550,9 +550,9 @@ function OAuthCode(props: {
+       }}
+       description={() => (
+         <box gap={1}>
+-          <text fg={themeV2.text.subdued}>{props.attempt.instructions}</text>
+-          <Link href={props.attempt.url} fg={themeV2.markdown.link} />
+-          <Show when={error()}>{(value) => <text fg={themeV2.text.feedback.error.default}>{value()}</text>}</Show>
++          <text fg={theme.text.subdued}>{props.attempt.instructions}</text>
++          <Link href={props.attempt.url} fg={theme.markdown.link} />
++          <Show when={error()}>{(value) => <text fg={theme.text.feedback.error.default}>{value()}</text>}</Show>
+         </box>
+       )}
+     />
+@@ -561,31 +561,31 @@ function OAuthCode(props: {
+ 
+ function OAuthView(props: { title: string; url?: string; instructions?: string; message: string; copy?: boolean }) {
+   const dialog = useDialog()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   return (
+     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
++        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
+           {props.title}
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc
+         </text>
+       </box>
+       <Show when={props.url}>
+         {(url) => (
+           <box gap={1}>
+-            <Link href={url()} fg={themeV2.markdown.link} />
++            <Link href={url()} fg={theme.markdown.link} />
+             <Show when={props.instructions}>
+-              {(instructions) => <text fg={themeV2.text.subdued}>{instructions()}</text>}
++              {(instructions) => <text fg={theme.text.subdued}>{instructions()}</text>}
+             </Show>
+           </box>
+         )}
+       </Show>
+-      <text fg={themeV2.text.subdued}>{props.message}</text>
++      <text fg={theme.text.subdued}>{props.message}</text>
+       <Show when={props.copy}>
+-        <text fg={themeV2.text.default}>
+-          c <span style={{ fg: themeV2.text.subdued }}>copy</span>
++        <text fg={theme.text.default}>
++          c <span style={{ fg: theme.text.subdued }}>copy</span>
+         </text>
+       </Show>
+     </box>
+diff --git a/packages/tui/src/component/dialog-mcp.tsx b/packages/tui/src/component/dialog-mcp.tsx
+index e1ecd011f494..31fafd7ef888 100644
+--- a/packages/tui/src/component/dialog-mcp.tsx
++++ b/packages/tui/src/component/dialog-mcp.tsx
+@@ -5,7 +5,7 @@ import { Keymap } from "../context/keymap"
+ import { pipe, sortBy } from "remeda"
+ import { DialogSelect } from "../ui/dialog-select"
+ import { useDialog } from "../ui/dialog"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
+ import type { McpServer } from "@opencode-ai/client"
+ import { useClipboard } from "../context/clipboard"
+@@ -20,12 +20,12 @@ function statusError(status: McpServer["status"]) {
+ }
+ 
+ function Status(props: { enabled: boolean; loading: boolean }) {
+-  const { themeV2 } = useTheme().contextual("elevated")
+-  if (props.loading) return <span style={{ fg: themeV2.text.subdued }}>⋯ Loading</span>
++  const theme = useThemes().contextual("elevated")
++  if (props.loading) return <span style={{ fg: theme.text.subdued }}>⋯ Loading</span>
+   if (props.enabled) {
+-    return <span style={{ fg: themeV2.text.feedback.success.default, attributes: TextAttributes.BOLD }}>✓ Enabled</span>
++    return <span style={{ fg: theme.text.feedback.success.default, attributes: TextAttributes.BOLD }}>✓ Enabled</span>
+   }
+-  return <span style={{ fg: themeV2.text.subdued }}>○ Disabled</span>
++  return <span style={{ fg: theme.text.subdued }}>○ Disabled</span>
+ }
+ 
+ export function DialogMcp() {
+@@ -33,7 +33,7 @@ export function DialogMcp() {
+   const dialog = useDialog()
+   const client = useClient()
+   const toast = useToast()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const [focused, setFocused] = createSignal<string>()
+   const [detail, setDetail] = createSignal<McpServer>()
+   const [loading, setLoading] = createSignal<string | null>(null)
+@@ -110,7 +110,7 @@ export function DialogMcp() {
+             ]}
+             footer={
+               <Show when={focusedError()}>
+-                <text fg={themeV2.text.subdued}>enter to view error</text>
++                <text fg={theme.text.subdued}>enter to view error</text>
+               </Show>
+             }
+           />
+@@ -134,8 +134,8 @@ function DialogMcpError(props: { server: McpServer; onBack: () => void }) {
+   const dialog = useDialog()
+   const clipboard = useClipboard()
+   const toast = useToast()
+-  const { themeV2 } = useTheme().contextual("elevated")
+-  const { themeV2: overlayTheme } = useTheme().contextual("overlay")
++  const theme = useThemes().contextual("elevated")
++  const overlayTheme = useThemes().contextual("overlay")
+   const dimensions = useTerminalDimensions()
+   const config = useConfig().data
+   const [copied, setCopied] = createSignal(false)
+@@ -171,14 +171,14 @@ function DialogMcpError(props: { server: McpServer; onBack: () => void }) {
+   return (
+     <box paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
++        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
+           MCP server: {props.server.name}
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={props.onBack}>
++        <text fg={theme.text.subdued} onMouseUp={props.onBack}>
+           esc back
+         </text>
+       </box>
+-      <text fg={themeV2.text.feedback.error.default}>✗ Failed</text>
++      <text fg={theme.text.feedback.error.default}>✗ Failed</text>
+       <box
+         backgroundColor={overlayTheme.background.default}
+         paddingLeft={2}
+@@ -198,8 +198,8 @@ function DialogMcpError(props: { server: McpServer; onBack: () => void }) {
+         </scrollbox>
+       </box>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text fg={themeV2.text.subdued}>↑↓ scroll</text>
+-        <text fg={themeV2.text.subdued} onMouseUp={copy}>
++        <text fg={theme.text.subdued}>↑↓ scroll</text>
++        <text fg={theme.text.subdued} onMouseUp={copy}>
+           {copied() ? "✓ copied" : "c copy details"}
+         </text>
+       </box>
+diff --git a/packages/tui/src/component/dialog-move-session.tsx b/packages/tui/src/component/dialog-move-session.tsx
+index 6f2f3e6ba60e..3a1171acf8ec 100644
+--- a/packages/tui/src/component/dialog-move-session.tsx
++++ b/packages/tui/src/component/dialog-move-session.tsx
+@@ -6,7 +6,7 @@ import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
+ import { useDialog } from "../ui/dialog"
+ import { useClient } from "../context/client"
+ import { Keymap } from "../context/keymap"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useData } from "../context/data"
+ import { abbreviateHome } from "../runtime"
+ import { useTuiPaths } from "../context/runtime"
+@@ -38,7 +38,7 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
+   const dialog = useDialog()
+   const client = useClient()
+   const dimensions = useTerminalDimensions()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const sessionData = useData()
+   const route = useRoute()
+   const toast = useToast()
+@@ -172,18 +172,18 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
+       return {
+         title,
+         titleView: isRemoving ? (
+-          <span style={{ fg: themeV2.text.feedback.error.default }}>Deleting {item.location}</span>
++          <span style={{ fg: theme.text.feedback.error.default }}>Deleting {item.location}</span>
+         ) : deleting ? (
+-          <span style={{ fg: themeV2.text.action.destructive.default }}>
++          <span style={{ fg: theme.text.action.destructive.default }}>
+             Press {shortcuts.get("dialog.move_session.delete")} again to confirm
+           </span>
+         ) : suffix ? (
+           <>
+             {visible.slice(0, split)}
+-            <span style={{ fg: themeV2.text.subdued }}>{visible.slice(split)}</span>
++            <span style={{ fg: theme.text.subdued }}>{visible.slice(split)}</span>
+           </>
+         ) : undefined,
+-        bg: deleting ? themeV2.background.action.destructive.default : undefined,
++        bg: deleting ? theme.background.action.destructive.default : undefined,
+         value: {
+           type: "directory",
+           directory: item.location,
+@@ -316,7 +316,7 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
+         title="Move session"
+         titleView={
+           <box flexDirection="row" gap={1}>
+-            <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
++            <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+               Move session
+             </text>
+             <Show when={working() || directories.loading || loadedProject.loading}>
+@@ -329,25 +329,25 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
+         emptyView={
+           showError() ? (
+             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-              <text fg={themeV2.text.feedback.error.default} attributes={TextAttributes.BOLD}>
++              <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
+                 Could not load project directories
+               </text>
+-              <text fg={themeV2.text.subdued}>{errorMessage(loadError())}</text>
+-              <text fg={themeV2.text.subdued}>Close and reopen Move session to try again.</text>
++              <text fg={theme.text.subdued}>{errorMessage(loadError())}</text>
++              <text fg={theme.text.subdued}>Close and reopen Move session to try again.</text>
+             </box>
+           ) : directories.loading || loadedProject.loading ? (
+             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-              <text fg={themeV2.text.subdued}>Loading project directories…</text>
++              <text fg={theme.text.subdued}>Loading project directories…</text>
+             </box>
+           ) : (
+             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-              <text fg={themeV2.text.subdued}>No project directories available</text>
++              <text fg={theme.text.subdued}>No project directories available</text>
+             </box>
+           )
+         }
+         noMatchView={
+           <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-            <text fg={themeV2.text.subdued}>No project directories found</text>
++            <text fg={theme.text.subdued}>No project directories found</text>
+           </box>
+         }
+         locked={showError() || directories.loading || loadedProject.loading || Boolean(removing())}
+diff --git a/packages/tui/src/component/dialog-pair.tsx b/packages/tui/src/component/dialog-pair.tsx
+index 0a5cb0d75d50..05565dd0df38 100644
+--- a/packages/tui/src/component/dialog-pair.tsx
++++ b/packages/tui/src/component/dialog-pair.tsx
+@@ -3,7 +3,7 @@ import { useTerminalDimensions } from "@opentui/solid"
+ import { createMemo, createResource, createSignal, For, Show } from "solid-js"
+ import { renderUnicodeCompact } from "uqr"
+ import { useClient } from "../context/client"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useDialog } from "../ui/dialog"
+ import { errorMessage } from "../util/error"
+ 
+@@ -16,7 +16,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
+   const client = useClient()
+   const dialog = useDialog()
+   const dimensions = useTerminalDimensions()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const [loadError, setLoadError] = createSignal<unknown>()
+   const [showPassword, setShowPassword] = createSignal(false)
+   const [passwordHover, setPasswordHover] = createSignal(false)
+@@ -47,17 +47,17 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
+       <box flexDirection={horizontal() ? "row" : "column"} alignItems={horizontal() ? "flex-start" : "center"} gap={2}>
+         <box width={horizontal() ? 29 : "100%"} flexShrink={0} gap={1}>
+           <box>
+-            <text fg={themeV2.text.subdued}>URLs</text>
+-            <For each={value.urls}>{(url) => <text fg={themeV2.text.default}>{url}</text>}</For>
++            <text fg={theme.text.subdued}>URLs</text>
++            <For each={value.urls}>{(url) => <text fg={theme.text.default}>{url}</text>}</For>
+           </box>
+           <box>
+-            <text fg={themeV2.text.subdued}>Username</text>
+-            <text fg={themeV2.text.default}>{value.username}</text>
++            <text fg={theme.text.subdued}>Username</text>
++            <text fg={theme.text.default}>{value.username}</text>
+           </box>
+           <box>
+-            <text fg={themeV2.text.subdued}>Password</text>
++            <text fg={theme.text.subdued}>Password</text>
+             <text
+-              fg={passwordHover() ? themeV2.text.default : themeV2.text.subdued}
++              fg={passwordHover() ? theme.text.default : theme.text.subdued}
+               wrapMode="word"
+               onMouseOver={() => setPasswordHover(true)}
+               onMouseOut={() => setPasswordHover(false)}
+@@ -67,7 +67,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
+             </text>
+           </box>
+           <Show when={value.urls.some((url) => ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname))}>
+-            <text fg={themeV2.text.subdued} wrapMode="word">
++            <text fg={theme.text.subdued} wrapMode="word">
+               Run `opencode service set hostname 0.0.0.0` to access the service remotely.
+             </text>
+           </Show>
+@@ -78,7 +78,7 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
+           flexShrink={0}
+           alignItems={horizontal() ? "flex-end" : "center"}
+         >
+-          <text fg={themeV2.text.default}>{renderUnicodeCompact(JSON.stringify(value), { border: 1 })}</text>
++          <text fg={theme.text.default}>{renderUnicodeCompact(JSON.stringify(value), { border: 1 })}</text>
+         </box>
+       </box>
+     )
+@@ -87,17 +87,17 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
+   return (
+     <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
++        <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+           Pair
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc
+         </text>
+       </box>
+       <Show
+         when={loadError()}
+         fallback={
+-          <Show when={info()} fallback={<text fg={themeV2.text.subdued}>Loading server information…</text>}>
++          <Show when={info()} fallback={<text fg={theme.text.subdued}>Loading server information…</text>}>
+             <Show
+               when={dimensions().height >= 36}
+               fallback={
+@@ -116,11 +116,11 @@ export function DialogPair(props: { credentials?: DialogPairCredentials }) {
+       >
+         {(error) => (
+           <box>
+-            <text fg={themeV2.text.feedback.error.default} attributes={TextAttributes.BOLD}>
++            <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
+               Could not load server information
+             </text>
+-            <text fg={themeV2.text.subdued}>{errorMessage(error())}</text>
+-            <text fg={themeV2.text.subdued}>Close and reopen Pair to try again.</text>
++            <text fg={theme.text.subdued}>{errorMessage(error())}</text>
++            <text fg={theme.text.subdued}>Close and reopen Pair to try again.</text>
+           </box>
+         )}
+       </Show>
+diff --git a/packages/tui/src/component/dialog-project-copy-name.tsx b/packages/tui/src/component/dialog-project-copy-name.tsx
+index 63a15bcace01..d172b2245638 100644
+--- a/packages/tui/src/component/dialog-project-copy-name.tsx
++++ b/packages/tui/src/component/dialog-project-copy-name.tsx
+@@ -2,12 +2,12 @@ import { InputRenderable, TextAttributes } from "@opentui/core"
+ import { Slug } from "@opencode-ai/core/util/slug"
+ import { createSignal, onMount } from "solid-js"
+ import { Keymap } from "../context/keymap"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useDialog, type DialogContext } from "../ui/dialog"
+ 
+ export function DialogProjectCopyName(props: { onConfirm: (name: string) => void }) {
+   const dialog = useDialog()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const shortcuts = Keymap.useShortcuts()
+   const [inputTarget, setInputTarget] = createSignal<InputRenderable>()
+   let input: InputRenderable
+@@ -47,10 +47,10 @@ export function DialogProjectCopyName(props: { onConfirm: (name: string) => void
+   return (
+     <box paddingLeft={2} paddingRight={2} gap={1}>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
++        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
+           Name project copy
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc
+         </text>
+       </box>
+@@ -61,17 +61,17 @@ export function DialogProjectCopyName(props: { onConfirm: (name: string) => void
+         }}
+         onSubmit={confirm}
+         placeholder="Project copy name"
+-        placeholderColor={themeV2.text.subdued}
+-        textColor={themeV2.text.formfield.default}
+-        focusedTextColor={themeV2.text.formfield.default}
+-        cursorColor={themeV2.text.formfield.default}
++        placeholderColor={theme.text.subdued}
++        textColor={theme.text.formfield.default}
++        focusedTextColor={theme.text.formfield.default}
++        cursorColor={theme.text.formfield.default}
+       />
+       <box paddingBottom={1} flexDirection="row" gap={2}>
+-        <text fg={themeV2.text.default}>
+-          enter <span style={{ fg: themeV2.text.subdued }}>submit</span>
++        <text fg={theme.text.default}>
++          enter <span style={{ fg: theme.text.subdued }}>submit</span>
+         </text>
+-        <text fg={themeV2.text.default}>
+-          {shortcuts.get("dialog.project_copy.generate")} <span style={{ fg: themeV2.text.subdued }}>generate one</span>
++        <text fg={theme.text.default}>
++          {shortcuts.get("dialog.project_copy.generate")} <span style={{ fg: theme.text.subdued }}>generate one</span>
+         </text>
+       </box>
+     </box>
+diff --git a/packages/tui/src/component/dialog-retry-action.tsx b/packages/tui/src/component/dialog-retry-action.tsx
+index 24c4b7cdcf8b..b98ba9580c09 100644
+--- a/packages/tui/src/component/dialog-retry-action.tsx
++++ b/packages/tui/src/component/dialog-retry-action.tsx
+@@ -2,7 +2,7 @@ import { RGBA, TextAttributes } from "@opentui/core"
+ import open from "open"
+ import { createSignal } from "solid-js"
+ import { Keymap } from "../context/keymap"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useDialog, type DialogContext } from "../ui/dialog"
+ import { Link } from "../ui/link"
+ import { BgPulse } from "./bg-pulse"
+@@ -38,9 +38,9 @@ function panelOverlay(color: RGBA) {
+ 
+ export function DialogRetryAction(props: DialogRetryActionProps) {
+   const dialog = useDialog()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const showGoTreatment = () => props.link === GO_URL
+-  const textBg = () => (showGoTreatment() ? panelOverlay(themeV2.background.default) : undefined)
++  const textBg = () => (showGoTreatment() ? panelOverlay(theme.background.default) : undefined)
+   const [selected, setSelected] = createSignal<"dismiss" | "action">("action")
+ 
+   Keymap.createLayer(() => ({
+@@ -85,26 +85,26 @@ export function DialogRetryAction(props: DialogRetryActionProps) {
+       ) : null}
+       <box zIndex={1} paddingLeft={PAD_X} paddingRight={PAD_X} paddingBottom={1} gap={1}>
+         <box flexDirection="row" justifyContent="space-between">
+-          <text attributes={TextAttributes.BOLD} fg={themeV2.text.default} bg={textBg()}>
++          <text attributes={TextAttributes.BOLD} fg={theme.text.default} bg={textBg()}>
+             {props.title}
+           </text>
+-          <text fg={themeV2.text.subdued} bg={textBg()} onMouseUp={() => dialog.clear()}>
++          <text fg={theme.text.subdued} bg={textBg()} onMouseUp={() => dialog.clear()}>
+             esc
+           </text>
+         </box>
+         <box gap={0}>
+-          <text fg={themeV2.text.subdued} bg={textBg()}>
++          <text fg={theme.text.subdued} bg={textBg()}>
+             {props.message}
+           </text>
+         </box>
+         {props.link ? (
+           showGoTreatment() ? (
+             <box alignItems="center" justifyContent="flex-end" height={7} paddingBottom={1}>
+-              <Link href={props.link} fg={themeV2.markdown.link} bg={textBg()} wrapMode="none" />
++              <Link href={props.link} fg={theme.markdown.link} bg={textBg()} wrapMode="none" />
+             </box>
+           ) : (
+             <box width="100%" flexDirection="row" justifyContent="center" paddingBottom={1}>
+-              <Link href={props.link} fg={themeV2.markdown.link} wrapMode="none" />
++              <Link href={props.link} fg={theme.markdown.link} wrapMode="none" />
+             </box>
+           )
+         ) : (
+@@ -115,13 +115,13 @@ export function DialogRetryAction(props: DialogRetryActionProps) {
+             paddingLeft={2}
+             paddingRight={2}
+             backgroundColor={
+-              selected() === "dismiss" ? themeV2.background.action.primary.focused : RGBA.fromInts(0, 0, 0, 0)
++              selected() === "dismiss" ? theme.background.action.primary.focused : RGBA.fromInts(0, 0, 0, 0)
+             }
+             onMouseOver={() => setSelected("dismiss")}
+             onMouseUp={() => dismiss(props, dialog)}
+           >
+             <text
+-              fg={selected() === "dismiss" ? themeV2.text.action.primary.focused : themeV2.text.subdued}
++              fg={selected() === "dismiss" ? theme.text.action.primary.focused : theme.text.subdued}
+               bg={selected() === "dismiss" ? undefined : textBg()}
+               attributes={selected() === "dismiss" ? TextAttributes.BOLD : undefined}
+             >
+@@ -132,13 +132,13 @@ export function DialogRetryAction(props: DialogRetryActionProps) {
+             paddingLeft={2}
+             paddingRight={2}
+             backgroundColor={
+-              selected() === "action" ? themeV2.background.action.primary.focused : RGBA.fromInts(0, 0, 0, 0)
++              selected() === "action" ? theme.background.action.primary.focused : RGBA.fromInts(0, 0, 0, 0)
+             }
+             onMouseOver={() => setSelected("action")}
+             onMouseUp={() => runAction(props, dialog)}
+           >
+             <text
+-              fg={selected() === "action" ? themeV2.text.action.primary.focused : themeV2.text.default}
++              fg={selected() === "action" ? theme.text.action.primary.focused : theme.text.default}
+               bg={selected() === "action" ? undefined : textBg()}
+               attributes={selected() === "action" ? TextAttributes.BOLD : undefined}
+             >
+diff --git a/packages/tui/src/component/dialog-session-delete-failed.tsx b/packages/tui/src/component/dialog-session-delete-failed.tsx
+index 1f671218044a..d11b113a7f96 100644
+--- a/packages/tui/src/component/dialog-session-delete-failed.tsx
++++ b/packages/tui/src/component/dialog-session-delete-failed.tsx
+@@ -1,6 +1,6 @@
+ import { TextAttributes } from "@opentui/core"
+ import { Keymap } from "../context/keymap"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useDialog } from "../ui/dialog"
+ import { createStore } from "solid-js/store"
+ import { For } from "solid-js"
+@@ -13,7 +13,7 @@ export function DialogSessionDeleteFailed(props: {
+   onDone?: () => void
+ }) {
+   const dialog = useDialog()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const [store, setStore] = createStore({
+     active: "delete" as "delete" | "restore",
+   })
+@@ -64,17 +64,17 @@ export function DialogSessionDeleteFailed(props: {
+   return (
+     <box paddingLeft={2} paddingRight={2} gap={1}>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
++        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
+           Failed to Delete Session
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc
+         </text>
+       </box>
+-      <text fg={themeV2.text.subdued} wrapMode="word">
++      <text fg={theme.text.subdued} wrapMode="word">
+         {`The session "${props.session}" could not be deleted because the workspace "${props.workspace}" is not available.`}
+       </text>
+-      <text fg={themeV2.text.subdued} wrapMode="word">
++      <text fg={theme.text.subdued} wrapMode="word">
+         Choose how you want to recover this broken workspace session.
+       </text>
+       <box flexDirection="column" paddingBottom={1} gap={1}>
+@@ -86,7 +86,7 @@ export function DialogSessionDeleteFailed(props: {
+               paddingRight={1}
+               paddingTop={1}
+               paddingBottom={1}
+-              backgroundColor={item.id === store.active ? themeV2.background.action.primary.focused : undefined}
++              backgroundColor={item.id === store.active ? theme.background.action.primary.focused : undefined}
+               onMouseUp={() => {
+                 setStore("active", item.id)
+                 void confirm()
+@@ -94,12 +94,12 @@ export function DialogSessionDeleteFailed(props: {
+             >
+               <text
+                 attributes={TextAttributes.BOLD}
+-                fg={item.id === store.active ? themeV2.text.action.primary.focused : themeV2.text.default}
++                fg={item.id === store.active ? theme.text.action.primary.focused : theme.text.default}
+               >
+                 {item.title}
+               </text>
+               <text
+-                fg={item.id === store.active ? themeV2.text.action.primary.focused : themeV2.text.subdued}
++                fg={item.id === store.active ? theme.text.action.primary.focused : theme.text.subdued}
+                 wrapMode="word"
+               >
+                 {item.description}
+diff --git a/packages/tui/src/component/dialog-session-list.tsx b/packages/tui/src/component/dialog-session-list.tsx
+index b1067fa85986..349d216822a2 100644
+--- a/packages/tui/src/component/dialog-session-list.tsx
++++ b/packages/tui/src/component/dialog-session-list.tsx
+@@ -7,7 +7,7 @@ import { useRoute } from "../context/route"
+ import { useData } from "../context/data"
+ import { Keymap } from "../context/keymap"
+ import { Locale } from "../util/locale"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useClient } from "../context/client"
+ import { useLocal } from "../context/local"
+ import { createDebouncedSignal } from "../util/signal"
+@@ -20,7 +20,9 @@ export function DialogSessionList() {
+   const dialog = useDialog()
+   const route = useRoute()
+   const data = useData()
+-  const { themeV2, mode } = useTheme().contextual("elevated")
++  const themes = useThemes()
++  const theme = themes.contextual("elevated")
++  const mode = themes.mode
+   const client = useClient()
+   const local = useLocal()
+   const toast = useToast()
+@@ -109,13 +111,13 @@ export function DialogSessionList() {
+         value: session.id,
+         category,
+         footer,
+-        bg: deleting ? themeV2.background.action.destructive.focused : undefined,
+-        fg: deleting ? themeV2.text.action.destructive.focused : undefined,
++        bg: deleting ? theme.background.action.destructive.focused : undefined,
++        fg: deleting ? theme.text.action.destructive.focused : undefined,
+         gutter: data.session.family(session.id).some((id) => data.session.status(id) === "running")
+           ? () => <Spinner />
+           : slot === undefined
+             ? undefined
+-            : () => <text fg={themeV2.hue.accent[mode() === "light" ? 800 : 200]}>{slot}</text>,
++            : () => <text fg={theme.hue.accent[mode() === "light" ? 800 : 200]}>{slot}</text>,
+       }
+     }
+ 
+@@ -143,12 +145,12 @@ export function DialogSessionList() {
+       }}
+       emptyView={
+         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-          <text fg={themeV2.text.subdued}>No sessions available</text>
++          <text fg={theme.text.subdued}>No sessions available</text>
+         </box>
+       }
+       noMatchView={
+         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-          <text fg={searchState().error ? themeV2.text.feedback.error.default : themeV2.text.subdued}>
++          <text fg={searchState().error ? theme.text.feedback.error.default : theme.text.subdued}>
+             {searchState().message}
+           </text>
+         </box>
+diff --git a/packages/tui/src/component/dialog-skill.tsx b/packages/tui/src/component/dialog-skill.tsx
+index d853e55fffd5..3d2e31260ce0 100644
+--- a/packages/tui/src/component/dialog-skill.tsx
++++ b/packages/tui/src/component/dialog-skill.tsx
+@@ -15,7 +15,7 @@ export type DialogSkillProps = {
+ export function DialogSkill(props: DialogSkillProps) {
+   const dialog = useDialog()
+   const data = useData()
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+   dialog.setSize("large")
+ 
+   const [loadError, setLoadError] = createSignal<unknown>()
+@@ -63,29 +63,29 @@ export function DialogSkill(props: DialogSkillProps) {
+         <Switch
+           fallback={
+             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-              <text fg={themeV2.text.subdued}>No skills available</text>
++              <text fg={theme.text.subdued}>No skills available</text>
+             </box>
+           }
+         >
+           <Match when={showError()}>
+             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-              <text fg={themeV2.text.feedback.error.default} attributes={TextAttributes.BOLD}>
++              <text fg={theme.text.feedback.error.default} attributes={TextAttributes.BOLD}>
+                 Could not load skills
+               </text>
+-              <text fg={themeV2.text.subdued}>{errorMessage(loadError())}</text>
+-              <text fg={themeV2.text.subdued}>Close and reopen Skills to try again.</text>
++              <text fg={theme.text.subdued}>{errorMessage(loadError())}</text>
++              <text fg={theme.text.subdued}>Close and reopen Skills to try again.</text>
+             </box>
+           </Match>
+           <Match when={skills.loading}>
+             <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-              <text fg={themeV2.text.subdued}>Loading skills…</text>
++              <text fg={theme.text.subdued}>Loading skills…</text>
+             </box>
+           </Match>
+         </Switch>
+       }
+       noMatchView={
+         <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+-          <text fg={themeV2.text.subdued}>No skills found</text>
++          <text fg={theme.text.subdued}>No skills found</text>
+         </box>
+       }
+     />
+diff --git a/packages/tui/src/component/dialog-stash.tsx b/packages/tui/src/component/dialog-stash.tsx
+index 80aa75250cb1..90c2dc8e534b 100644
+--- a/packages/tui/src/component/dialog-stash.tsx
++++ b/packages/tui/src/component/dialog-stash.tsx
+@@ -3,7 +3,7 @@ import { DialogSelect } from "../ui/dialog-select"
+ import { createMemo, createSignal } from "solid-js"
+ import { Locale } from "../util/locale"
+ import { Keymap } from "../context/keymap"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { usePromptStash, type StashEntry } from "./prompt/stash"
+ 
+ function getRelativeTime(timestamp: number): string {
+@@ -29,7 +29,7 @@ function getStashPreview(input: string, maxLength: number = 50): string {
+ export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
+   const dialog = useDialog()
+   const stash = usePromptStash()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const shortcuts = Keymap.useShortcuts()
+ 
+   const [toDelete, setToDelete] = createSignal<number>()
+@@ -45,8 +45,8 @@ export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
+           title: isDeleting
+             ? `Press ${shortcuts.get("stash.delete")} again to confirm`
+             : getStashPreview(entry.prompt.text),
+-          bg: isDeleting ? themeV2.background.action.destructive.focused : undefined,
+-          fg: isDeleting ? themeV2.text.action.destructive.focused : undefined,
++          bg: isDeleting ? theme.background.action.destructive.focused : undefined,
++          fg: isDeleting ? theme.text.action.destructive.focused : undefined,
+           value: index,
+           description: getRelativeTime(entry.timestamp),
+           footer: lineCount > 1 ? `~${lineCount} lines` : undefined,
+diff --git a/packages/tui/src/component/dialog-status.tsx b/packages/tui/src/component/dialog-status.tsx
+index 2e983465beb5..2e9675c807a6 100644
+--- a/packages/tui/src/component/dialog-status.tsx
++++ b/packages/tui/src/component/dialog-status.tsx
+@@ -1,5 +1,5 @@
+ import { TextAttributes } from "@opentui/core"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useDialog } from "../ui/dialog"
+ import { useData } from "../context/data"
+ import { For, Match, Switch, Show, createMemo } from "solid-js"
+@@ -8,30 +8,30 @@ export type DialogStatusProps = {}
+ 
+ export function DialogStatus() {
+   const data = useData()
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const dialog = useDialog()
+ 
+   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
+   const color = (status: string) => {
+-    if (status === "connected") return themeV2.text.feedback.success.default
+-    if (status === "failed") return themeV2.text.feedback.error.default
+-    if (status === "needs_auth") return themeV2.text.feedback.warning.default
+-    if (status === "needs_client_registration") return themeV2.text.feedback.error.default
+-    return themeV2.text.subdued
++    if (status === "connected") return theme.text.feedback.success.default
++    if (status === "failed") return theme.text.feedback.error.default
++    if (status === "needs_auth") return theme.text.feedback.warning.default
++    if (status === "needs_client_registration") return theme.text.feedback.error.default
++    return theme.text.subdued
+   }
+   return (
+     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+       <box flexDirection="row" justifyContent="space-between">
+-        <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
++        <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+           Status
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc
+         </text>
+       </box>
+-      <Show when={mcp().length > 0} fallback={<text fg={themeV2.text.default}>No MCP servers</text>}>
++      <Show when={mcp().length > 0} fallback={<text fg={theme.text.default}>No MCP servers</text>}>
+         <box>
+-          <text fg={themeV2.text.default}>
++          <text fg={theme.text.default}>
+             {mcp().length} MCP server{mcp().length === 1 ? "" : "s"}
+           </text>
+           <For each={mcp()}>
+@@ -40,9 +40,9 @@ export function DialogStatus() {
+                 <text flexShrink={0} style={{ fg: color(item.status.status) }}>
+                   •
+                 </text>
+-                <text fg={themeV2.text.default} wrapMode="word">
++                <text fg={theme.text.default} wrapMode="word">
+                   <b>{item.name}</b>{" "}
+-                  <span style={{ fg: themeV2.text.subdued }}>
++                  <span style={{ fg: theme.text.subdued }}>
+                     <Switch fallback={item.status.status}>
+                       <Match when={item.status.status === "connected"}>Connected</Match>
+                       <Match when={item.status.status === "failed" && item.status}>{(val) => val().error}</Match>
+diff --git a/packages/tui/src/component/dialog-theme-list.tsx b/packages/tui/src/component/dialog-theme-list.tsx
+index 6cf3539ad947..f1a8cda376ae 100644
+--- a/packages/tui/src/component/dialog-theme-list.tsx
++++ b/packages/tui/src/component/dialog-theme-list.tsx
+@@ -1,11 +1,11 @@
+ import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useDialog } from "../ui/dialog"
+ import { onCleanup } from "solid-js"
+ 
+ export function DialogThemeList() {
+-  const theme = useTheme()
+-  const options = Object.keys(theme.all())
++  const themes = useThemes()
++  const options = Object.keys(themes.all())
+     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+     .map((value) => ({
+       title: value,
+@@ -14,10 +14,10 @@ export function DialogThemeList() {
+   const dialog = useDialog()
+   let confirmed = false
+   let ref: DialogSelectRef<string>
+-  const initial = theme.selected
++  const initial = themes.selected
+ 
+   onCleanup(() => {
+-    if (!confirmed) theme.set(initial)
++    if (!confirmed) themes.set(initial)
+   })
+ 
+   return (
+@@ -26,10 +26,10 @@ export function DialogThemeList() {
+       options={options}
+       current={initial}
+       onMove={(opt) => {
+-        theme.set(opt.value)
++        themes.set(opt.value)
+       }}
+       onSelect={(opt) => {
+-        theme.set(opt.value)
++        themes.set(opt.value)
+         confirmed = true
+         dialog.clear()
+       }}
+@@ -38,12 +38,12 @@ export function DialogThemeList() {
+       }}
+       onFilter={(query) => {
+         if (query.length === 0) {
+-          theme.set(initial)
++          themes.set(initial)
+           return
+         }
+ 
+         const first = ref.filtered[0]
+-        if (first) theme.set(first.value)
++        if (first) themes.set(first.value)
+       }}
+     />
+   )
+diff --git a/packages/tui/src/component/dialog-workspace-file-changes.tsx b/packages/tui/src/component/dialog-workspace-file-changes.tsx
+index 4d79dd26c6c2..d349923e05e5 100644
+--- a/packages/tui/src/component/dialog-workspace-file-changes.tsx
++++ b/packages/tui/src/component/dialog-workspace-file-changes.tsx
+@@ -4,7 +4,7 @@ import type { VcsFileStatus } from "@opencode-ai/client"
+ import { createMemo, For } from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { FilePath } from "../ui/file-path"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useConfig } from "../config"
+ import { useDialog, type DialogContext } from "../ui/dialog"
+ import { getScrollAcceleration } from "../util/scroll"
+@@ -31,8 +31,8 @@ export function DialogWorkspaceFileChanges(props: {
+   message?: string
+ }) {
+   const dialog = useDialog()
+-  const { themeV2 } = useTheme().contextual("elevated")
+-  const { themeV2: overlayTheme } = useTheme().contextual("overlay")
++  const theme = useThemes().contextual("elevated")
++  const overlayTheme = useThemes().contextual("overlay")
+   const config = useConfig().data
+   const dimensions = useTerminalDimensions()
+   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
+@@ -72,15 +72,15 @@ export function DialogWorkspaceFileChanges(props: {
+   return (
+     <box gap={1}>
+       <box flexDirection="row" justifyContent="space-between" paddingLeft={2} paddingRight={2}>
+-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
++        <text attributes={TextAttributes.BOLD} fg={theme.text.default}>
+           {props.title ?? "File Changes Found"}
+         </text>
+-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
++        <text fg={theme.text.subdued} onMouseUp={() => dialog.clear()}>
+           esc
+         </text>
+       </box>
+       <box paddingLeft={2} paddingRight={2}>
+-        <text fg={themeV2.text.subdued} wrapMode="word">
++        <text fg={theme.text.subdued} wrapMode="word">
+           {props.message ?? "Do you want to move these changes with the session?"}
+         </text>
+       </box>
+@@ -118,16 +118,14 @@ export function DialogWorkspaceFileChanges(props: {
+             <box
+               paddingLeft={2}
+               paddingRight={2}
+-              backgroundColor={item === store.active ? themeV2.background.action.primary.focused : undefined}
++              backgroundColor={item === store.active ? theme.background.action.primary.focused : undefined}
+               onMouseUp={() => {
+                 setStore("active", item)
+                 props.onSelect(item)
+                 dialog.clear()
+               }}
+             >
+-              <text fg={item === store.active ? themeV2.text.action.primary.focused : themeV2.text.subdued}>
+-                {item}
+-              </text>
++              <text fg={item === store.active ? theme.text.action.primary.focused : theme.text.subdued}>{item}</text>
+             </box>
+           )}
+         </For>
+diff --git a/packages/tui/src/component/logo.tsx b/packages/tui/src/component/logo.tsx
+index 214658205947..adf6eb7d6db0 100644
+--- a/packages/tui/src/component/logo.tsx
++++ b/packages/tui/src/component/logo.tsx
+@@ -5,10 +5,10 @@ import { tint } from "../theme/color"
+ import { logo } from "../logo"
+ 
+ export function Logo() {
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+ 
+   const renderLine = (line: string, fg: RGBA, bold: boolean): JSX.Element[] => {
+-    const shadow = tint(themeV2.background.default, fg, 0.25)
++    const shadow = tint(theme.background.default, fg, 0.25)
+     const attrs = bold ? TextAttributes.BOLD : undefined
+     return Array.from(line).map((char) => {
+       if (char === "_") {
+@@ -52,8 +52,8 @@ export function Logo() {
+       <For each={logo.left}>
+         {(line, index) => (
+           <box flexDirection="row" gap={1}>
+-            <box flexDirection="row">{renderLine(line, themeV2.text.subdued, false)}</box>
+-            <box flexDirection="row">{renderLine(logo.right[index()], themeV2.text.default, true)}</box>
++            <box flexDirection="row">{renderLine(line, theme.text.subdued, false)}</box>
++            <box flexDirection="row">{renderLine(logo.right[index()], theme.text.default, true)}</box>
+           </box>
+         )}
+       </For>
+diff --git a/packages/tui/src/component/plugin-route-missing.tsx b/packages/tui/src/component/plugin-route-missing.tsx
+index 5b36dcbdaf65..d9c2ff794775 100644
+--- a/packages/tui/src/component/plugin-route-missing.tsx
++++ b/packages/tui/src/component/plugin-route-missing.tsx
+@@ -1,20 +1,20 @@
+ import { useTheme } from "../context/theme"
+ 
+ export function PluginRouteMissing(props: { id: string; name: string; onHome: () => void }) {
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+ 
+   return (
+     <box width="100%" height="100%" alignItems="center" justifyContent="center" flexDirection="column" gap={1}>
+-      <text fg={themeV2.text.feedback.warning.default}>
++      <text fg={theme.text.feedback.warning.default}>
+         Unknown plugin route: {props.id}/{props.name}
+       </text>
+       <box
+         onMouseUp={props.onHome}
+-        backgroundColor={themeV2.background.action.primary.hovered}
++        backgroundColor={theme.background.action.primary.hovered}
+         paddingLeft={1}
+         paddingRight={1}
+       >
+-        <text fg={themeV2.text.action.primary.hovered}>go home</text>
++        <text fg={theme.text.action.primary.hovered}>go home</text>
+       </box>
+     </box>
+   )
+diff --git a/packages/tui/src/component/prompt/autocomplete.tsx b/packages/tui/src/component/prompt/autocomplete.tsx
+index 921d096819c9..10c1f037ddab 100644
+--- a/packages/tui/src/component/prompt/autocomplete.tsx
++++ b/packages/tui/src/component/prompt/autocomplete.tsx
+@@ -12,7 +12,7 @@ import { getScrollAcceleration } from "../../util/scroll"
+ import { useTuiPaths } from "../../context/runtime"
+ import { useConfig } from "../../config"
+ import { useLocation } from "../../context/location"
+-import { useTheme } from "../../context/theme"
++import { useThemes } from "../../context/theme"
+ import { SplitBorder } from "../../ui/border"
+ import { useTerminalDimensions } from "@opentui/solid"
+ import { Locale } from "../../util/locale"
+@@ -57,7 +57,7 @@ export function Autocomplete(props: {
+   const data = useData()
+   const keymap = Keymap.use()
+   const keymapCommands = Keymap.useCommands()
+-  const { themeV2 } = useTheme().contextual("overlay")
++  const theme = useThemes().contextual("overlay")
+   const dimensions = useTerminalDimensions()
+   const frecency = useFrecency()
+   const config = useConfig().data
+@@ -698,11 +698,11 @@ export function Autocomplete(props: {
+       width={position().width}
+       zIndex={100}
+       {...SplitBorder}
+-      borderColor={themeV2.border.default}
++      borderColor={theme.border.default}
+     >
+       <scrollbox
+         ref={(r: ScrollBoxRenderable) => (scroll = r)}
+-        backgroundColor={themeV2.background.default}
++        backgroundColor={theme.background.default}
+         height={height()}
+         scrollbarOptions={{ visible: false }}
+         scrollAcceleration={scrollAcceleration()}
+@@ -711,9 +711,7 @@ export function Autocomplete(props: {
+           each={options()}
+           fallback={
+             <box paddingLeft={1} paddingRight={1}>
+-              <text fg={emptyError() ? themeV2.text.feedback.error.default : themeV2.text.subdued}>
+-                {emptyMessage()}
+-              </text>
++              <text fg={emptyError() ? theme.text.feedback.error.default : theme.text.subdued}>{emptyMessage()}</text>
+             </box>
+           }
+         >
+@@ -721,7 +719,7 @@ export function Autocomplete(props: {
+             <box
+               paddingLeft={1}
+               paddingRight={1}
+-              backgroundColor={index === store.selected ? themeV2.background.action.primary.focused : undefined}
++              backgroundColor={index === store.selected ? theme.background.action.primary.focused : undefined}
+               flexDirection="row"
+               onMouseMove={() => {
+                 setStore("input", "mouse")
+@@ -737,14 +735,14 @@ export function Autocomplete(props: {
+               onMouseUp={() => select()}
+             >
+               <text
+-                fg={index === store.selected ? themeV2.text.action.primary.focused : themeV2.text.default}
++                fg={index === store.selected ? theme.text.action.primary.focused : theme.text.default}
+                 flexShrink={0}
+               >
+                 {option().display}
+               </text>
+               <Show when={option().description}>
+                 <text
+-                  fg={index === store.selected ? themeV2.text.action.primary.focused : themeV2.text.subdued}
++                  fg={index === store.selected ? theme.text.action.primary.focused : theme.text.subdued}
+                   wrapMode="none"
+                 >
+                   {" " + option().description?.trimStart()}
+diff --git a/packages/tui/src/component/prompt/index.tsx b/packages/tui/src/component/prompt/index.tsx
+index ff4b516a889b..44e98f92d5de 100644
+--- a/packages/tui/src/component/prompt/index.tsx
++++ b/packages/tui/src/component/prompt/index.tsx
+@@ -12,7 +12,7 @@ import { registerOpencodeSpinner } from "../register-spinner"
+ import path from "path"
+ import { fileURLToPath } from "url"
+ import { useLocal } from "../../context/local"
+-import { useTheme } from "../../context/theme"
++import { useTheme, useThemes } from "../../context/theme"
+ import { tint } from "../../theme/color"
+ import { EmptyBorder, SplitBorder } from "../../ui/border"
+ import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+@@ -189,7 +189,8 @@ export function Prompt(props: PromptProps) {
+   const renderer = useRenderer()
+   const exit = useExit()
+   const dimensions = useTerminalDimensions()
+-  const { themeV2, syntax } = useTheme()
++  const theme = useTheme()
++  const { currentSyntax: syntax } = useThemes()
+   const animationsEnabled = createMemo(() => config.animations ?? true)
+   const list = createMemo(() => props.placeholders?.normal ?? [])
+   const shell = createMemo(() => props.placeholders?.shell ?? [])
+@@ -296,8 +297,8 @@ export function Prompt(props: PromptProps) {
+ 
+   createEffect(() => {
+     if (!input || input.isDestroyed) return
+-    if (props.disabled) input.cursorColor = themeV2.background.surface.offset
+-    if (!props.disabled) input.cursorColor = themeV2.text.default
++    if (props.disabled) input.cursorColor = theme.background.surface.offset
++    if (!props.disabled) input.cursorColor = theme.text.default
+   })
+ 
+   const usage = createMemo(() => {
+@@ -1299,10 +1300,10 @@ export function Prompt(props: PromptProps) {
+   }
+ 
+   const highlight = createMemo(() => {
+-    if (leader()) return themeV2.border.default
+-    if (store.mode === "shell") return themeV2.text.action.primary.selected
++    if (leader()) return theme.border.default
++    if (store.mode === "shell") return theme.text.action.primary.selected
+     const agent = local.agent.current()
+-    if (!agent) return themeV2.border.default
++    if (!agent) return theme.border.default
+     return local.agent.color(agent.id)
+   })
+   const agentLabel = createMemo(() => {
+@@ -1324,7 +1325,7 @@ export function Prompt(props: PromptProps) {
+     () => !!local.agent.current() && store.mode === "normal" && showVariant(),
+     animationsEnabled,
+   )
+-  const borderHighlight = createMemo(() => tint(themeV2.border.default, highlight(), agentMetaAlpha()))
++  const borderHighlight = createMemo(() => tint(theme.border.default, highlight(), agentMetaAlpha()))
+ 
+   const placeholderText = createMemo(() => {
+     if (props.showPlaceholder === false) return undefined
+@@ -1344,7 +1345,7 @@ export function Prompt(props: PromptProps) {
+ 
+   const spinnerDef = createMemo(() => {
+     const agent = status() === "running" ? local.agent.current() : local.agent.current()
+-    const color = agent ? local.agent.color(agent.id) : themeV2.border.default
++    const color = agent ? local.agent.color(agent.id) : theme.border.default
+     return {
+       frames: createFrames({
+         color,
+@@ -1364,7 +1365,7 @@ export function Prompt(props: PromptProps) {
+   })
+   const maxHeight = createMemo(() => Math.max(6, Math.floor(dimensions().height / 3)))
+ 
+-  const promptBg = createMemo(() => themeV2.raise(themeV2.background.surface.offset))
++  const promptBg = createMemo(() => theme.raise(theme.background.surface.offset))
+ 
+   return (
+     <>
+@@ -1390,9 +1391,9 @@ export function Prompt(props: PromptProps) {
+             <textarea
+               width="100%"
+               placeholder={placeholderText()}
+-              placeholderColor={themeV2.text.subdued}
+-              textColor={leader() ? themeV2.text.subdued : themeV2.text.default}
+-              focusedTextColor={leader() ? themeV2.text.subdued : themeV2.text.default}
++              placeholderColor={theme.text.subdued}
++              textColor={leader() ? theme.text.subdued : theme.text.default}
++              focusedTextColor={leader() ? theme.text.subdued : theme.text.default}
+               minHeight={1}
+               maxHeight={maxHeight()}
+               onContentChange={() => {
+@@ -1452,7 +1453,7 @@ export function Prompt(props: PromptProps) {
+                 setTimeout(() => {
+                   // setTimeout is a workaround and needs to be addressed properly
+                   if (!input || input.isDestroyed) return
+-                  input.cursorColor = themeV2.text.default
++                  input.cursorColor = theme.text.default
+                 }, 0)
+               }}
+               onMouseDown={(r: MouseEvent) => {
+@@ -1460,7 +1461,7 @@ export function Prompt(props: PromptProps) {
+                 r.target?.focus()
+               }}
+               focusedBackgroundColor="transparent"
+-              cursorColor={props.disabled ? themeV2.background.surface.offset : themeV2.text.default}
++              cursorColor={props.disabled ? theme.background.surface.offset : theme.text.default}
+               syntaxStyle={syntax()}
+             />
+             <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
+@@ -1470,24 +1471,24 @@ export function Prompt(props: PromptProps) {
+                     <>
+                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>{label()}</text>
+                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
+-                        <text fg={fadeColor(themeV2.text.subdued, agentMetaAlpha())}>auto</text>
++                        <text fg={fadeColor(theme.text.subdued, agentMetaAlpha())}>auto</text>
+                       </Show>
+                       <Show when={store.mode === "normal"}>
+                         <box flexDirection="row" gap={1}>
+-                          <text fg={fadeColor(themeV2.text.subdued, modelMetaAlpha())}>·</text>
++                          <text fg={fadeColor(theme.text.subdued, modelMetaAlpha())}>·</text>
+                           <text
+                             flexShrink={0}
+-                            fg={fadeColor(leader() ? themeV2.text.subdued : themeV2.text.default, modelMetaAlpha())}
++                            fg={fadeColor(leader() ? theme.text.subdued : theme.text.default, modelMetaAlpha())}
+                           >
+                             {local.model.parsed().model}
+                           </text>
+-                          <text fg={fadeColor(themeV2.text.subdued, modelMetaAlpha())}>{currentProviderLabel()}</text>
++                          <text fg={fadeColor(theme.text.subdued, modelMetaAlpha())}>{currentProviderLabel()}</text>
+                           <Show when={showVariant()}>
+-                            <text fg={fadeColor(themeV2.text.subdued, variantMetaAlpha())}>·</text>
++                            <text fg={fadeColor(theme.text.subdued, variantMetaAlpha())}>·</text>
+                             <text>
+                               <span
+                                 style={{
+-                                  fg: fadeColor(themeV2.text.feedback.warning.default, variantMetaAlpha()),
++                                  fg: fadeColor(theme.text.feedback.warning.default, variantMetaAlpha()),
+                                   bold: true,
+                                 }}
+                               >
+@@ -1541,12 +1542,12 @@ export function Prompt(props: PromptProps) {
+               <Match when={status() === "running"}>
+                 <box flexDirection="row" gap={1} flexGrow={1} justifyContent="flex-start">
+                   <box marginLeft={1}>
+-                    <Show when={config.animations ?? true} fallback={<text fg={themeV2.text.subdued}>[⋯]</text>}>
++                    <Show when={config.animations ?? true} fallback={<text fg={theme.text.subdued}>[⋯]</text>}>
+                       <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                     </Show>
+                   </box>
+                   <text
+-                    fg={store.interrupt > 0 ? themeV2.background.action.primary.default : themeV2.text.default}
++                    fg={store.interrupt > 0 ? theme.background.action.primary.default : theme.text.default}
+                     wrapMode="none"
+                     truncate
+                     flexShrink={1}
+@@ -1554,7 +1555,7 @@ export function Prompt(props: PromptProps) {
+                     esc{" "}
+                     <span
+                       style={{
+-                        fg: store.interrupt > 0 ? themeV2.background.action.primary.default : themeV2.text.subdued,
++                        fg: store.interrupt > 0 ? theme.background.action.primary.default : theme.text.subdued,
+                       }}
+                     >
+                       {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
+@@ -1565,16 +1566,16 @@ export function Prompt(props: PromptProps) {
+               <Match when={move.progress()}>
+                 {(progress) => (
+                   <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
+-                    <Spinner color={themeV2.hue.accent[500]}>
++                    <Spinner color={theme.hue.accent[500]}>
+                       {progress()}
+-                      <span style={{ fg: themeV2.text.subdued }}>{".".repeat(move.creatingDots())}</span>
++                      <span style={{ fg: theme.text.subdued }}>{".".repeat(move.creatingDots())}</span>
+                     </Spinner>
+                   </box>
+                 )}
+               </Match>
+               <Match when={move.pendingNew()}>
+                 <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
+-                  <text fg={themeV2.hue.accent[500]} wrapMode="none" truncate>
++                  <text fg={theme.hue.accent[500]} wrapMode="none" truncate>
+                     (new working copy)
+                   </text>
+                 </box>
+@@ -1582,7 +1583,7 @@ export function Prompt(props: PromptProps) {
+               <Match when={true}>
+                 <Show when={!props.hint && locationLabel()} fallback={props.hint ?? <text />}>
+                   {(location) => (
+-                    <text fg={themeV2.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
++                    <text fg={theme.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
+                       {location()}
+                     </text>
+                   )}
+@@ -1596,7 +1597,7 @@ export function Prompt(props: PromptProps) {
+                 wrapMode="none"
+                 truncate
+                 flexShrink={1}
+-                fg={editorContextLabelState() === "pending" ? themeV2.hue.accent[500] : themeV2.text.subdued}
++                fg={editorContextLabelState() === "pending" ? theme.hue.accent[500] : theme.text.subdued}
+               >
+                 {file()}
+               </text>
+@@ -1606,40 +1607,40 @@ export function Prompt(props: PromptProps) {
+             <Match when={store.mode === "normal"}>
+               <Switch>
+                 <Match when={liveWorkStatusVisible() || statusItems().length > 0}>
+-                  <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>
++                  <text fg={theme.text.subdued} wrapMode="none" truncate flexShrink={1}>
+                     <Show when={liveWorkStatusVisible() && liveWorkShortcut()}>
+-                      {(shortcut) => <span style={{ fg: themeV2.text.default }}>{shortcut()} </span>}
++                      {(shortcut) => <span style={{ fg: theme.text.default }}>{shortcut()} </span>}
+                     </Show>
+                     <Show when={subagentStatusLabel()}>
+-                      {(label) => <span style={{ fg: themeV2.text.subdued }}>{label()}</span>}
++                      {(label) => <span style={{ fg: theme.text.subdued }}>{label()}</span>}
+                     </Show>
+                     <Show when={subagentStatusLabel() && shellStatusLabel()}>
+-                      <span style={{ fg: themeV2.text.subdued }}> · </span>
++                      <span style={{ fg: theme.text.subdued }}> · </span>
+                     </Show>
+                     <Show when={shellStatusLabel()}>
+-                      {(label) => <span style={{ fg: themeV2.text.subdued }}>{label()}</span>}
++                      {(label) => <span style={{ fg: theme.text.subdued }}>{label()}</span>}
+                     </Show>
+                     <Show when={liveWorkStatusVisible() && statusItems().length > 0}>
+-                      <span style={{ fg: themeV2.text.subdued }}> · </span>
++                      <span style={{ fg: theme.text.subdued }}> · </span>
+                     </Show>
+                     <Show when={statusItems().length > 0}>
+-                      <span style={{ fg: themeV2.text.subdued }}>{statusItems().join(" · ")}</span>
++                      <span style={{ fg: theme.text.subdued }}>{statusItems().join(" · ")}</span>
+                     </Show>
+                   </text>
+                 </Match>
+                 <Match when={true}>
+-                  <text fg={themeV2.text.default} flexShrink={0}>
+-                    {agentShortcut()} <span style={{ fg: themeV2.text.subdued }}>agents</span>
++                  <text fg={theme.text.default} flexShrink={0}>
++                    {agentShortcut()} <span style={{ fg: theme.text.subdued }}>agents</span>
+                   </text>
+                 </Match>
+               </Switch>
+-              <text fg={themeV2.text.default} flexShrink={0}>
+-                {paletteShortcut()} <span style={{ fg: themeV2.text.subdued }}>commands</span>
++              <text fg={theme.text.default} flexShrink={0}>
++                {paletteShortcut()} <span style={{ fg: theme.text.subdued }}>commands</span>
+               </text>
+             </Match>
+             <Match when={store.mode === "shell"}>
+-              <text fg={themeV2.text.default} flexShrink={0}>
+-                esc <span style={{ fg: themeV2.text.subdued }}>exit shell mode</span>
++              <text fg={theme.text.default} flexShrink={0}>
++                esc <span style={{ fg: theme.text.subdued }}>exit shell mode</span>
+               </text>
+             </Match>
+           </Switch>
+diff --git a/packages/tui/src/component/reconnecting.tsx b/packages/tui/src/component/reconnecting.tsx
+index 927c42519c78..a61e319bd2b5 100644
+--- a/packages/tui/src/component/reconnecting.tsx
++++ b/packages/tui/src/component/reconnecting.tsx
+@@ -1,9 +1,9 @@
+ import { RGBA } from "@opentui/core"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { Spinner } from "./spinner"
+ 
+ export function Reconnecting() {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+ 
+   return (
+     <box
+@@ -21,15 +21,15 @@ export function Reconnecting() {
+         width={48}
+         maxWidth="90%"
+         flexDirection="column"
+-        backgroundColor={themeV2.background.default}
++        backgroundColor={theme.background.default}
+         paddingTop={1}
+         paddingBottom={1}
+         paddingLeft={2}
+         paddingRight={2}
+         gap={1}
+       >
+-        <Spinner color={themeV2.text.default}>Restarting service...</Spinner>
+-        <text fg={themeV2.text.subdued}>Your session will resume automatically.</text>
++        <Spinner color={theme.text.default}>Restarting service...</Spinner>
++        <text fg={theme.text.subdued}>Your session will resume automatically.</text>
+       </box>
+     </box>
+   )
+diff --git a/packages/tui/src/component/spinner.tsx b/packages/tui/src/component/spinner.tsx
+index 85469c488443..1cca2f4bcffd 100644
+--- a/packages/tui/src/component/spinner.tsx
++++ b/packages/tui/src/component/spinner.tsx
+@@ -11,9 +11,9 @@ export { SPINNER_FRAMES } from "./spinner-frames"
+ registerOpencodeSpinner()
+ 
+ export function Spinner(props: { children?: JSX.Element; color?: RGBA }) {
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+   const config = useConfig().data
+-  const color = () => props.color ?? themeV2.text.subdued
++  const color = () => props.color ?? theme.text.subdued
+   return (
+     <Show
+       when={config.animations ?? true}
+diff --git a/packages/tui/src/component/startup-loading.tsx b/packages/tui/src/component/startup-loading.tsx
+index 51fb16b88ce1..d340de17c1d1 100644
+--- a/packages/tui/src/component/startup-loading.tsx
++++ b/packages/tui/src/component/startup-loading.tsx
+@@ -1,9 +1,9 @@
+ import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { Spinner } from "./spinner"
+ 
+ export function StartupLoading(props: { ready: () => boolean }) {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+   const [show, setShow] = createSignal(false)
+   const text = createMemo(() => (props.ready() ? "Finishing startup..." : "Loading plugins..."))
+   let wait: NodeJS.Timeout | undefined
+@@ -54,8 +54,8 @@ export function StartupLoading(props: { ready: () => boolean }) {
+   return (
+     <Show when={show()}>
+       <box position="absolute" zIndex={5000} left={0} right={0} bottom={1} justifyContent="center" alignItems="center">
+-        <box backgroundColor={themeV2.background.default} paddingLeft={1} paddingRight={1}>
+-          <Spinner color={themeV2.text.subdued}>{text()}</Spinner>
++        <box backgroundColor={theme.background.default} paddingLeft={1} paddingRight={1}>
++          <Spinner color={theme.text.subdued}>{text()}</Spinner>
+         </box>
+       </box>
+     </Show>
+diff --git a/packages/tui/src/component/theme-error-toast.tsx b/packages/tui/src/component/theme-error-toast.tsx
+index f10a11bdc942..4daab0e547cb 100644
+--- a/packages/tui/src/component/theme-error-toast.tsx
++++ b/packages/tui/src/component/theme-error-toast.tsx
+@@ -1,13 +1,13 @@
+ import { onCleanup } from "solid-js"
+-import { useTheme } from "../context/theme"
++import { useThemes } from "../context/theme"
+ import { useToast } from "../ui/toast"
+ 
+ export function ThemeErrorToast() {
+-  const theme = useTheme()
++  const themes = useThemes()
+   const toast = useToast()
+ 
+   onCleanup(
+-    theme.onError(({ name, error }) =>
++    themes.onError(({ name, error }) =>
+       toast.show({
+         variant: "error",
+         title: `Failed to load theme: ${name}`,
+diff --git a/packages/tui/src/context/local.tsx b/packages/tui/src/context/local.tsx
+index 98faea2f9d0b..96b015193185 100644
+--- a/packages/tui/src/context/local.tsx
++++ b/packages/tui/src/context/local.tsx
+@@ -17,7 +17,7 @@ import {
+   type ModelPreference,
+   type ModelPreferenceModel,
+ } from "../model-preference"
+-import { useTheme } from "./theme"
++import { useTheme, useThemes } from "./theme"
+ import { useToast } from "../ui/toast"
+ import { useRoute } from "./route"
+ import { useData } from "./data"
+@@ -50,7 +50,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
+     const data = useData()
+     const client = useClient()
+     const toast = useToast()
+-    const { themeV2, mode } = useTheme()
++    const theme = useTheme()
++    const { mode } = useThemes()
+     const route = useRoute()
+     const paths = useTuiPaths()
+     const args = useArgs()
+@@ -82,7 +83,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
+       const colors = createMemo(() => {
+         const step = mode() === "light" ? 800 : 200
+         return dedupeWith(
+-          themeV2.categorical.map((scale) => scale[step]),
++          theme.categorical.map((scale) => scale[step]),
+           (first, second) => first.equals(second),
+         )
+       })
+diff --git a/packages/tui/src/context/theme.tsx b/packages/tui/src/context/theme.tsx
+index 699653a51a9c..a84826f36a4b 100644
+--- a/packages/tui/src/context/theme.tsx
++++ b/packages/tui/src/context/theme.tsx
+@@ -96,13 +96,13 @@ type State = {
+ }
+ 
+ type ContextName = "elevated" | "overlay"
+-type ThemeService = {
+-  themeV2: ComponentTheme
+-  contextual(context: ContextName): ThemeService
++type Themes = {
++  current: ComponentTheme
++  contextual(context: ContextName): ComponentTheme
+   readonly selected: string
+   all: typeof allThemes
+   has: typeof hasTheme
+-  syntax: Accessor<SyntaxStyle>
++  currentSyntax: Accessor<SyntaxStyle>
+   mode: Accessor<"dark" | "light">
+   modes: Accessor<readonly ("dark" | "light")[]>
+   supports(mode: "dark" | "light"): boolean
+@@ -308,7 +308,7 @@ const themeContext = createSimpleContext({
+     const valuesV2 = () => selected().theme
+     valuesV2()
+     themePerformance.set("Init", `${(performance.now() - initStarted).toFixed(2)} ms`)
+-    const themeV2 = createComponentTheme(valuesV2, mode)
++    const current = createComponentTheme(valuesV2, mode)
+     const contextsV2 = {
+       elevated: createComponentTheme(() => valuesV2().contexts["@context:elevated"] ?? valuesV2(), mode),
+       overlay: createComponentTheme(() => valuesV2().contexts["@context:overlay"] ?? valuesV2(), mode),
+@@ -316,19 +316,19 @@ const themeContext = createSimpleContext({
+ 
+     createEffect(() => renderer.setBackgroundColor(valuesV2().background.default))
+ 
+-    const syntax = createSyntaxStyleMemo(() => generateSyntax(valuesV2(), mode()))
++    const currentSyntax = createSyntaxStyleMemo(() => generateSyntax(valuesV2(), mode()))
+     function contextual(context: ContextName) {
+-      return contextualServices[context]
++      return contextsV2[context]
+     }
+-    const service: ThemeService = {
+-      themeV2,
++    const service: Themes = {
++      current,
++      currentSyntax,
+       contextual,
+       get selected() {
+         return store.active
+       },
+       all: allThemes,
+       has: hasTheme,
+-      syntax,
+       mode,
+       modes,
+       supports: (requested) => modes().includes(requested),
+@@ -355,21 +355,28 @@ const themeContext = createSimpleContext({
+         return store.ready
+       },
+     }
+-    const contextualServices = {
+-      elevated: Object.assign(Object.create(service) as ThemeService, { themeV2: contextsV2.elevated }),
+-      overlay: Object.assign(Object.create(service) as ThemeService, { themeV2: contextsV2.overlay }),
++    return {
++      current,
++      themes: service,
++      get ready() {
++        return service.ready
++      },
+     }
+-    return service
+   },
+ })
+ 
+-export const useTheme = themeContext.use
++export function useThemes() {
++  return themeContext.use().themes
++}
++export function useTheme() {
++  return themeContext.use().current
++}
+ export const ThemeProvider = themeContext.provider
+ 
+ export function ThemeContextProvider(props: ParentProps<{ context: ContextName }>) {
+-  const theme = useTheme()
++  const themes = useThemes()
+   return (
+-    <themeContext.context.Provider value={theme.contextual(props.context)}>
++    <themeContext.context.Provider value={{ current: themes.contextual(props.context), themes, ready: themes.ready }}>
+       {props.children}
+     </themeContext.context.Provider>
+   )
+diff --git a/packages/tui/src/plugin/context.tsx b/packages/tui/src/plugin/context.tsx
+index b4e37e6946b6..ad6c394ecffc 100644
+--- a/packages/tui/src/plugin/context.tsx
++++ b/packages/tui/src/plugin/context.tsx
+@@ -23,7 +23,7 @@ import { Keymap } from "../context/keymap"
+ import { useRoute } from "../context/route"
+ import { useTuiApp, useTuiLifecycle, useTuiPaths } from "../context/runtime"
+ import { useLocation } from "../context/location"
+-import { useTheme } from "../context/theme"
++import { useTheme, useThemes } from "../context/theme"
+ import { DialogAlert } from "../ui/dialog-alert"
+ import { DialogConfirm } from "../ui/dialog-confirm"
+ import { DialogPrompt } from "../ui/dialog-prompt"
+@@ -80,7 +80,8 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
+   const paths = useTuiPaths()
+   const location = useLocation()
+   const theme = useTheme()
+-  const pluginTheme = createPluginTheme(theme)
++  const themes = useThemes()
++  const pluginTheme = createPluginTheme(theme, themes)
+   const dialog = useDialog()
+   const toast = useToast()
+   const attention = useAttention()
+@@ -528,19 +529,20 @@ function isPlugin(value: unknown): value is Plugin.Definition {
+   )
+ }
+ 
+-type PluginTheme = ReturnType<typeof useTheme>["themeV2"] & {
++type PluginTheme = ReturnType<typeof useTheme> & {
+   contextual(context: "elevated" | "overlay"): PluginTheme
+-  syntaxStyle(): ReturnType<ReturnType<typeof useTheme>["syntax"]>
++  syntaxStyle(): ReturnType<ReturnType<typeof useThemes>["currentSyntax"]>
+ }
+ 
+-export function createPluginTheme(theme: ReturnType<typeof useTheme>): PluginTheme {
+-  return new Proxy(theme.themeV2 as PluginTheme, {
++export function createPluginTheme(theme: ReturnType<typeof useTheme>, themes: ReturnType<typeof useThemes>): PluginTheme {
++  return new Proxy(theme as PluginTheme, {
+     get(target, property, receiver) {
+-      if (property === "contextual")
+-        return (context: "elevated" | "overlay") => createPluginTheme(theme.contextual(context))
+-      if (property === "syntaxStyle") return theme.syntax
++      if (property === "contextual") {
++        return (context: "elevated" | "overlay") => createPluginTheme(themes.contextual(context), themes)
++      }
++      if (property === "syntaxStyle") return themes.currentSyntax
+       if (Reflect.has(target, property)) return Reflect.get(target, property, receiver)
+-      return Reflect.get(theme, property, theme)
++      return Reflect.get(themes, property, themes)
+     },
+   })
+ }
+diff --git a/packages/tui/src/routes/session/composer/index.tsx b/packages/tui/src/routes/session/composer/index.tsx
+index 4c53fe9043fb..3bc3b96d33cd 100644
+--- a/packages/tui/src/routes/session/composer/index.tsx
++++ b/packages/tui/src/routes/session/composer/index.tsx
+@@ -1,7 +1,7 @@
+ import { createEffect, createMemo, For, onCleanup, Show, useContext, createContext } from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { TextAttributes } from "@opentui/core"
+-import { useTheme } from "../../../context/theme"
++import { useThemes } from "../../../context/theme"
+ import { SplitBorder } from "../../../ui/border"
+ import { Keymap } from "../../../context/keymap"
+ import { SubagentsTab } from "./subagents-tab"
+@@ -39,7 +39,7 @@ export type ComposerProps = {
+ }
+ 
+ export function Composer(props: ComposerProps) {
+-  const { themeV2 } = useTheme().contextual("elevated")
++  const theme = useThemes().contextual("elevated")
+ 
+   const [store, setStore] = createStore({
+     tabs: {} as Record<string, Tab>,
+@@ -113,8 +113,8 @@ export function Composer(props: ComposerProps) {
+         <box
+           {...SplitBorder}
+           border={["left"]}
+-          borderColor={themeV2.border.default}
+-          backgroundColor={themeV2.background.default}
++          borderColor={theme.border.default}
++          backgroundColor={theme.background.default}
+           paddingLeft={1}
+           paddingRight={2}
+           paddingTop={1}
+@@ -125,7 +125,7 @@ export function Composer(props: ComposerProps) {
+               <Show
+                 when={tabList().length > 1}
+                 fallback={
+-                  <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
++                  <text fg={theme.text.default} attributes={TextAttributes.BOLD}>
+                     {tabList()[0]?.label ?? ""}
+                   </text>
+                 }
+@@ -136,7 +136,7 @@ export function Composer(props: ComposerProps) {
+                       const isActive = createMemo(() => store.active === t.id)
+                       return (
+                         <text
+-                          fg={isActive() ? themeV2.text.default : themeV2.text.subdued}
++                          fg={isActive() ? theme.text.default : theme.text.subdued}
+                           attributes={isActive() ? TextAttributes.BOLD : undefined}
+                         >
+                           {t.label}
+@@ -146,7 +146,7 @@ export function Composer(props: ComposerProps) {
+                   </For>
+                 </box>
+               </Show>
+-              <text fg={themeV2.text.subdued} onMouseUp={close}>
++              <text fg={theme.text.subdued} onMouseUp={close}>
+                 esc
+               </text>
+             </box>
+@@ -156,19 +156,19 @@ export function Composer(props: ComposerProps) {
+               <For each={footerHints()}>
+                 {(hint) => (
+                   <text>
+-                    <span style={{ fg: themeV2.text.default }}>
++                    <span style={{ fg: theme.text.default }}>
+                       <b>{hint.label}</b>{" "}
+                     </span>
+-                    <span style={{ fg: themeV2.text.subdued }}>{hint.shortcut}</span>
++                    <span style={{ fg: theme.text.subdued }}>{hint.shortcut}</span>
+                   </text>
+                 )}
+               </For>
+               <Show when={tabList().length > 1}>
+                 <text>
+-                  <span style={{ fg: themeV2.text.default }}>
++                  <span style={{ fg: theme.text.default }}>
+                     <b>tabs</b>{" "}
+                   </span>
+-                  <span style={{ fg: themeV2.text.subdued }}>←/→</span>
++                  <span style={{ fg: theme.text.subdued }}>←/→</span>
+                 </text>
+               </Show>
+             </box>
+diff --git a/packages/tui/src/routes/session/composer/shell-tab.tsx b/packages/tui/src/routes/session/composer/shell-tab.tsx
+index b945292de916..6759852bf72b 100644
+--- a/packages/tui/src/routes/session/composer/shell-tab.tsx
++++ b/packages/tui/src/routes/session/composer/shell-tab.tsx
+@@ -12,7 +12,7 @@ export function ShellTab(props: { sessionID: string }) {
+   const data = useData()
+   const location = useLocation()
+   const client = useClient()
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+   const composer = useComposerTab()
+   const shortcuts = Keymap.useShortcuts()
+ 
+@@ -98,7 +98,7 @@ export function ShellTab(props: { sessionID: string }) {
+   return (
+     <Show when={composer.active("shell")}>
+       <scrollbox scrollbarOptions={{ visible: false }} maxHeight={5} ref={(r: ScrollBoxRenderable) => (scroll = r)}>
+-        <Show when={entries().length > 0} fallback={<text fg={themeV2.text.subdued}> No shell commands</text>}>
++        <Show when={entries().length > 0} fallback={<text fg={theme.text.subdued}> No shell commands</text>}>
+           <For each={entries()}>
+             {(shell, index) => {
+               const active = createMemo(() => index() === store.selected)
+@@ -108,12 +108,12 @@ export function ShellTab(props: { sessionID: string }) {
+                   paddingLeft={1}
+                   paddingRight={1}
+                   backgroundColor={
+-                    active() ? themeV2.background.action.primary.focused : themeV2.background.action.primary.default
++                    active() ? theme.background.action.primary.focused : theme.background.action.primary.default
+                   }
+                   onMouseOver={() => setStore("selected", index())}
+                 >
+                   <text
+-                    fg={active() ? themeV2.text.action.primary.focused : themeV2.text.action.primary.default}
++                    fg={active() ? theme.text.action.primary.focused : theme.text.action.primary.default}
+                     attributes={active() ? TextAttributes.BOLD : undefined}
+                     wrapMode="none"
+                   >
+diff --git a/packages/tui/src/routes/session/composer/subagents-tab.tsx b/packages/tui/src/routes/session/composer/subagents-tab.tsx
+index 8a44b9f9ee33..0db07477ec43 100644
+--- a/packages/tui/src/routes/session/composer/subagents-tab.tsx
++++ b/packages/tui/src/routes/session/composer/subagents-tab.tsx
+@@ -21,7 +21,7 @@ export function SubagentsTab(props: { sessionID: string }) {
+   const route = useRouteData("session")
+   const data = useData()
+   const client = useClient()
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+   const navigate = useRoute().navigate
+   const composer = useComposerTab()
+   const shortcuts = Keymap.useShortcuts()
+@@ -206,7 +206,7 @@ export function SubagentsTab(props: { sessionID: string }) {
+   return (
+     <Show when={composer.active("subagents")}>
+       <scrollbox scrollbarOptions={{ visible: false }} maxHeight={5} ref={(r: ScrollBoxRenderable) => (scroll = r)}>
+-        <Show when={entries().length > 0} fallback={<text fg={themeV2.text.subdued}> No subagents</text>}>
++        <Show when={entries().length > 0} fallback={<text fg={theme.text.subdued}> No subagents</text>}>
+           <For each={entries()}>
+             {(entry, index) => {
+               const active = createMemo(() => index() === selected())
+@@ -221,10 +221,10 @@ export function SubagentsTab(props: { sessionID: string }) {
+                   paddingRight={1}
+                   backgroundColor={
+                     active()
+-                      ? themeV2.background.action.primary.focused
++                      ? theme.background.action.primary.focused
+                       : entry.current
+-                        ? themeV2.background.action.primary.selected
+-                        : themeV2.background.action.primary.default
++                        ? theme.background.action.primary.selected
++                        : theme.background.action.primary.default
+                   }
+                   onMouseOver={() => setStore("selected", index())}
+                   onMouseUp={() => {
+@@ -236,10 +236,10 @@ export function SubagentsTab(props: { sessionID: string }) {
+                     <text
+                       fg={
+                         active()
+-                          ? themeV2.text.action.primary.focused
++                          ? theme.text.action.primary.focused
+                           : entry.current
+-                            ? themeV2.text.action.primary.selected
+-                            : themeV2.text.action.primary.default
++                            ? theme.text.action.primary.selected
++                            : theme.text.action.primary.default
+                       }
+                       attributes={active() ? TextAttributes.BOLD : undefined}
+                       wrapMode="none"
+@@ -248,7 +248,7 @@ export function SubagentsTab(props: { sessionID: string }) {
+                     </text>
+                   </box>
+                   <Show when={status()}>
+-                    <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
++                    <text fg={active() ? theme.text.action.primary.focused : theme.text.subdued} wrapMode="none">
+                       {status()}
+                     </text>
+                   </Show>
+diff --git a/packages/tui/src/routes/session/footer.tsx b/packages/tui/src/routes/session/footer.tsx
+index 401db265c9ef..e58e66f2a085 100644
+--- a/packages/tui/src/routes/session/footer.tsx
++++ b/packages/tui/src/routes/session/footer.tsx
+@@ -8,7 +8,7 @@ import { useRoute } from "../../context/route"
+ import { usePermission } from "../../context/permission"
+ 
+ export function Footer() {
+-  const { themeV2 } = useTheme()
++  const theme = useTheme()
+   const data = useData()
+   const route = useRoute()
+   const permission = usePermission()
+@@ -54,35 +54,35 @@ export function Footer() {
+ 
+   return (
+     <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0}>
+-      <text fg={themeV2.text.subdued}>{directory()}</text>
++      <text fg={theme.text.subdued}>{directory()}</text>
+       <box gap={2} flexDirection="row" flexShrink={0}>
+         <Switch>
+           <Match when={store.welcome}>
+-            <text fg={themeV2.text.default}>
+-              Get started <span style={{ fg: themeV2.text.subdued }}>/connect</span>
++            <text fg={theme.text.default}>
++              Get started <span style={{ fg: theme.text.subdued }}>/connect</span>
+             </text>
+           </Match>
+           <Match when={connected()}>
+             <Show when={permission.mode !== "auto" && permissions().length > 0}>
+-              <text fg={themeV2.text.feedback.warning.default}>
+-                <span style={{ fg: themeV2.text.feedback.warning.default }}>△</span> {permissions().length} Permission
++              <text fg={theme.text.feedback.warning.default}>
++                <span style={{ fg: theme.text.feedback.warning.default }}>△</span> {permissions().length} Permission
+                 {permissions().length > 1 ? "s" : ""}
+               </text>
+             </Show>
+             <Show when={mcp()}>
+-              <text fg={themeV2.text.default}>
++              <text fg={theme.text.default}>
+                 <Switch>
+                   <Match when={mcpError()}>
+-                    <span style={{ fg: themeV2.text.feedback.error.default }}>⊙ </span>
++                    <span style={{ fg: theme.text.feedback.error.default }}>⊙ </span>
+                   </Match>
+                   <Match when={true}>
+-                    <span style={{ fg: themeV2.text.feedback.success.default }}>⊙ </span>
++                    <span style={{ fg: theme.text.feedback.success.default }}>⊙ </span>
+                   </Match>
+                 </Switch>
+                 {mcp()} MCP
+               </text>
+             </Show>
+-            <text fg={themeV2.text.subdued}>/status</text>
++            <text fg={theme.text.subdued}>/status</text>
+           </Match>
+         </Switch>
+       </box>
+diff --git a/packages/tui/src/routes/session/form.tsx b/packages/tui/src/routes/session/form.tsx
+index 5cad287f612f..976fca482464 100644
+--- a/packages/tui/src/routes/session/form.tsx
++++ b/packages/tui/src/routes/session/form.tsx
+@@ -3,7 +3,7 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-j
+ import { useRenderer, useTerminalDimensions } from "@opentui/solid"
+ import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
+ import open from "open"
+-import { useTheme } from "../../context/theme"
++import { useThemes } from "../../context/theme"
+ import type { FormField, FormValue } from "@opencode-ai/client"
+ import type { FormWithLocation } from "../../context/data"
+ import { useClient } from "../../context/client"
+@@ -44,7 +44,9 @@ function requestOptions(form: FormWithLocation) {
+ 
+ export function FormPrompt(props: { form: FormWithLocation }) {
+   const client = useClient()
+-  const { themeV2, mode: themeMode } = useTheme().contextual("elevated")
++  const themes = useThemes()
++  const theme = themes.contextual("elevated")
++  const themeMode = themes.mode
+   const renderer = useRenderer()
+   const dimensions = useTerminalDimensions()
+   const keymap = Keymap.use()
+@@ -624,27 +626,27 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+ 
+   return (
+     <box
+-      backgroundColor={themeV2.background.default}
++      backgroundColor={theme.background.default}
+       border={["left"]}
+-      borderColor={themeV2.hue.interactive[themeMode() === "light" ? 800 : 200]}
++      borderColor={theme.hue.interactive[themeMode() === "light" ? 800 : 200]}
+       customBorderChars={SplitBorder.customBorderChars}
+     >
+       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+         <box paddingLeft={1}>
+-          <text fg={themeV2.text.subdued}>{props.form.title}</text>
++          <text fg={theme.text.subdued}>{props.form.title}</text>
+         </box>
+         <Show when={message()}>
+           <box paddingLeft={1}>
+-            <text fg={themeV2.text.default}>{message()}</text>
++            <text fg={theme.text.default}>{message()}</text>
+           </box>
+         </Show>
+         <Show when={!single() && !tabbed()}>
+           <box flexDirection="row" gap={1} paddingLeft={1}>
+-            <text fg={themeV2.text.subdued}>
++            <text fg={theme.text.subdued}>
+               {confirm() ? "Review" : `Field ${Math.min(store.tab, fields().length - 1) + 1} of ${fields().length}`}
+             </text>
+             <Show when={fields().length > 0}>
+-              <text fg={themeV2.text.subdued}>
++              <text fg={theme.text.subdued}>
+                 · {answered()}/{fields().length} completed
+               </text>
+             </Show>
+@@ -661,10 +663,10 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                     paddingRight={2}
+                     backgroundColor={
+                       isTab()
+-                        ? themeV2.background.formfield.selected
++                        ? theme.background.formfield.selected
+                         : tabHover() === index()
+-                          ? themeV2.background.formfield.focused
+-                          : themeV2.background.default
++                          ? theme.background.formfield.focused
++                          : theme.background.default
+                     }
+                     onMouseOver={() => setTabHover(index())}
+                     onMouseOut={() => setTabHover(null)}
+@@ -676,12 +678,12 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                     <text
+                       fg={
+                         isTab()
+-                          ? themeV2.text.formfield.selected
++                          ? theme.text.formfield.selected
+                           : tabHover() === index()
+-                            ? themeV2.text.formfield.focused
++                            ? theme.text.formfield.focused
+                             : isAnswered()
+-                              ? themeV2.text.default
+-                              : themeV2.text.subdued
++                              ? theme.text.default
++                              : theme.text.subdued
+                       }
+                     >
+                       {truncate(formLabel(item), 24)}
+@@ -693,10 +695,10 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+             <box
+               backgroundColor={
+                 confirm()
+-                  ? themeV2.background.formfield.selected
++                  ? theme.background.formfield.selected
+                   : tabHover() === "confirm"
+-                    ? themeV2.background.formfield.focused
+-                    : themeV2.background.default
++                    ? theme.background.formfield.focused
++                    : theme.background.default
+               }
+               onMouseOver={() => setTabHover("confirm")}
+               onMouseOut={() => setTabHover(null)}
+@@ -705,7 +707,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                 selectTabFromMouse()
+               }}
+             >
+-              <text fg={confirm() ? themeV2.text.formfield.selected : themeV2.text.formfield.default}>Confirm</text>
++              <text fg={confirm() ? theme.text.formfield.selected : theme.text.formfield.default}>Confirm</text>
+             </box>
+           </box>
+         </Show>
+@@ -714,13 +716,13 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+           {(external) => (
+             <box paddingLeft={1} gap={1}>
+               <Show when={external().title}>
+-                <text fg={themeV2.text.default}>{external().title}</text>
++                <text fg={theme.text.default}>{external().title}</text>
+               </Show>
+               <Show when={external().description}>
+-                <text fg={themeV2.text.subdued}>{external().description}</text>
++                <text fg={theme.text.subdued}>{external().description}</text>
+               </Show>
+               <text
+-                fg={themeV2.background.action.primary.default}
++                fg={theme.background.action.primary.default}
+                 onMouseUp={() => {
+                   if (renderer.getSelection()?.getSelectedText()) return
+                   openExternal()
+@@ -729,9 +731,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                 {external().url}
+               </text>
+               <text
+-                fg={
+-                  store.answers[external().key] === true ? themeV2.text.feedback.success.default : themeV2.text.subdued
+-                }
++                fg={store.answers[external().key] === true ? theme.text.feedback.success.default : theme.text.subdued}
+               >
+                 {store.answers[external().key] === true
+                   ? "✓ Acknowledged"
+@@ -746,7 +746,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+         <Show when={!confirm() && answerField()}>
+           <box paddingLeft={1} gap={1}>
+             <box>
+-              <text fg={themeV2.text.default}>{answerField()!.description ?? formLabel(answerField()!)}</text>
++              <text fg={theme.text.default}>{answerField()!.description ?? formLabel(answerField()!)}</text>
+             </box>
+             <Show when={textual() ? answerField()!.key : undefined} keyed>
+               <box paddingLeft={1}>
+@@ -763,12 +763,12 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                     input() || formDisplayValue(answerField()!, store.answers[answerField()!.key], "(none)")
+                   }
+                   placeholder={placeholder()}
+-                  placeholderColor={themeV2.text.subdued}
++                  placeholderColor={theme.text.subdued}
+                   minHeight={1}
+                   maxHeight={6}
+-                  textColor={themeV2.text.default}
+-                  focusedTextColor={themeV2.text.default}
+-                  cursorColor={themeV2.text.default}
++                  textColor={theme.text.default}
++                  focusedTextColor={theme.text.default}
++                  cursorColor={theme.text.default}
+                 />
+               </box>
+             </Show>
+@@ -793,39 +793,35 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                       >
+                         <box flexDirection="row">
+                           <box
+-                            backgroundColor={
+-                              active() ? themeV2.background.formfield.focused : themeV2.background.default
+-                            }
++                            backgroundColor={active() ? theme.background.formfield.focused : theme.background.default}
+                             paddingRight={1}
+                           >
+                             <text
+-                              fg={active() ? themeV2.text.formfield.focused : themeV2.text.formfield.default}
++                              fg={active() ? theme.text.formfield.focused : theme.text.formfield.default}
+                             >{`${i() + 1}.`}</text>
+                           </box>
+                           <box
+-                            backgroundColor={
+-                              active() ? themeV2.background.formfield.focused : themeV2.background.default
+-                            }
++                            backgroundColor={active() ? theme.background.formfield.focused : theme.background.default}
+                           >
+                             <text
+                               fg={
+                                 active()
+-                                  ? themeV2.text.formfield.focused
++                                  ? theme.text.formfield.focused
+                                   : picked()
+-                                    ? themeV2.text.formfield.selected
+-                                    : themeV2.text.formfield.default
++                                    ? theme.text.formfield.selected
++                                    : theme.text.formfield.default
+                               }
+                             >
+                               {multi() ? `[${picked() ? "✓" : " "}] ${row.label}` : row.label}
+                             </text>
+                           </box>
+                           <Show when={!multi()}>
+-                            <text fg={themeV2.text.formfield.selected}>{picked() ? " ✓" : ""}</text>
++                            <text fg={theme.text.formfield.selected}>{picked() ? " ✓" : ""}</text>
+                           </Show>
+                         </box>
+                         <Show when={row.description}>
+                           <box paddingLeft={3}>
+-                            <text fg={themeV2.text.subdued}>{row.description}</text>
++                            <text fg={theme.text.subdued}>{row.description}</text>
+                           </box>
+                         </Show>
+                       </box>
+@@ -843,30 +839,28 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                   >
+                     <box flexDirection="row">
+                       <box
+-      

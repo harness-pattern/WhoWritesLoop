@@ -1,0 +1,744 @@
+diff --git a/docs/design/otel-session-lifecycle-design.md b/docs/design/otel-session-lifecycle-design.md
+new file mode 100644
+index 00000000000..0ed665e5233
+--- /dev/null
++++ b/docs/design/otel-session-lifecycle-design.md
+@@ -0,0 +1,100 @@
++# OpenTelemetry Session Lifecycle
++
++## Status
++
++Implemented in issue #8589.
++
++## Scope
++
++Qwen Code already records the application session ID as `session.id` and maps
++it to `gen_ai.conversation.id` on GenAI LLM and agent spans. This design adds
++the OpenTelemetry General Session lifecycle events without removing the
++existing Qwen-specific telemetry fields or event names.
++
++The implementation follows the Development-status General Session semantic
++conventions at:
++
++<https://opentelemetry.io/docs/specs/semconv/general/session/>
++
++The GenAI conversation mapping follows:
++
++<https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md>
++
++## Event representation
++
++The standard lifecycle events are emitted as OpenTelemetry LogRecords with
++the required `event.name` attribute:
++
++| Event           | Required attributes | Emission point                                           |
++| --------------- | ------------------- | -------------------------------------------------------- |
++| `session.start` | `session.id`        | Initial `Config` initialization and every session switch |
++| `session.end`   | `session.id`        | Session switch and telemetry shutdown                    |
++
++The existing `qwen-code.config` / `cli_config` and RUM `session_start` events
++remain unchanged for backward compatibility. The standard records are
++additive and are emitted through the configured OpenTelemetry logs pipeline.
++
++## Session continuation
++
++`Config.startNewSession()` is used for both replacing the current conversation
++(`/clear`, `/new`) and resuming a persisted conversation. A persisted
++`sessionData` argument identifies the latter continuation case. On a
++continuation, the new `session.start` record includes
++`session.previous_id`; replacement sessions do not claim continuation.
++
++The outgoing session is ended before the new session starts. Resuming the
++session the user is already in (same `session.id`) records no lifecycle
++transition at all. Telemetry shutdown ends the currently active session
++before shutting down the SDK.
++
++## Session id reuse on `/resume`
++
++Qwen Code's session model predates this design: `/resume` restores a
++persisted conversation under its original session id instead of minting a new
++one. Two consequences follow for the lifecycle stream:
++
++- A resumed id can carry more than one disjoint
++  `session.start`/`session.end` window within a single process (for example:
++  start `A`, `/clear` to `B`, then `/resume` back to `A`).
++- `session.previous_id` points from the resumed id to the session that was
++  active at resume time. That session may have been created _after_ the
++  resumed id, so lineage edges can point backwards in time and can form
++  cycles.
++
++This is the reverse of the OTel General Session convention's id-rotation
++model, in which a freshly minted id points back at the retired one. Backends
++counting sessions or computing durations should key on
++(`session.id`, `session.start` timestamp) windows rather than `session.id`
++alone. Whether `/resume` should mint a new id instead is a session-model
++decision outside this design.
++
++## Known limitations (daemon / ACP)
++
++Daemon-spawned ACP sessions build a fresh `Config` per session
++(`loadCliConfig()`) and never flow through `Config.startNewSession()`, so in
++that path today:
++
++- a conversation session receives `session.start` from its `Config`
++  initialization but no `session.end` when the session is later switched or
++  disposed, and
++- process shutdown ends the session id last recorded in the telemetry session
++  context — in an ACP child that is the boot-time session, not the
++  conversation session.
++
++A single ACP child can also host several concurrent sessions, which the
++single process-level "current session" tracked by the context cannot
++represent. Closing this gap requires lifecycle design for multi-session
++processes and is deferred to a follow-up.
++
++## Compatibility and safety
++
++- `session.id` remains on existing spans and logs.
++- `gen_ai.conversation.id` remains the session correlation field for GenAI
++  spans.
++- `session.previous_id` is emitted only when the application has an explicit
++  persisted continuation, and it is never equal to the new `session.id`.
++- Cold-start resumptions (`--resume`, `--continue`, `--fork-session`) do not
++  carry `session.previous_id`; startup lineage, including the fork source, is
++  left to a follow-up.
++- Session event emission is best-effort through the existing OTel logger and
++  does not block session switching or shutdown.
+diff --git a/docs/developers/development/telemetry.md b/docs/developers/development/telemetry.md
+index a88a2347bd3..b15146fcaed 100644
+--- a/docs/developers/development/telemetry.md
++++ b/docs/developers/development/telemetry.md
+@@ -562,6 +562,12 @@ The following events are logged:
+ - `qwen-code.config`: Emitted once at startup with CLI configuration.
+   - **Attributes**: `model`, `sandbox_enabled`, `core_tools_enabled`, `approval_mode`, `file_filtering_respect_git_ignore`, `debug_mode`, `truncate_tool_output_threshold`, `truncate_tool_output_lines`, `hooks` (comma-separated, omitted if disabled), `ide_enabled`, `interactive_shell_enabled`, `mcp_servers`, `mcp_servers_count`, `mcp_tools`, `mcp_tools_count`, `output_format`, `skills`, `subagents`
+ 
++- `session.start`: A session begins. Emitted after telemetry initialization at startup and again on every session switch; lifecycle semantics are described in the Spans section.
++  - **Attributes**: `session.id` (string), `session.previous_id` (string, present only when this start continues a persisted conversation under a new session id)
++
++- `session.end`: A session ends. Emitted before a session switch replaces the current session, and at telemetry shutdown.
++  - **Attributes**: `session.id` (string)
++
+ - `qwen-code.user_prompt`: User submits a prompt.
+   - **Attributes**: `prompt_length` (int), `prompt_id` (string), `prompt` (string, excluded if `log_prompts_enabled` is false), `auth_type` (string)
+ 
+@@ -858,6 +864,20 @@ The daemon process (long-running HTTP server mode) exposes its own metrics.
+ 
+ Distributed tracing spans form a tree rooted at `qwen-code.interaction`. Each interaction is a trace root with its own `traceId`; cross-prompt correlation uses the `session.id` attribute.
+ 
++Session lifecycle is also exported through the OpenTelemetry General Session
++semantic conventions. When the OTel logs pipeline is enabled, Qwen Code emits
++`session.start` and `session.end` log events with the required `session.id`
++attribute (cataloged under Core Session Events above). A resumed persisted
++conversation includes `session.previous_id` on its `session.start` event only
++when the resumed session id differs from the current one; cold-start
++resumptions (`--resume`, `--continue`, `--fork-session`) do not carry it.
++`/clear` and other replacement flows intentionally do not claim continuation
++because they discard the previous conversation.
++
++The existing Qwen-specific `qwen-code.config`/`cli_config` and RUM
++`session_start` records remain available for compatibility. GenAI request
++spans continue to use `gen_ai.conversation.id` for the same owning session ID.
++
+ - `qwen-code.interaction`: Root span for each user prompt turn.
+   - **Attributes**: `session.id`, optional ARMS extension `gen_ai.user.id`, `qwen-code.prompt_id`, `qwen-code.message_type`, `qwen-code.model`, `qwen-code.approval_mode`, `interaction.sequence`, `interaction.duration_ms`, `qwen-code.turn_status` ("ok"/"error"/"cancelled")
+ 
+diff --git a/packages/core/src/config/config-session-env.test.ts b/packages/core/src/config/config-session-env.test.ts
+index 18c11d4fd44..3ce16ef91f8 100644
+--- a/packages/core/src/config/config-session-env.test.ts
++++ b/packages/core/src/config/config-session-env.test.ts
+@@ -35,6 +35,7 @@ vi.mock('../telemetry/index.js', () => ({
+   isTelemetrySdkInitialized: vi.fn().mockReturnValue(false),
+   shutdownTelemetry: vi.fn().mockResolvedValue(undefined),
+   refreshSessionContext: vi.fn(),
++  logSessionEnd: vi.fn(),
+ }));
+ vi.mock('../core/contentGenerator.js', () => ({
+   resolveContentGeneratorConfigWithSources: vi.fn().mockReturnValue({
+diff --git a/packages/core/src/config/config.test.ts b/packages/core/src/config/config.test.ts
+index 445c7e0491f..38710b2d028 100644
+--- a/packages/core/src/config/config.test.ts
++++ b/packages/core/src/config/config.test.ts
+@@ -33,6 +33,8 @@ import {
+   isTelemetrySdkInitialized,
+   shutdownTelemetry,
+   refreshSessionContext,
++  logStartSession,
++  logSessionEnd,
+ } from '../telemetry/index.js';
+ import type {
+   ContentGenerator,
+@@ -326,6 +328,8 @@ vi.mock('../telemetry/loggers.js', async (importOriginal) => {
+   return {
+     ...actual,
+     logRipgrepFallback: vi.fn(),
++    logStartSession: vi.fn(actual.logStartSession),
++    logSessionEnd: vi.fn(actual.logSessionEnd),
+   };
+ });
+ 
+@@ -2232,6 +2236,84 @@ describe('Server Config (config.ts)', () => {
+   });
+ 
+   describe('startNewSession', () => {
++    it('records no lifecycle transition when resuming the current session id', async () => {
++      const sessionId = 'same-session-id';
++      const config = new Config({ ...baseParams, sessionId });
++      await config.initialize({
++        skipGeminiInitialization: true,
++        skipHooks: true,
++        skipMcpDiscovery: true,
++        skipSkillManager: true,
++        skipFileCheckpointing: true,
++      });
++      vi.mocked(logSessionEnd).mockClear();
++      vi.mocked(logStartSession).mockClear();
++
++      config.startNewSession(sessionId, {
++        conversation: { messages: [] },
++      } as unknown as ResumedSessionData);
++
++      expect(logSessionEnd).not.toHaveBeenCalled();
++      expect(logStartSession).toHaveBeenCalledWith(
++        config,
++        expect.anything(),
++        undefined,
++      );
++    });
++
++    it('ends the outgoing session before starting a replacement without continuation', async () => {
++      const config = new Config({ ...baseParams });
++      await config.initialize({
++        skipGeminiInitialization: true,
++        skipHooks: true,
++        skipMcpDiscovery: true,
++        skipSkillManager: true,
++        skipFileCheckpointing: true,
++      });
++      const outgoingSessionId = config.getSessionId();
++      const endedSessionIds: string[] = [];
++      vi.mocked(logSessionEnd).mockClear();
++      vi.mocked(logStartSession).mockClear();
++      vi.mocked(logSessionEnd).mockImplementationOnce((cfg: Config) => {
++        endedSessionIds.push(cfg.getSessionId());
++      });
++
++      config.startNewSession('replacement-session');
++
++      expect(endedSessionIds).toEqual([outgoingSessionId]);
++      expect(logStartSession).toHaveBeenCalledWith(
++        config,
++        expect.anything(),
++        undefined,
++      );
++      expect(vi.mocked(logSessionEnd).mock.invocationCallOrder[0]).toBeLessThan(
++        vi.mocked(logStartSession).mock.invocationCallOrder[0],
++      );
++    });
++
++    it('carries the outgoing session id when resuming a different persisted session', async () => {
++      const config = new Config({ ...baseParams });
++      await config.initialize({
++        skipGeminiInitialization: true,
++        skipHooks: true,
++        skipMcpDiscovery: true,
++        skipSkillManager: true,
++        skipFileCheckpointing: true,
++      });
++      const outgoingSessionId = config.getSessionId();
++      vi.mocked(logStartSession).mockClear();
++
++      config.startNewSession('resumed-session-id', {
++        conversation: { messages: [] },
++      } as unknown as ResumedSessionData);
++
++      expect(logStartSession).toHaveBeenCalledWith(
++        config,
++        expect.anything(),
++        outgoingSessionId,
++      );
++    });
++
+     it('rejects a session switch while the current recorder owns the writer lease', () => {
+       const config = new Config({ ...baseParams, chatRecording: true });
+       const originalSessionId = config.getSessionId();
+@@ -2248,6 +2330,9 @@ describe('Server Config (config.ts)', () => {
+         }
+       ).chatRecordingService = recorder;
+ 
++      vi.mocked(logSessionEnd).mockClear();
++      vi.mocked(logStartSession).mockClear();
++
+       expect(() => config.startNewSession('replacement-session')).toThrow(
+         expect.objectContaining({
+           name: 'SessionWriterUnavailableError',
+@@ -2258,6 +2343,9 @@ describe('Server Config (config.ts)', () => {
+       expect(config.getChatRecordingService()).toBe(recorder);
+       expect(finalize).not.toHaveBeenCalled();
+       expect(flush).not.toHaveBeenCalled();
++      // A rejected switch must leave the live session's lifecycle untouched.
++      expect(logSessionEnd).not.toHaveBeenCalled();
++      expect(logStartSession).not.toHaveBeenCalled();
+     });
+ 
+     const resumedGoalSession = (
+diff --git a/packages/core/src/config/config.ts b/packages/core/src/config/config.ts
+index 3c024bc4f8b..30e0ce70342 100644
+--- a/packages/core/src/config/config.ts
++++ b/packages/core/src/config/config.ts
+@@ -129,6 +129,7 @@ import {
+   shutdownTelemetry,
+   refreshSessionContext,
+   logStartSession,
++  logSessionEnd,
+   logRipgrepFallback,
+   RipgrepFallbackEvent,
+   StartSessionEvent,
+@@ -3797,7 +3798,15 @@ export class Config {
+     });
+ 
+     const previousSessionId = this.sessionId;
+-    this.sessionId = sessionId ?? randomUUID();
++    const nextSessionId = sessionId ?? randomUUID();
++    // Resuming the session the user is already in keeps the same id. That is
++    // not a lifecycle transition: ending it here would record session.end for
++    // a live session and pair it with a duplicate session.start.
++    const isSessionTransition = nextSessionId !== previousSessionId;
++    if (isSessionTransition) {
++      logSessionEnd(this);
++    }
++    this.sessionId = nextSessionId;
+     // Unconditional: startNewSession is only called on the canonical Config
+     // instance (the one that already claimed via sessionEnvClaimed), so this
+     // correctly updates the env var to reflect the new active session.
+@@ -3843,7 +3852,11 @@ export class Config {
+     // one, and the "N-shotted" PR label would span sessions.
+     CommitAttributionService.resetInstance();
+     if (this.initialized) {
+-      logStartSession(this, new StartSessionEvent(this));
++      logStartSession(
++        this,
++        new StartSessionEvent(this),
++        sessionData && isSessionTransition ? previousSessionId : undefined,
++      );
+     }
+ 
+     // Refresh the runtime.json sidecar so external observers (terminal
+@@ -3859,7 +3872,7 @@ export class Config {
+     // sidecar that happens to share the outgoing session id
+     // mirrors the kimi-cli "write only when a session is
+     // established for this process" rule.
+-    if (this.runtimeStatusEnabled && previousSessionId !== this.sessionId) {
++    if (this.runtimeStatusEnabled && isSessionTransition) {
+       const oldPath = this.storage.getRuntimeStatusPath(previousSessionId);
+       const newPath = this.storage.getRuntimeStatusPath(this.sessionId);
+       const cliVersion = this.cliVersion ?? null;
+diff --git a/packages/core/src/telemetry/constants.ts b/packages/core/src/telemetry/constants.ts
+index 44d69d2004c..6e0ab72d3af 100644
+--- a/packages/core/src/telemetry/constants.ts
++++ b/packages/core/src/telemetry/constants.ts
+@@ -16,6 +16,8 @@ export const EVENT_API_ERROR = 'qwen-code.api_error';
+ export const EVENT_API_CANCEL = 'qwen-code.api_cancel';
+ export const EVENT_API_RESPONSE = 'qwen-code.api_response';
+ export const EVENT_CLI_CONFIG = 'qwen-code.config';
++export const EVENT_SESSION_START = 'session.start';
++export const EVENT_SESSION_END = 'session.end';
+ export const EVENT_EXTENSION_DISABLE = 'qwen-code.extension_disable';
+ export const EVENT_EXTENSION_ENABLE = 'qwen-code.extension_enable';
+ export const EVENT_EXTENSION_INSTALL = 'qwen-code.extension_install';
+diff --git a/packages/core/src/telemetry/index.ts b/packages/core/src/telemetry/index.ts
+index b49e6dd3f49..4534348bb94 100644
+--- a/packages/core/src/telemetry/index.ts
++++ b/packages/core/src/telemetry/index.ts
+@@ -32,6 +32,7 @@ export {
+ } from './config.js';
+ export {
+   logStartSession,
++  logSessionEnd,
+   logUserPrompt,
+   logUserRetry,
+   logToolCall,
+diff --git a/packages/core/src/telemetry/loggers.test.ts b/packages/core/src/telemetry/loggers.test.ts
+index 146b7192f91..ab98bedba9a 100644
+--- a/packages/core/src/telemetry/loggers.test.ts
++++ b/packages/core/src/telemetry/loggers.test.ts
+@@ -35,6 +35,8 @@ import {
+   EVENT_FILE_OPERATION,
+   EVENT_RIPGREP_FALLBACK,
+   EVENT_RIPGREP_RUNTIME_RECOVERY,
++  EVENT_SESSION_END,
++  EVENT_SESSION_START,
+   EVENT_SKILL_LAUNCH,
+   EVENT_EXTENSION_ENABLE,
+   EVENT_EXTENSION_DISABLE,
+@@ -48,6 +50,7 @@ import {
+   logApiRequest,
+   logApiResponse,
+   logStartSession,
++  logSessionEnd,
+   logUserPrompt,
+   logToolCall,
+   logLoopDetected,
+@@ -353,6 +356,75 @@ describe('loggers', () => {
+     });
+   });
+ 
++  describe('session lifecycle wiring', () => {
++    // Distinct session ids per case: emitSessionStart is idempotent per id,
++    // and the module-level guard persists across tests in this file.
++    it('logStartSession emits the standard session.start record with lineage', () => {
++      const mockConfig = makeFakeConfig({
++        sessionId: 'lifecycle-start-session',
++      });
++
++      logStartSession(
++        mockConfig,
++        new StartSessionEvent(mockConfig),
++        'previous-session-id',
++      );
++
++      expect(mockLogger.emit).toHaveBeenCalledWith({
++        body: 'Session started.',
++        attributes: {
++          'event.name': EVENT_SESSION_START,
++          'event.timestamp': '2025-01-01T00:00:00.000Z',
++          'session.id': 'lifecycle-start-session',
++          'session.previous_id': 'previous-session-id',
++        },
++      });
++    });
++
++    it('logSessionEnd emits the standard session.end record', () => {
++      const mockConfig = makeFakeConfig({
++        sessionId: 'lifecycle-end-session',
++      });
++
++      logSessionEnd(mockConfig);
++
++      expect(mockLogger.emit).toHaveBeenCalledWith({
++        body: 'Session ended.',
++        attributes: {
++          'event.name': EVENT_SESSION_END,
++          'event.timestamp': '2025-01-01T00:00:00.000Z',
++          'session.id': 'lifecycle-end-session',
++        },
++      });
++    });
++
++    it('does not emit or consume the session.start idempotency token while the SDK is uninitialized', () => {
++      vi.spyOn(sdk, 'isTelemetrySdkInitialized').mockReturnValue(false);
++      const mockConfig = makeFakeConfig({
++        sessionId: 'suppressed-session',
++      });
++
++      logStartSession(mockConfig, new StartSessionEvent(mockConfig));
++      logSessionEnd(mockConfig);
++
++      expect(mockLogger.emit).not.toHaveBeenCalled();
++
++      // The suppressed start must not consume the one-shot token: once the
++      // SDK settles, the settle-time catch-up still emits the record.
++      vi.spyOn(sdk, 'isTelemetrySdkInitialized').mockReturnValue(true);
++      logStartSession(mockConfig, new StartSessionEvent(mockConfig));
++
++      expect(mockLogger.emit).toHaveBeenCalledWith({
++        body: 'Session started.',
++        attributes: {
++          'event.name': EVENT_SESSION_START,
++          'event.timestamp': '2025-01-01T00:00:00.000Z',
++          'session.id': 'suppressed-session',
++        },
++      });
++    });
++  });
++
+   describe('logRepeatedToolFailureGuard', () => {
+     it('emits a data-minimized transition log and low-cardinality metric', () => {
+       vi.spyOn(
+diff --git a/packages/core/src/telemetry/loggers.ts b/packages/core/src/telemetry/loggers.ts
+index 23d826c3071..b99c372cbad 100644
+--- a/packages/core/src/telemetry/loggers.ts
++++ b/packages/core/src/telemetry/loggers.ts
+@@ -143,6 +143,7 @@ import { recordTokenUsageFromApiResponseBestEffort } from '../services/tokenUsag
+ import { isChatRecordingSuppressed } from '../utils/chat-recording-suppression-context.js';
+ import { ToolErrorType } from '../tools/tool-error.js';
+ import { createDebugLogger } from '../utils/debugLogger.js';
++import { emitSessionEnd, emitSessionStart } from './session-events.js';
+ 
+ const shouldLogUserPrompts = (config: Config): boolean =>
+   config.getTelemetryLogPromptsEnabled();
+@@ -204,6 +205,7 @@ function runToolTelemetrySink(sink: () => void): void {
+ export function logStartSession(
+   config: Config,
+   event: StartSessionEvent,
++  previousSessionId?: string,
+ ): void {
+   QwenLogger.getInstance(config)?.logStartSessionEvent(event);
+   if (!isTelemetrySdkInitialized()) return;
+@@ -238,6 +240,12 @@ export function logStartSession(
+     attributes,
+   };
+   logger.emit(logRecord);
++  emitSessionStart(config.getSessionId(), previousSessionId);
++}
++
++export function logSessionEnd(config: Config): void {
++  if (!isTelemetrySdkInitialized()) return;
++  emitSessionEnd(config.getSessionId());
+ }
+ 
+ export function logUserPrompt(config: Config, event: UserPromptEvent): void {
+diff --git a/packages/core/src/telemetry/sdk.test.ts b/packages/core/src/telemetry/sdk.test.ts
+index d40fc43c52a..1d2e91ef685 100644
+--- a/packages/core/src/telemetry/sdk.test.ts
++++ b/packages/core/src/telemetry/sdk.test.ts
+@@ -56,6 +56,10 @@ vi.mock('@opentelemetry/instrumentation-http');
+ vi.mock('@opentelemetry/instrumentation-undici');
+ vi.mock('./gcp-exporters.js');
+ vi.mock('./log-to-span-processor.js');
++vi.mock('./session-events.js', () => ({
++  emitSessionEnd: vi.fn(),
++  emitSessionStart: vi.fn(),
++}));
+ vi.mock('./session-context.js');
+ vi.mock('./trace-context.js');
+ vi.mock('./tracer.js', () => ({
+@@ -63,9 +67,10 @@ vi.mock('./tracer.js', () => ({
+ }));
+ 
+ import { LogToSpanProcessor } from './log-to-span-processor.js';
+-import { setSessionContext } from './session-context.js';
++import { getCurrentSessionId, setSessionContext } from './session-context.js';
+ import { setShellTracePropagation } from './trace-context.js';
+ import { createSessionRootContext } from './tracer.js';
++import { emitSessionEnd, emitSessionStart } from './session-events.js';
+ import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
+ import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
+ 
+@@ -188,6 +193,21 @@ describe('Telemetry SDK', () => {
+ 
+       expect(NodeSDK).toHaveBeenCalledTimes(1);
+       expect(NodeSDK.prototype.start).toHaveBeenCalledTimes(1);
++      // One shared init means one settle-time catch-up, even with concurrent
++      // callers.
++      expect(emitSessionStart).toHaveBeenCalledTimes(1);
++      expect(emitSessionStart).toHaveBeenCalledWith('test-session');
++    });
++
++    it('emits the initial session start after the SDK settles', async () => {
++      await initializeTelemetry(mockConfig);
++
++      expect(emitSessionStart).toHaveBeenCalledWith('test-session');
++      expect(
++        vi.mocked(emitSessionStart).mock.invocationCallOrder[0],
++      ).toBeGreaterThan(
++        vi.mocked(NodeSDK.prototype.start).mock.invocationCallOrder[0],
++      );
+     });
+ 
+     it('ignores external exporter selectors while starting explicit exporters', async () => {
+@@ -317,6 +337,28 @@ describe('Telemetry SDK', () => {
+       expect(NodeSDK.prototype.shutdown).toHaveBeenCalledTimes(1);
+       expect(isTelemetrySdkInitialized()).toBe(false);
+     });
++
++    it('ends the active session before the SDK shuts down', async () => {
++      vi.mocked(getCurrentSessionId).mockReturnValueOnce('active-session');
++      await initializeTelemetry(mockConfig);
++
++      await shutdownTelemetry();
++
++      expect(emitSessionEnd).toHaveBeenCalledWith('active-session');
++      expect(
++        vi.mocked(emitSessionEnd).mock.invocationCallOrder[0],
++      ).toBeLessThan(
++        vi.mocked(NodeSDK.prototype.shutdown).mock.invocationCallOrder[0],
++      );
++    });
++
++    it('does not end a session at shutdown when no session context exists', async () => {
++      await initializeTelemetry(mockConfig);
++
++      await shutdownTelemetry();
++
++      expect(emitSessionEnd).not.toHaveBeenCalled();
++    });
+   });
+ 
+   it('should route OpenTelemetry diagnostics to debug log instead of console output', async () => {
+diff --git a/packages/core/src/telemetry/sdk.ts b/packages/core/src/telemetry/sdk.ts
+index f12ad3b6811..2488b278434 100644
+--- a/packages/core/src/telemetry/sdk.ts
++++ b/packages/core/src/telemetry/sdk.ts
+@@ -24,9 +24,10 @@ import type { TelemetryRuntimeConfig } from './runtime-config.js';
+ import { initializeMetrics } from './metrics.js';
+ import { createDebugLogger } from '../utils/debugLogger.js';
+ import { createSessionRootContext } from './tracer.js';
+-import { setSessionContext } from './session-context.js';
++import { getCurrentSessionId, setSessionContext } from './session-context.js';
+ import { setShellTracePropagation } from './trace-context.js';
+ import { endInteractionSpan } from './session-tracing.js';
++import { emitSessionEnd, emitSessionStart } from './session-events.js';
+ 
+ function createTelemetryDiagLogger(): DiagLogger {
+   const debugLogger = createDebugLogger('OTEL');
+@@ -121,6 +122,11 @@ export function initializeTelemetry(
+       activeMetricReader = started.metricReader;
+       const sessionId = config.getSessionId();
+       setSessionContext(createSessionRootContext(sessionId), sessionId);
++      // Unconditional catch-up: in every init mode `logStartSession` can run
++      // before the SDK settles and get dropped by its initialization gate,
++      // while shutdown still emits `session.end`. The session-events guard
++      // dedupes the race-won case.
++      emitSessionStart(sessionId);
+       setShellTracePropagation(
+         config.getOutboundCorrelationPropagateTraceContext(),
+       );
+@@ -173,6 +179,10 @@ export function shutdownTelemetry(): Promise<void> {
+       return;
+     }
+     endInteractionSpan('cancelled');
++    const currentSessionId = getCurrentSessionId();
++    if (currentSessionId) {
++      emitSessionEnd(currentSessionId);
++    }
+     const currentSdk = sdk;
+     const debugLogger = createDebugLogger('OTEL');
+     let timer: ReturnType<typeof setTimeout> | undefined;
+diff --git a/packages/core/src/telemetry/session-events.test.ts b/packages/core/src/telemetry/session-events.test.ts
+new file mode 100644
+index 00000000000..6c86216a5e7
+--- /dev/null
++++ b/packages/core/src/telemetry/session-events.test.ts
+@@ -0,0 +1,73 @@
++/**
++ * @license
++ * Copyright 2026 Qwen Team
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++import { logs } from '@opentelemetry/api-logs';
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import { emitSessionEnd, emitSessionStart } from './session-events.js';
++
++describe('session lifecycle events', () => {
++  const emit = vi.fn();
++
++  beforeEach(() => {
++    emit.mockReset();
++    vi.spyOn(logs, 'getLogger').mockReturnValue({ emit } as never);
++  });
++
++  it('emits the required attributes for session.start', () => {
++    emitSessionStart('session-2', 'session-1');
++
++    expect(emit).toHaveBeenCalledWith({
++      body: 'Session started.',
++      attributes: {
++        'event.name': 'session.start',
++        'event.timestamp': expect.any(String),
++        'session.id': 'session-2',
++        'session.previous_id': 'session-1',
++      },
++    });
++  });
++
++  it('does not claim continuation for a replacement session', () => {
++    emitSessionStart('replacement-session');
++
++    expect(emit).toHaveBeenCalledWith({
++      body: 'Session started.',
++      attributes: {
++        'event.name': 'session.start',
++        'event.timestamp': expect.any(String),
++        'session.id': 'replacement-session',
++      },
++    });
++  });
++
++  it('does not emit session.start twice for the same session', () => {
++    emitSessionStart('duplicate-session');
++    emitSessionStart('duplicate-session');
++
++    expect(emit).toHaveBeenCalledTimes(1);
++  });
++
++  it('emits session.start again for an id that was ended', () => {
++    emitSessionStart('session-a');
++    emitSessionEnd('session-a');
++    emitSessionStart('session-a', 'session-b');
++
++    expect(emit).toHaveBeenCalledTimes(3);
++  });
++
++  it('emits the required attributes for session.end', () => {
++    emitSessionEnd('session-1');
++
++    expect(emit).toHaveBeenCalledWith({
++      body: 'Session ended.',
++      attributes: {
++        'event.name': 'session.end',
++        'event.timestamp': expect.any(String),
++        'session.id': 'session-1',
++      },
++    });
++  });
++});
+diff --git a/packages/core/src/telemetry/session-events.ts b/packages/core/src/telemetry/session-events.ts
+new file mode 100644
+index 00000000000..b20f91eed4e
+--- /dev/null
++++ b/packages/core/src/telemetry/session-events.ts
+@@ -0,0 +1,53 @@
++/**
++ * @license
++ * Copyright 2026 Qwen Team
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++import { logs } from '@opentelemetry/api-logs';
++import type { LogAttributes } from '@opentelemetry/api-logs';
++import {
++  EVENT_SESSION_END,
++  EVENT_SESSION_START,
++  SERVICE_NAME,
++} from './constants.js';
++
++// The SDK settle-time catch-up in initializeTelemetry and logStartSession can
++// both observe the same session in every init mode. Keep session.start
++// idempotent so those two legitimate paths cannot duplicate the record.
++let startedSessionId: string | undefined;
++
++export function emitSessionStart(
++  sessionId: string,
++  previousSessionId?: string,
++): void {
++  if (startedSessionId === sessionId) return;
++  startedSessionId = sessionId;
++
++  const attributes: LogAttributes = {
++    'event.name': EVENT_SESSION_START,
++    'event.timestamp': new Date().toISOString(),
++    'session.id': sessionId,
++    ...(previousSessionId ? { 'session.previous_id': previousSessionId } : {}),
++  };
++
++  logs.getLogger(SERVICE_NAME).emit({
++    body: 'Session started.',
++    attributes,
++  });
++}
++
++export function emitSessionEnd(sessionId: string): void {
++  if (startedSessionId === sessionId) {
++    startedSessionId = undefined;
++  }
++
++  logs.getLogger(SERVICE_NAME).emit({
++    body: 'Session ended.',
++    attributes: {
++      'event.name': EVENT_SESSION_END,
++      'event.timestamp': new Date().toISOString(),
++      'session.id': sessionId,
++    },
++  });
++}

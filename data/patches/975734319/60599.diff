@@ -1,0 +1,240 @@
+diff --git a/packages/tui/src/component/prompt/index.tsx b/packages/tui/src/component/prompt/index.tsx
+index d10d2b67262a..075f037dcc55 100644
+--- a/packages/tui/src/component/prompt/index.tsx
++++ b/packages/tui/src/component/prompt/index.tsx
+@@ -48,7 +48,7 @@ import { useConnected } from "../use-connected"
+ import { useToast } from "../../ui/toast"
+ import { createFadeIn } from "../../util/signal"
+ import { DialogSkill } from "../dialog-skill"
+-import { useConfig } from "../../config"
++import { useConfig, useCursorStyle } from "../../config"
+ import { usePromptMove } from "./move"
+ import { promptFilesForServer, resolvePastedAttachments } from "./local-attachment"
+ import { locationKey, useData } from "../../context/data"
+@@ -207,6 +207,7 @@ export function Prompt(props: PromptProps) {
+   const currentLocation = useLocation()
+   const args = useArgs()
+   const config = useConfig().data
++  const cursorStyle = useCursorStyle()
+   const dialog = useDialog()
+   const toast = useToast()
+   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
+@@ -353,7 +354,6 @@ export function Prompt(props: PromptProps) {
+   createEffect(() => {
+     if (!input || input.isDestroyed) return
+     input.cursorColor = disabled() ? theme.background.raised.base : theme.text.base
+-    input.cursorStyle = config.cursor
+   })
+ 
+   const [store, setStore] = createStore<{
+@@ -1774,7 +1774,7 @@ export function Prompt(props: PromptProps) {
+               focusedTextColor={muted() ? theme.text.muted : theme.text.base}
+               minHeight={1}
+               maxHeight={maxHeight()}
+-              cursorStyle={{ ...config.cursor }}
++              cursorStyle={cursorStyle()}
+               onContentChange={() => {
+                 const value = input.plainText
+                 setStore("prompt", "text", value)
+@@ -1833,7 +1833,6 @@ export function Prompt(props: PromptProps) {
+                   // setTimeout is a workaround and needs to be addressed properly
+                   if (!input || input.isDestroyed) return
+                   input.cursorColor = disabled() ? theme.background.raised.base : theme.text.base
+-                  input.cursorStyle = config.cursor
+                 }, 0)
+               }}
+               onMouseDown={(r: MouseEvent) => {
+diff --git a/packages/tui/src/config/index.tsx b/packages/tui/src/config/index.tsx
+index a37021f904fa..8af86e01faaf 100644
+--- a/packages/tui/src/config/index.tsx
++++ b/packages/tui/src/config/index.tsx
+@@ -3,7 +3,7 @@ export * as Config from "."
+ import { createBindingLookup } from "@opentui/keymap/extras"
+ import { Vcs } from "@opencode/schema/vcs"
+ import { Schema } from "effect"
+-import { createContext, onCleanup, type JSX, useContext } from "solid-js"
++import { createContext, createMemo, onCleanup, type JSX, useContext } from "solid-js"
+ import { createStore, reconcile } from "solid-js/store"
+ import { safeWatch } from "../util/watch"
+ import path from "path"
+@@ -378,6 +378,15 @@ export function useConfig() {
+   return value
+ }
+ 
++/**
++ * The configured textarea cursor, replaced only when the cursor config changes. A fresh object on every render effect
++ * would restyle the textarea whenever an unrelated prop changes, discarding a style a plugin set on it.
++ */
++export function useCursorStyle() {
++  const config = useConfig()
++  return createMemo(() => ({ style: config.data.cursor.style, blinking: config.data.cursor.blinking }))
++}
++
+ /** Reactive accessor for the temporary "new-designs" experiment. */
+ export function useNewDesigns() {
+   const config = useConfig()
+diff --git a/packages/tui/src/routes/session/form.tsx b/packages/tui/src/routes/session/form.tsx
+index aa9944c4e26a..675067ff0c4f 100644
+--- a/packages/tui/src/routes/session/form.tsx
++++ b/packages/tui/src/routes/session/form.tsx
+@@ -18,7 +18,7 @@ import { SplitBorder } from "../../ui/border"
+ import { useToast } from "../../ui/toast"
+ import { Keymap } from "../../context/keymap"
+ import { useInteractivity } from "../../context/interactivity"
+-import { useConfig } from "../../config"
++import { useCursorStyle } from "../../config"
+ import { errorMessage } from "../../util/error"
+ import {
+   formCustom,
+@@ -64,7 +64,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+   const keymap = Keymap.use()
+   const enabled = useInteractivity()
+   const active = () => enabled() && keymap.mode.current() === FORM_MODE
+-  const config = useConfig().data
++  const cursorStyle = useCursorStyle()
+   const clipboard = useClipboard()
+   const toast = useToast()
+   const configuredFields = props.form.fields.filter(isFormAnswerField)
+@@ -885,7 +885,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+             <Show when={textual() ? answerField()!.key : undefined} keyed>
+               <box paddingLeft={1}>
+                 <textarea
+-                  cursorStyle={{ ...config.cursor }}
++                  cursorStyle={cursorStyle()}
+                   ref={(val: TextareaRenderable) => {
+                     textarea = val
+                     val.traits = { status: "ANSWER" }
+@@ -1025,7 +1025,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
+                         >
+                           <textarea
+                             flexGrow={1}
+-                            cursorStyle={{ ...config.cursor }}
++                            cursorStyle={cursorStyle()}
+                             ref={(val: TextareaRenderable) => {
+                               textarea = val
+                               val.traits = { status: "ANSWER" }
+diff --git a/packages/tui/src/routes/session/permission.tsx b/packages/tui/src/routes/session/permission.tsx
+index 07131898c805..3618f19e0f85 100644
+--- a/packages/tui/src/routes/session/permission.tsx
++++ b/packages/tui/src/routes/session/permission.tsx
+@@ -9,7 +9,7 @@ import { useData } from "../../context/data"
+ import { filetype } from "../../util/filetype"
+ import { permissionAlwaysLines, permissionOptionLabel, permissionPresentation } from "../../util/permission"
+ import { getScrollAcceleration } from "../../util/scroll"
+-import { useConfig } from "../../config"
++import { useConfig, useCursorStyle } from "../../config"
+ import { Keymap } from "../../context/keymap"
+ import { useInteractivity } from "../../context/interactivity"
+ import { usePathFormatter } from "../../context/path-format"
+@@ -278,7 +278,7 @@ function RejectPrompt(props: {
+   let input: TextareaRenderable
+   const enabled = useInteractivity()
+   const theme = useTheme()
+-  const config = useConfig().data
++  const cursorStyle = useCursorStyle()
+   const dimensions = useTerminalDimensions()
+   const narrow = createMemo(() => dimensions().width < 80)
+   Keymap.createLayer(() => ({
+@@ -357,7 +357,7 @@ function RejectPrompt(props: {
+           textColor={theme.text.base}
+           focusedTextColor={theme.text.base}
+           cursorColor={theme.text.base}
+-          cursorStyle={{ ...config.cursor }}
++          cursorStyle={cursorStyle()}
+         />
+         <box
+           id="session.permission.reject.actions"
+diff --git a/packages/tui/src/ui/dialog-prompt.tsx b/packages/tui/src/ui/dialog-prompt.tsx
+index 9cf2fdd044a8..3513b6147074 100644
+--- a/packages/tui/src/ui/dialog-prompt.tsx
++++ b/packages/tui/src/ui/dialog-prompt.tsx
+@@ -4,7 +4,7 @@ import { useTheme } from "../context/theme"
+ import { DialogFooter, DialogHeader, DialogLayout, useDialog, type DialogSize } from "./dialog"
+ import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js"
+ import { Spinner } from "../component/spinner"
+-import { useConfig } from "../config"
++import { useCursorStyle } from "../config"
+ import { useRenderer } from "@opentui/solid"
+ 
+ export type DialogPromptAction = {
+@@ -35,7 +35,7 @@ export function DialogPrompt(props: DialogPromptProps) {
+   const dialog = useDialog()
+   const renderer = useRenderer()
+   const theme = useTheme().surface("dialog")
+-  const config = useConfig().data
++  const cursorStyle = useCursorStyle()
+   const [textareaTarget, setTextareaTarget] = createSignal<TextareaRenderable>()
+   let textarea: TextareaRenderable
+ 
+@@ -172,7 +172,7 @@ export function DialogPrompt(props: DialogPromptProps) {
+           textColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.base}
+           focusedTextColor={props.busy ? theme.text.formfield.disabled : theme.text.formfield.base}
+           cursorColor={props.busy ? theme.background.formfield.disabled : theme.text.base}
+-          cursorStyle={{ ...config.cursor }}
++          cursorStyle={cursorStyle()}
+         />
+         <Show when={props.busy}>
+           <Spinner color={theme.text.muted}>{props.busyText ?? "Working…"}</Spinner>
+diff --git a/packages/tui/src/ui/dialog-select.tsx b/packages/tui/src/ui/dialog-select.tsx
+index bc8d136cbd59..0599a7f83f16 100644
+--- a/packages/tui/src/ui/dialog-select.tsx
++++ b/packages/tui/src/ui/dialog-select.tsx
+@@ -20,7 +20,7 @@ import {
+ } from "./dialog"
+ import { Locale } from "../util/locale"
+ import { getScrollAcceleration } from "../util/scroll"
+-import { useConfig, useNewDesigns } from "../config"
++import { useConfig, useCursorStyle, useNewDesigns } from "../config"
+ import { moveSelection, reconcileSelection } from "./select-controller"
+ 
+ export interface DialogSelectProps<T> {
+@@ -143,6 +143,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
+   const dialog = useDialog()
+   const theme = useTheme().surface("dialog")
+   const config = useConfig().data
++  const cursorStyle = useCursorStyle()
+   const newDesigns = useNewDesigns()
+   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
+   const renderer = useRenderer()
+@@ -672,7 +673,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
+       }}
+       focusedBackgroundColor={theme.background.formfield.focused}
+       cursorColor={searchCursorColor()}
+-      cursorStyle={{ ...config.cursor }}
++      cursorStyle={cursorStyle()}
+       focusedTextColor={newDesigns() ? theme.text.formfield.base : theme.text.formfield.focused}
+       ref={(r) => {
+         input = r
+diff --git a/packages/tui/test/prompt-cursor.test.tsx b/packages/tui/test/prompt-cursor.test.tsx
+new file mode 100644
+index 000000000000..18b2f4997900
+--- /dev/null
++++ b/packages/tui/test/prompt-cursor.test.tsx
+@@ -0,0 +1,27 @@
++import { TextareaRenderable } from "@opentui/core"
++import { expect, test } from "bun:test"
++import { takeDraft } from "../src/component/prompt/draft-stash"
++import { createAppFixture } from "./fixture/app"
++
++test("the prompt keeps a cursor style set on its textarea when the theme changes", async () => {
++  // Other app tests can leave a home draft in the process-wide stash.
++  takeDraft(undefined)
++  await using setup = await createAppFixture({
++    config: { animations: false, keybinds: { "theme.switch_mode": "f6" } },
++  })
++  await setup.ready
++  await setup.waitForFrame((frame) => frame.includes("commands"))
++  const prompt = setup.renderer.currentFocusedEditor
++  if (!(prompt instanceof TextareaRenderable)) throw new Error("expected the focused prompt textarea")
++  const color = prompt.cursorColor
++
++  // A plugin such as a modal editing mode restyles the prompt cursor directly.
++  prompt.cursorStyle = { style: "line", blinking: false }
++  setup.mockInput.pressKey("F6")
++  await setup.renderOnce()
++  await Bun.sleep(10)
++  await setup.renderOnce()
++
++  expect(prompt.cursorColor).not.toEqual(color)
++  expect(prompt.cursorStyle).toMatchObject({ style: "line", blinking: false })
++})

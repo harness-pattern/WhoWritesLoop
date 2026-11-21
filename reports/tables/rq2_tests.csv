@@ -1,0 +1,3 @@
+test,chi2,dof,p_value,cramers_v,odds_ratio
+layer_distribution_agent_vs_human,165.81644728246323,3.0,1.0180419388152213e-35,0.19468154056302203,
+core_touch_agent_vs_human,,,8.34152293014389e-36,,0.4540003234733057

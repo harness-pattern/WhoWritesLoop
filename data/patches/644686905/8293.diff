@@ -1,0 +1,13 @@
+diff --git a/docs/docs.json b/docs/docs.json
+index 46920f12924..5f7f30addfc 100644
+--- a/docs/docs.json
++++ b/docs/docs.json
+@@ -3,7 +3,7 @@
+   "theme": "mint",
+   "name": "Continue",
+   "banner": {
+-    "content": "Continue CLI v1.4.49 is live 🚀 Learn how you can [leverage the CLI with our MCP Cookbooks](/guides/overview#mcp-integration-cookbooks)",
++    "content": "Continue CLI v1.5.1 is live 🚀 Learn how you can leverage the CLI with our [MCP Cookbooks](https://docs.continue.dev/guides/overview#mcp-integration-cookbooks)",
+     "dismissable": true
+   },
+   "colors": {

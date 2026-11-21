@@ -1,0 +1,304 @@
+diff --git a/src/agents/_tool_identity.py b/src/agents/_tool_identity.py
+index 1dae29a9fe..8c21352057 100644
+--- a/src/agents/_tool_identity.py
++++ b/src/agents/_tool_identity.py
+@@ -18,11 +18,20 @@
+ NamedToolLookupKey = FunctionToolLookupKey | str
+ 
+ 
++MAX_FUNCTION_TOOL_NAME_LENGTH = 64
++
++
++def is_api_safe_function_tool_name(name: str, *, allow_dots: bool = False) -> bool:
++    """Return True when a tool name matches the model API's function-name constraints."""
++    allowed_punctuation = {"_", "-", "."} if allow_dots else {"_", "-"}
++    return 1 <= len(name) <= MAX_FUNCTION_TOOL_NAME_LENGTH and all(
++        char.isascii() and (char.isalnum() or char in allowed_punctuation) for char in name
++    )
++
++
+ def validate_function_tool_fallback_name(name: str) -> str:
+     """Return an API-safe generated tool name or require an explicit override."""
+-    if 1 <= len(name) <= 64 and all(
+-        char.isascii() and (char.isalnum() or char in {"_", "-"}) for char in name
+-    ):
++    if is_api_safe_function_tool_name(name):
+         return name
+     raise UserError(
+         f"Cannot derive a function tool name from callable class {name!r}. Generated names must "
+@@ -31,6 +40,22 @@ def validate_function_tool_fallback_name(name: str) -> str:
+     )
+ 
+ 
++def validate_function_tool_name(name: str) -> None:
++    """Reject a configured tool name the model API will not accept.
++
++    Dots are allowed here but not in `validate_function_tool_fallback_name`: a dotted name is
++    the supported wire shape for a qualified top-level tool (see `tool_qualified_name`), so it
++    is only ever legitimate when a caller asked for it explicitly.
++    """
++    if is_api_safe_function_tool_name(name, allow_dots=True):
++        return
++    raise UserError(
++        f"Invalid function tool name {name!r}. Tool names must contain only ASCII letters, "
++        "digits, underscores, hyphens, or dots, and be between 1 and "
++        f"{MAX_FUNCTION_TOOL_NAME_LENGTH} characters."
++    )
++
++
+ class SerializedFunctionToolLookupKey(TypedDict, total=False):
+     """Serialized representation of a function-tool lookup key."""
+ 
+diff --git a/src/agents/function_schema.py b/src/agents/function_schema.py
+index 26d6d1f3b8..b8f8d1fb7b 100644
+--- a/src/agents/function_schema.py
++++ b/src/agents/function_schema.py
+@@ -13,10 +13,12 @@
+ from pydantic import BaseModel, Field, create_model
+ from pydantic.fields import FieldInfo
+ 
++from ._tool_identity import is_api_safe_function_tool_name
+ from .exceptions import UserError
+ from .run_context import RunContextWrapper
+ from .strict_schema import ensure_strict_json_schema
+ from .tool_context import ToolContext
++from .util._transforms import transform_string_function_style
+ 
+ 
+ @dataclass
+@@ -345,6 +347,12 @@ def function_schema(
+     # Ensure name_override takes precedence even if docstring info is disabled.
+     func_name = name_override or (doc_info.name if doc_info else func.__name__)
+ 
++    if name_override is None and not is_api_safe_function_tool_name(func_name):
++        # A name we derived ourselves (`<lambda>`, a unicode or over-long `__name__`) gets
++        # sanitized like other derived names. An explicit name_override is rejected instead,
++        # in FunctionTool.__post_init__, since the caller can fix it at the source.
++        func_name = transform_string_function_style(func_name)
++
+     # 2. Inspect function signature and get type hints
+     sig = inspect.signature(func)
+     params = list(sig.parameters.items())
+diff --git a/src/agents/handoffs/__init__.py b/src/agents/handoffs/__init__.py
+index c1902e0b47..dbe0488c74 100644
+--- a/src/agents/handoffs/__init__.py
++++ b/src/agents/handoffs/__init__.py
+@@ -10,6 +10,7 @@
+ from pydantic import TypeAdapter
+ from typing_extensions import TypeVar
+ 
++from .._tool_identity import validate_function_tool_name
+ from ..exceptions import ModelBehaviorError, UserError
+ from ..items import RunItem, TResponseInputItem
+ from ..run_context import RunContextWrapper, TContext
+@@ -169,6 +170,13 @@ class Handoff(Generic[TContext, TAgent]):
+     )
+     """Weak reference to the target agent when constructed via `handoff()`."""
+ 
++    def __post_init__(self) -> None:
++        # A handoff reaches the model as a function tool, so its name has the same API
++        # constraints. Validate here so an explicit tool_name_override is attributed to the
++        # handoff definition instead of surfacing later as an opaque provider-side 400.
++        # Names derived from the agent name arrive already sanitized.
++        validate_function_tool_name(self.tool_name)
++
+     def get_transfer_message(self, agent: AgentBase[Any]) -> str:
+         return json.dumps({"assistant": agent.name})
+ 
+diff --git a/src/agents/tool.py b/src/agents/tool.py
+index 6e4ed2bf26..c2f1272698 100644
+--- a/src/agents/tool.py
++++ b/src/agents/tool.py
+@@ -59,6 +59,7 @@
+     tool_qualified_name,
+     validate_function_tool_fallback_name,
+     validate_function_tool_lookup_configuration,
++    validate_function_tool_name,
+     validate_function_tool_namespace_shape,
+ )
+ from .computer import AsyncComputer, Computer
+@@ -577,6 +578,9 @@ def qualified_name(self) -> str:
+     __wrapped__ = _FunctionToolWrappedCallableDescriptor()
+ 
+     def __post_init__(self):
++        # Validate before anything else so a name the API will reject is reported against the
++        # tool definition instead of surfacing later as an opaque provider-side 400.
++        validate_function_tool_name(self.name)
+         self.allowed_callers = _normalize_tool_allowed_callers(
+             self.allowed_callers,
+             tool_name=self.qualified_name,
+diff --git a/src/agents/util/_transforms.py b/src/agents/util/_transforms.py
+index 795010a148..72579e0d65 100644
+--- a/src/agents/util/_transforms.py
++++ b/src/agents/util/_transforms.py
+@@ -1,7 +1,11 @@
++import hashlib
+ import re
+ 
++from .._tool_identity import MAX_FUNCTION_TOOL_NAME_LENGTH
+ from ..logger import logger
+ 
++_HASH_SUFFIX_LENGTH = 8
++
+ 
+ def transform_string_function_style(name: str, *, warn_on_whitespace: bool = True) -> str:
+     whitespace_normalized_name = re.sub(r"\s", "_", name)
+@@ -9,6 +13,21 @@ def transform_string_function_style(name: str, *, warn_on_whitespace: bool = Tru
+     transformed_name = re.sub(r"[^a-zA-Z0-9_]", "_", whitespace_normalized_name)
+     final_name = transformed_name.lower()
+ 
++    if len(final_name) > MAX_FUNCTION_TOOL_NAME_LENGTH:
++        # Same truncate-and-hash shape MCP tool names already use, so distinct long names stay
++        # distinct instead of being rejected by the provider as over-length.
++        suffix = f"_{hashlib.sha1(name.encode('utf-8')).hexdigest()[:_HASH_SUFFIX_LENGTH]}"
++        stem = final_name[: MAX_FUNCTION_TOOL_NAME_LENGTH - len(suffix)].rstrip("_")
++        shortened_name = f"{stem or 'tool'}{suffix}"
++        logger.warning(
++            "Tool name %r exceeds the %d character limit for function calling and has been "
++            "shortened to %r. Pass an explicit tool name to control it.",
++            name,
++            MAX_FUNCTION_TOOL_NAME_LENGTH,
++            shortened_name,
++        )
++        final_name = shortened_name
++
+     if transformed_name != name and (
+         warn_on_whitespace or transformed_name != whitespace_normalized_name
+     ):
+diff --git a/tests/test_handoff_tool.py b/tests/test_handoff_tool.py
+index 051c725c17..87c33d4279 100644
+--- a/tests/test_handoff_tool.py
++++ b/tests/test_handoff_tool.py
+@@ -587,3 +587,18 @@ async def test_handoff_lenient_json_allows_type_coercion():
+     assert result.name == "Alice"
+     assert result.age == 25
+     assert isinstance(result.age, int)
++
++
++@pytest.mark.parametrize("tool_name", ["my tool!", "выборка", "x" * 65])
++def test_handoff_rejects_invalid_explicit_tool_name(tool_name: str) -> None:
++    with pytest.raises(UserError, match="Invalid function tool name"):
++        handoff(Agent(name="test"), tool_name_override=tool_name)
++
++
++def test_handoff_shortens_over_long_derived_tool_name(caplog: pytest.LogCaptureFixture) -> None:
++    with caplog.at_level(logging.WARNING, logger="openai.agents"):
++        obj = handoff(Agent(name="A" * 100))
++
++    assert len(obj.tool_name) == 64
++    assert obj.tool_name.startswith("transfer_to_a")
++    assert "exceeds the 64 character limit" in caplog.text
+diff --git a/tests/test_tool_identity.py b/tests/test_tool_identity.py
+index dcd14dbe16..e83665ae0a 100644
+--- a/tests/test_tool_identity.py
++++ b/tests/test_tool_identity.py
+@@ -8,8 +8,11 @@
+ 
+ from __future__ import annotations
+ 
++from typing import Any
++
+ import pytest
+ 
++from agents import FunctionTool, function_tool
+ from agents._tool_identity import (
+     deserialize_function_tool_lookup_key,
+     get_function_tool_lookup_key,
+@@ -165,3 +168,62 @@ def test_validate_function_tool_namespace_shape_rejects_synthetic() -> None:
+     # The reserved synthetic shape (name == namespace) is rejected.
+     with pytest.raises(UserError, match="reserves the synthetic namespace"):
+         validate_function_tool_namespace_shape("search", "search")
++
++
++class TestFunctionToolNameValidation:
++    """Explicit tool names are rejected; derived names are sanitized instead."""
++
++    @pytest.mark.parametrize(
++        "name",
++        [
++            "my tool!",  # space and punctuation
++            "выборка",  # non-ASCII
++            "x" * 65,  # over the 64 character API limit
++        ],
++    )
++    def test_explicit_name_is_rejected(self, name: str) -> None:
++        with pytest.raises(UserError, match="Invalid function tool name"):
++
++            @function_tool(name_override=name)
++            def f(a: str) -> str:
++                """F."""
++                return a
++
++    def test_function_tool_dataclass_rejects_explicit_name(self) -> None:
++        async def on_invoke(ctx: Any, args: str) -> str:
++            return "ok"
++
++        with pytest.raises(UserError, match="Invalid function tool name"):
++            FunctionTool(
++                name="my tool!",
++                description="d",
++                params_json_schema={"type": "object", "properties": {}},
++                on_invoke_tool=on_invoke,
++            )
++
++    @pytest.mark.parametrize("name", ["search", "search-v2", "tools.search", "a" * 64])
++    def test_valid_explicit_names_pass(self, name: str) -> None:
++        @function_tool(name_override=name)
++        def f(a: str) -> str:
++            """F."""
++            return a
++
++        assert f.name == name
++
++    def test_derived_lambda_name_is_sanitized_not_rejected(self) -> None:
++        assert function_tool(lambda: "ok").name == "_lambda_"
++
++    def test_derived_over_long_name_is_shortened(self) -> None:
++        namespace: dict[str, Any] = {}
++        exec("def " + "b" * 100 + '(a: str) -> str:\n    """F."""\n    return a', namespace)
++
++        name = function_tool(namespace["b" * 100]).name
++        assert len(name) == 64
++        assert name.startswith("b" * 55)
++
++    def test_valid_derived_name_is_untouched(self) -> None:
++        def MyTool(a: str) -> str:  # noqa: N802 - case must survive sanitization
++            """F."""
++            return a
++
++        assert function_tool(MyTool).name == "MyTool"
+diff --git a/tests/test_transforms.py b/tests/test_transforms.py
+index bb5e2170c7..31000275d7 100644
+--- a/tests/test_transforms.py
++++ b/tests/test_transforms.py
+@@ -41,3 +41,30 @@ def test_transform_string_function_style_does_not_warn_for_case_only_changes(
+         assert transform_string_function_style(name) == transformed
+ 
+     assert caplog.records == []
++
++
++def test_transform_string_function_style_shortens_over_long_names(
++    caplog: pytest.LogCaptureFixture,
++) -> None:
++    with caplog.at_level(logging.WARNING, logger="openai.agents"):
++        transformed = transform_string_function_style("a" * 100)
++
++    assert len(transformed) == 64
++    assert transformed.startswith("a" * 55)
++    assert "exceeds the 64 character limit" in caplog.text
++
++
++def test_transform_string_function_style_shortening_is_deterministic_and_unique() -> None:
++    first = transform_string_function_style("a" * 100)
++    assert transform_string_function_style("a" * 100) == first
++    # Names sharing a 64-char prefix must not collide after shortening.
++    assert transform_string_function_style("a" * 100 + "b") != first
++
++
++def test_transform_string_function_style_leaves_names_at_the_limit_alone(
++    caplog: pytest.LogCaptureFixture,
++) -> None:
++    with caplog.at_level(logging.WARNING, logger="openai.agents"):
++        assert transform_string_function_style("a" * 64) == "a" * 64
++
++    assert caplog.records == []

@@ -1,0 +1,347 @@
+diff --git a/packages/opencode/src/cli/cmd/tui/feature-plugins/home/footer.tsx b/packages/opencode/src/cli/cmd/tui/feature-plugins/home/footer.tsx
+index 8047c26458c6..105256a86491 100644
+--- a/packages/opencode/src/cli/cmd/tui/feature-plugins/home/footer.tsx
++++ b/packages/opencode/src/cli/cmd/tui/feature-plugins/home/footer.tsx
+@@ -1,9 +1,60 @@
+ import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
+-import { createMemo, Match, Show, Switch } from "solid-js"
++import { createMemo, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+ import { Global } from "@/global"
++import { Process } from "@/util/process"
+ 
+ const id = "internal:home-footer"
+ 
++const EXCLUDED_DIRS = new Set([
++  "node_modules",
++  ".git",
++  "target",
++  "__pycache__",
++  ".gradle",
++  "Pods",
++  "dist",
++  "build",
++  "out",
++  ".next",
++  ".nuxt",
++  ".svelte-kit",
++  "venv",
++  ".venv",
++  "vendor",
++  ".yarn",
++  "coverage",
++  ".nyc_output",
++  ".terraform",
++  ".tox",
++  ".cache",
++])
++
++const SOURCE_EXTS = new Set([
++  ".ts",
++  ".tsx",
++  ".js",
++  ".jsx",
++  ".py",
++  ".go",
++  ".rs",
++  ".java",
++  ".kt",
++  ".swift",
++  ".sh",
++  ".bash",
++  ".zsh",
++])
++
++const FIND_PRUNE = [...EXCLUDED_DIRS].map((d) => `-name "${d}"`).join(" -o ")
++const FIND_NAMES = [...SOURCE_EXTS].map((e) => `-name "*${e}"`).join(" -o ")
++const FIND_CMD = `find . \\( ${FIND_PRUNE} \\) -prune -o -type f \\( ${FIND_NAMES} \\) -print | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}'`
++
++async function countLoc(dir: string): Promise<number> {
++  const result = await Process.text(["sh", "-c", FIND_CMD], { cwd: dir, nothrow: true })
++  const n = parseInt(result.text.trim(), 10)
++  return isNaN(n) ? 0 : n
++}
++
+ function Directory(props: { api: TuiPluginApi }) {
+   const theme = () => props.api.theme.current
+   const dir = createMemo(() => {
+@@ -54,6 +105,29 @@ function Version(props: { api: TuiPluginApi }) {
+   )
+ }
+ 
++function Loc(props: { api: TuiPluginApi }) {
++  const theme = () => props.api.theme.current
++  const [loc, setLoc] = createSignal("")
++  const dir = () => props.api.state.path.directory || process.cwd()
++
++  async function refreshLoc() {
++    const count = await countLoc(dir())
++    if (count > 0) setLoc(`LOC: ${count.toLocaleString()} (${(count / 37000).toFixed(2)} GT)`)
++  }
++
++  onMount(() => {
++    void refreshLoc()
++    const interval = setInterval(() => void refreshLoc(), 60_000)
++    onCleanup(() => clearInterval(interval))
++  })
++
++  return (
++    <Show when={loc()}>
++      <text fg={theme().textMuted}>{loc()}</text>
++    </Show>
++  )
++}
++
+ function View(props: { api: TuiPluginApi }) {
+   return (
+     <box
+@@ -68,6 +142,7 @@ function View(props: { api: TuiPluginApi }) {
+     >
+       <Directory api={props.api} />
+       <Mcp api={props.api} />
++      <Loc api={props.api} />
+       <box flexGrow={1} />
+       <Version api={props.api} />
+     </box>
+diff --git a/packages/opencode/src/cli/cmd/tui/routes/session/footer.tsx b/packages/opencode/src/cli/cmd/tui/routes/session/footer.tsx
+index 8ace2fff3725..5a56d24ab196 100644
+--- a/packages/opencode/src/cli/cmd/tui/routes/session/footer.tsx
++++ b/packages/opencode/src/cli/cmd/tui/routes/session/footer.tsx
+@@ -1,10 +1,87 @@
+-import { createMemo, Match, onCleanup, onMount, Show, Switch } from "solid-js"
++import { createMemo, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+ import { useTheme } from "../../context/theme"
+ import { useSync } from "../../context/sync"
+ import { useDirectory } from "../../context/directory"
+ import { useConnected } from "../../component/dialog-model"
+ import { createStore } from "solid-js/store"
+ import { useRoute } from "../../context/route"
++import { readdir, readFile } from "fs/promises"
++import path from "path"
++import { Process } from "@/util/process"
++
++const EXCLUDED_DIRS = new Set([
++  "node_modules",
++  ".git",
++  "target",
++  "__pycache__",
++  ".gradle",
++  "Pods",
++  "dist",
++  "build",
++  "out",
++  ".next",
++  ".nuxt",
++  ".svelte-kit",
++  "venv",
++  ".venv",
++  "vendor",
++  ".yarn",
++  "coverage",
++  ".nyc_output",
++  ".terraform",
++  ".tox",
++  ".cache",
++])
++
++const SOURCE_EXTS = new Set([
++  ".ts",
++  ".tsx",
++  ".js",
++  ".jsx",
++  ".py",
++  ".go",
++  ".rs",
++  ".java",
++  ".kt",
++  ".swift",
++  ".sh",
++  ".bash",
++  ".zsh",
++])
++
++const FIND_PRUNE = [...EXCLUDED_DIRS].map((d) => `-name "${d}"`).join(" -o ")
++const FIND_NAMES = [...SOURCE_EXTS].map((e) => `-name "*${e}"`).join(" -o ")
++const FIND_CMD = `find . \\( ${FIND_PRUNE} \\) -prune -o -type f \\( ${FIND_NAMES} \\) -print | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}'`
++
++async function countLocUnix(dir: string): Promise<number> {
++  const result = await Process.text(["sh", "-c", FIND_CMD], { cwd: dir, nothrow: true })
++  const n = parseInt(result.text.trim(), 10)
++  return isNaN(n) ? 0 : n
++}
++
++async function countLocFallback(dir: string): Promise<number> {
++  let total = 0
++  try {
++    const entries = await readdir(dir, { withFileTypes: true })
++    await Promise.all(
++      entries.map(async (entry) => {
++        if (entry.isDirectory()) {
++          if (!EXCLUDED_DIRS.has(entry.name)) total += await countLocFallback(path.join(dir, entry.name))
++        } else if (entry.isFile() && SOURCE_EXTS.has(path.extname(entry.name))) {
++          const buf = await readFile(path.join(dir, entry.name))
++          let lines = 1
++          for (let i = 0; i < buf.length; i++) if (buf[i] === 10) lines++
++          total += lines
++        }
++      }),
++    )
++  } catch {
++    // skip unreadable directories
++  }
++  return total
++}
++
++const countLoc = process.platform === "win32" ? countLocFallback : countLocUnix
+ 
+ export function Footer() {
+   const { theme } = useTheme()
+@@ -20,6 +97,14 @@ export function Footer() {
+   const directory = useDirectory()
+   const connected = useConnected()
+ 
++  const [loc, setLoc] = createSignal("")
++
++  async function refreshLoc() {
++    const cwd = sync.data.path.directory || process.cwd()
++    const count = await countLoc(cwd)
++    if (count > 0) setLoc(`LOC: ${count.toLocaleString()} (${(count / 37000).toFixed(2)} GT)`)
++  }
++
+   const [store, setStore] = createStore({
+     welcome: false,
+   })
+@@ -44,14 +129,23 @@ export function Footer() {
+     }
+     timeouts.push(setTimeout(() => tick(), 10_000))
+ 
++    void refreshLoc()
++    const locInterval = setInterval(() => void refreshLoc(), 60_000)
++
+     onCleanup(() => {
+       timeouts.forEach(clearTimeout)
++      clearInterval(locInterval)
+     })
+   })
+ 
+   return (
+     <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0}>
+-      <text fg={theme.textMuted}>{directory()}</text>
++      <box flexDirection="row" gap={2}>
++        <text fg={theme.textMuted}>{directory()}</text>
++        <Show when={loc()}>
++          <text fg={theme.textMuted}>{loc()}</text>
++        </Show>
++      </box>
+       <box gap={2} flexDirection="row" flexShrink={0}>
+         <Switch>
+           <Match when={store.welcome}>
+diff --git a/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx b/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx
+index 396d7563011f..4eb48fe4ffcf 100644
+--- a/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx
++++ b/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx
+@@ -7,6 +7,7 @@ import {
+   For,
+   Match,
+   on,
++  onCleanup,
+   onMount,
+   Show,
+   Switch,
+@@ -83,9 +84,58 @@ import { UI } from "@/cli/ui.ts"
+ import { useTuiConfig } from "../../context/tui-config"
+ import { getScrollAcceleration } from "../../util/scroll"
+ import { TuiPluginRuntime } from "../../plugin"
++import { Process } from "@/util/process"
+ 
+ addDefaultParsers(parsers.parsers)
+ 
++const LOC_EXCLUDED = new Set([
++  "node_modules",
++  ".git",
++  "target",
++  "__pycache__",
++  ".gradle",
++  "Pods",
++  "dist",
++  "build",
++  "out",
++  ".next",
++  ".nuxt",
++  ".svelte-kit",
++  "venv",
++  ".venv",
++  "vendor",
++  ".yarn",
++  "coverage",
++  ".nyc_output",
++  ".terraform",
++  ".tox",
++  ".cache",
++])
++const LOC_EXTS = new Set([
++  ".ts",
++  ".tsx",
++  ".js",
++  ".jsx",
++  ".py",
++  ".go",
++  ".rs",
++  ".java",
++  ".kt",
++  ".swift",
++  ".sh",
++  ".bash",
++  ".zsh",
++])
++const LOC_PRUNE = [...LOC_EXCLUDED].map((d) => `-name "${d}"`).join(" -o ")
++const LOC_NAMES = [...LOC_EXTS].map((e) => `-name "*${e}"`).join(" -o ")
++const LOC_CMD = `find . \\( ${LOC_PRUNE} \\) -prune -o -type f \\( ${LOC_NAMES} \\) -print | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}'`
++
++async function countLoc(dir: string): Promise<number> {
++  const result = await Process.text(["sh", "-c", LOC_CMD], { cwd: dir, nothrow: true })
++  const n = parseInt(result.text.trim(), 10)
++  return isNaN(n) ? 0 : n
++}
++
+ const context = createContext<{
+   width: number
+   sessionID: string
+@@ -153,6 +203,13 @@ export function Session() {
+   const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
+   const [animationsEnabled, setAnimationsEnabled] = kv.signal("animations_enabled", true)
+   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
++  const [loc, setLoc] = createSignal("")
++  const locDir = createMemo(() => sync.data.path.directory || process.cwd())
++
++  async function refreshLoc() {
++    const count = await countLoc(locDir())
++    if (count > 0) setLoc(`LOC: ${count.toLocaleString()} (${(count / 37000).toFixed(2)} GT)`)
++  }
+ 
+   const wide = createMemo(() => dimensions().width > 120)
+   const sidebarVisible = createMemo(() => {
+@@ -183,6 +240,12 @@ export function Session() {
+       })
+   })
+ 
++  onMount(() => {
++    void refreshLoc()
++    const interval = setInterval(() => void refreshLoc(), 60_000)
++    onCleanup(() => clearInterval(interval))
++  })
++
+   const toast = useToast()
+   const sdk = useSDK()
+ 
+@@ -1171,6 +1234,11 @@ export function Session() {
+                       toBottom()
+                     }}
+                     sessionID={route.sessionID}
++                    hint={
++                      <Show when={loc()}>
++                        <text fg={theme.textMuted}>{loc()}</text>
++                      </Show>
++                    }
+                     right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                   />
+                 </TuiPluginRuntime.Slot>

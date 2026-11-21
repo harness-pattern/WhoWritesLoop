@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Who Rewrites the Loop? — Human vs. Agent Authorship in Agent Harnesses</title>
+<meta name="description" content="An empirical study of 20 open-source agent harnesses: who rewrites the harness, which layer agents reach, and how harness patterns diffuse.">
+<style>
+  :root{
+    --paper:#f7f4ec; --paper2:#efe9db; --ink:#1c232b; --muted:#606a75;
+    --line:#d8d0bf; --accent:#8a2f2a; --accent2:#1f4e6b; --ok:#2f6b4f;
+    --serif:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.65 var(--serif)}
+  a{color:var(--accent2);text-decoration:none;border-bottom:1px solid rgba(31,78,107,.25)}
+  a:hover{border-bottom-color:var(--accent2)}
+  header.nav{position:sticky;top:0;z-index:20;background:rgba(247,244,236,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav-in{max-width:1000px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:22px}
+  .brand{font:600 13px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;border:0;color:var(--ink)}
+  .nav-links{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap;font:13px/1 var(--sans)}
+  .nav-links a{border:0;color:var(--muted)}
+  .nav-links a:hover{color:var(--ink)}
+  main{max-width:1000px;margin:0 auto;padding:0 24px}
+  .hero{padding:76px 0 44px;display:grid;grid-template-columns:1.35fr .65fr;gap:46px;align-items:end}
+  .kicker{font:600 12px/1.2 var(--mono);letter-spacing:.15em;text-transform:uppercase;color:var(--accent);margin-bottom:18px}
+  h1{font-size:clamp(40px,6vw,68px);line-height:.98;letter-spacing:-.02em;margin:0 0 18px;font-weight:600}
+  .sub{font-size:clamp(19px,2.4vw,26px);line-height:1.28;color:#39424c;margin:0 0 24px;max-width:22em}
+  .authors{font:15px/1.6 var(--sans);color:var(--muted)}
+  .authors b{color:var(--ink);font-weight:600}
+  .hero-note{border-left:3px solid var(--accent);padding:4px 0 4px 18px;font:14px/1.6 var(--sans);color:var(--muted)}
+  .hero-note strong{display:block;color:var(--ink);font-size:13px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}
+  .btn{display:inline-block;padding:10px 16px;border:1px solid var(--ink);border-radius:3px;font:600 13px/1 var(--sans);letter-spacing:.02em;color:var(--ink);background:transparent}
+  .btn.primary{background:var(--ink);color:var(--paper)}
+  .btn:hover{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  .rule{height:1px;background:var(--line);margin:18px 0 0}
+  section{padding:54px 0;border-top:1px solid var(--line)}
+  .sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:26px}
+  .sec-no{font:600 12px/1 var(--mono);color:var(--accent);letter-spacing:.12em}
+  h2{font-size:clamp(26px,3.2vw,36px);line-height:1.1;margin:0;font-weight:600;letter-spacing:-.01em}
+  .lede{font-size:19px;color:#3a434d;max-width:44em}
+  .abstract{columns:2;column-gap:46px;font-size:16.5px;color:#2c343d}
+  .abstract p{margin:0 0 1em}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin:34px 0 0}
+  .stat{background:var(--paper);padding:20px 18px}
+  .stat b{display:block;font:600 clamp(24px,3vw,34px)/1 var(--sans);letter-spacing:-.02em}
+  .stat span{display:block;font:12px/1.4 var(--sans);color:var(--muted);margin-top:7px;text-transform:uppercase;letter-spacing:.06em}
+  .findings{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .finding{background:var(--paper2);border:1px solid var(--line);padding:22px 22px 20px}
+  .finding .tag{font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+  .finding h3{font-size:20px;line-height:1.25;margin:0 0 8px;font-weight:600}
+  .finding p{margin:0;font-size:15.5px;color:#3b444e}
+  .finding .num{font:600 30px/1 var(--sans);letter-spacing:-.02em;display:block;margin-bottom:6px}
+  figure{margin:0 0 34px}
+  figure img{width:100%;height:auto;border:1px solid var(--line);background:#fff}
+  figcaption{font:13px/1.55 var(--sans);color:var(--muted);margin-top:9px}
+  figcaption b{color:var(--ink);font-weight:600}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+  .table{width:100%;border-collapse:collapse;font:14px/1.5 var(--sans)}
+  .table th,.table td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .table th{font:600 11px/1.2 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .table td code{font:12.5px var(--mono)}
+  .callout{border:1px solid var(--line);background:var(--paper2);padding:24px 26px;display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center}
+  .callout h3{margin:0 0 6px;font-size:22px}
+  .callout p{margin:0;font-size:15.5px;color:#3b444e;max-width:46em}
+  pre.bib{background:#20262d;color:#e9e4d8;padding:20px 22px;overflow:auto;font:12.5px/1.6 var(--mono);border-radius:4px}
+  footer{border-top:1px solid var(--line);margin-top:20px;padding:28px 0 50px;font:13px/1.6 var(--sans);color:var(--muted);display:flex;gap:20px;flex-wrap:wrap}
+  .note{font:12.5px/1.55 var(--sans);color:var(--muted)}
+  @media(max-width:780px){
+    .hero{grid-template-columns:1fr;gap:26px;padding-top:52px}
+    .abstract{columns:1}
+    .stats{grid-template-columns:1fr 1fr}
+    .findings,.grid2{grid-template-columns:1fr}
+    .callout{grid-template-columns:1fr}
+    .nav-links{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-in">
+    <a class="brand" href="#">Who Rewrites the Loop?</a>
+    <nav class="nav-links">
+      <a href="#abstract">Abstract</a>
+      <a href="#findings">Findings</a>
+      <a href="#figures">Figures</a>
+      <a href="#data">Data &amp; code</a>
+      <a href="#review">Review</a>
+      <a href="#cite">Cite</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div>
+      <div class="kicker">Empirical software engineering · MSR · Preprint</div>
+      <h1>Who Rewrites<br>the Loop?</h1>
+      <p class="sub">Human versus Agent Authorship in the Recursive Self-Improvement of Open-Source Agent Harnesses</p>
+      <p class="authors"><b>Haoyi Xiong</b> &nbsp;·&nbsp; <b>Yekun Chai</b></p>
+      <div class="actions">
+        <a class="btn primary" href="paper/main.pdf">Read the paper (PDF)</a>
+        <a class="btn" href="https://github.com/harness-pattern/WhoWritesLoop">Code &amp; data</a>
+        <a class="btn" href="review_package/review.html">Human-review app</a>
+      </div>
+    </div>
+    <aside class="hero-note">
+      <strong>One-sentence result</strong>
+      Autonomous agents now maintain the harness, but they are kept in tests, adapters, UI, and docs; the core loop remains human-owned, while co-authored work is the channel through which agents reach architecture.
+    </aside>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b>20</b><span>open-source harnesses</span></div>
+    <div class="stat"><b>135,331</b><span>retained pull requests</span></div>
+    <div class="stat"><b>7,205</b><span>detail-labelled PRs</span></div>
+    <div class="stat"><b>5.2%</b><span>explicit agent PRs</span></div>
+  </div>
+
+  <section id="abstract">
+    <div class="sec-head"><span class="sec-no">01</span><h2>Abstract</h2></div>
+    <div class="abstract">
+      <p>Agent harnesses—the loops, context managers, tool interfaces, and sandboxes that turn a language model into a working software agent—are now among the fastest-moving artifacts in open-source software. Claims of recursive self-improvement (RSI) imply that agents increasingly rewrite the very harnesses they run on. Yet there is little repository-level evidence about <em>who</em> changes which part of a harness, and whether such changes survive review.</p>
+      <p>We report a mining study of 20 open-source agent harnesses and runtimes, covering 135,331 pull requests created between May 2025 and November 2026. We introduce a three-tier attribution scheme (autonomous agent, co-authored/assisted, no explicit marker) and a pointcut taxonomy that separates the core loop (L1), context and memory (L2), tools and sandbox (L3), evaluation and infrastructure (L4), product surface (L0), and documentation (LD).</p>
+      <p>Explicitly agent-attributable PRs are 5.2% of decided PRs (T1 2.87%, T2 2.33%). Their merge odds are lower (Mantel–Haenszel OR 0.709, 95% CI 0.682–0.738), but the effect reverses in repositories that treat agents as first-class contributors. Autonomous agents are concentrated in L4 and L0: only 13.2% touch the core loop, versus 26.0% for unmarked PRs, and only 15.8% are structural changes, versus 22.9%. Co-authored PRs, by contrast, touch the core at 28.8% and are structural at 30.2%.</p>
+      <p>We read this as empirical support for a <em>protected-variation</em> discipline in harness engineering: agents are delegated to stable variation points, while humans retain the stable core. The findings reframe RSI as maintenance-layer self-improvement rather than architectural self-authorship, and identify repository governance—not agent brand—as the strongest predictor of agent contribution outcomes.</p>
+    </div>
+  </section>
+
+  <section id="findings">
+    <div class="sec-head"><span class="sec-no">02</span><h2>Four findings</h2></div>
+    <div class="findings">
+      <article class="finding">
+        <div class="tag">RQ1 · Attribution</div>
+        <span class="num">5.2%</span>
+        <h3>Explicit RSI is small but real</h3>
+        <p>2.87% of decided PRs are autonomous-agent (T1), 2.33% co-authored/assisted (T2). Tier 3 is an unmarked baseline, so this is a lower bound on actual AI involvement.</p>
+      </article>
+      <article class="finding">
+        <div class="tag">RQ1 · Review</div>
+        <span class="num">OR 0.709</span>
+        <h3>Agent PRs merge less—but not everywhere</h3>
+        <p>The pooled odds ratio hides a split from +15 pp (Roo-Code, OpenCode, OpenHands) to −43 pp (Cline, Gemini CLI, crewAI). Repository governance, not agent brand, explains the sign.</p>
+      </article>
+      <article class="finding">
+        <div class="tag">RQ2 · Pointcut</div>
+        <span class="num">13.2% vs 26.0%</span>
+        <h3>Autonomous agents stay out of the core</h3>
+        <p>T1 PRs touch the core loop half as often as unmarked PRs, and are structural less often (15.8% vs 22.9%). They concentrate in tests, UI, and documentation.</p>
+      </article>
+      <article class="finding">
+        <div class="tag">RQ2 · Co-authorship</div>
+        <span class="num">28.8% core</span>
+        <h3>Pairing is the architectural channel</h3>
+        <p>Co-authored PRs touch the core more often than either autonomous agents or unmarked humans, and are structural at 30.2%—human design plus agent execution.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="figures">
+    <div class="sec-head"><span class="sec-no">03</span><h2>Figures</h2></div>
+    <figure>
+      <img src="paper/figures/fig_merge_diff_en.png" alt="Within-repository merge-rate gap between agent and unmarked PRs">
+      <figcaption><b>Figure 1.</b> Within-repository difference in merge rate between explicitly agent-attributed PRs (T1+T2) and unmarked PRs. Negative values mean agent PRs are less likely to merge.</figcaption>
+    </figure>
+    <figure>
+      <img src="paper/figures/fig_layer_heatmap_en.png" alt="Layer touch rate by repository and attribution group">
+      <figcaption><b>Figure 2.</b> Repository-by-layer touch rates. Each cell is the share of PRs in that group touching the layer. L4 dominates agent activity; L1 activity is sparse and repository-dependent.</figcaption>
+    </figure>
+    <figure>
+      <img src="paper/figures/fig_diffusion_en.png" alt="Quarterly intensity of harness patterns">
+      <figcaption><b>Figure 3.</b> Quarterly share of PRs mentioning each harness pattern. Patterns already present in 2025Q2 are left-censored; the curves measure change intensity, not confirmed adoption.</figcaption>
+    </figure>
+  </section>
+
+  <section id="data">
+    <div class="sec-head"><span class="sec-no">04</span><h2>Data, code, and method</h2></div>
+    <div class="grid2">
+      <div>
+        <p class="lede">The pipeline crawls PR metadata for all 20 repositories, samples 7,205 PRs for file/commit/review detail, and labels every PR with a three-tier attribution and a six-layer pointcut taxonomy.</p>
+        <p class="note">The 506 MB SQLite database is not committed; the cleaned census and detail exports are. The full mining pipeline and analysis scripts are in the repository.</p>
+      </div>
+      <table class="table">
+        <thead><tr><th>Artifact</th><th>Where</th></tr></thead>
+        <tbody>
+          <tr><td>Paper (PDF)</td><td><a href="paper/main.pdf"><code>paper/main.pdf</code></a></td></tr>
+          <tr><td>LaTeX source</td><td><a href="paper/main.tex"><code>paper/main.tex</code></a></td></tr>
+          <tr><td>Census, 135,331 PRs</td><td><a href="data/derived/prs_census.csv.gz"><code>prs_census.csv.gz</code></a></td></tr>
+          <tr><td>Detail sample, 7,205 PRs</td><td><a href="data/derived/prs_detail.csv.gz"><code>prs_detail.csv.gz</code></a></td></tr>
+          <tr><td>Statistical tables</td><td><a href="https://github.com/harness-pattern/WhoWritesLoop/tree/main/reports/tables"><code>reports/tables/</code></a></td></tr>
+          <tr><td>Mining pipeline</td><td><a href="https://github.com/harness-pattern/WhoWritesLoop/tree/main/pipeline"><code>pipeline/</code></a></td></tr>
+          <tr><td>Human-review package</td><td><a href="https://github.com/harness-pattern/WhoWritesLoop/tree/main/review_package"><code>review_package/</code></a></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="review">
+    <div class="sec-head"><span class="sec-no">05</span><h2>Help audit the mining</h2></div>
+    <div class="callout">
+      <div>
+        <h3>A self-contained human-review app</h3>
+        <p>120 PRs, balanced 20 per architecture layer and 7/7/6 across T1/T2/T3 within each layer. Every record embeds its file list with assigned layers, commit subjects, body excerpt, the full codebook, and a browser-side Cohen's κ calculator. No install, no server.</p>
+      </div>
+      <a class="btn primary" href="review_package/review.html">Open the review app</a>
+    </div>
+  </section>
+
+  <section id="cite">
+    <div class="sec-head"><span class="sec-no">06</span><h2>Cite</h2></div>
+    <pre class="bib">@misc{xiong2026whowrites,
+  title  = {Who Rewrites the Loop? Human versus Agent Authorship in the
+            Recursive Self-Improvement of Open-Source Agent Harnesses},
+  author = {Xiong, Haoyi and Chai, Yekun},
+  year   = {2026},
+  note   = {Preprint}
+}</pre>
+    <p class="note" style="margin-top:14px">The paper cites the Google harness line directly: OO-Harness (arXiv:2610.28380) and Harness² (arXiv:2610.14224).</p>
+  </section>
+
+  <footer>
+    <span>© 2026 Haoyi Xiong and Yekun Chai</span>
+    <span>Preprint · November 2026</span>
+    <span><a href="https://github.com/harness-pattern/WhoWritesLoop">GitHub</a></span>
+  </footer>
+</main>
+
+</body>
+</html>

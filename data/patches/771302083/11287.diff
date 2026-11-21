@@ -1,0 +1,1473 @@
+diff --git a/.github/scripts/update_pr_description.sh b/.github/scripts/update_pr_description.sh
+index 783cf54d82da..f1a092d6cf70 100755
+--- a/.github/scripts/update_pr_description.sh
++++ b/.github/scripts/update_pr_description.sh
+@@ -13,12 +13,12 @@ DOCKER_RUN_COMMAND="docker run -it --rm \
+   -p 3000:3000 \
+   -v /var/run/docker.sock:/var/run/docker.sock \
+   --add-host host.docker.internal:host-gateway \
+-  -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:${SHORT_SHA}-nikolaik \
++  -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/openhands/runtime:${SHORT_SHA}-nikolaik \
+   --name openhands-app-${SHORT_SHA} \
+-  docker.all-hands.dev/all-hands-ai/openhands:${SHORT_SHA}"
++  docker.all-hands.dev/openhands/openhands:${SHORT_SHA}"
+ 
+ # Define the uvx command
+-UVX_RUN_COMMAND="uvx --python 3.12 --from git+https://github.com/All-Hands-AI/OpenHands@${BRANCH_NAME}#subdirectory=openhands-cli openhands"
++UVX_RUN_COMMAND="uvx --python 3.12 --from git+https://github.com/OpenHands/OpenHands@${BRANCH_NAME}#subdirectory=openhands-cli openhands"
+ 
+ # Get the current PR body
+ PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
+diff --git a/.github/workflows/dispatch-to-docs.yml b/.github/workflows/dispatch-to-docs.yml
+index b784f67392e7..301cab5fa58c 100644
+--- a/.github/workflows/dispatch-to-docs.yml
++++ b/.github/workflows/dispatch-to-docs.yml
+@@ -12,7 +12,7 @@ jobs:
+     runs-on: ubuntu-latest
+     strategy:
+       matrix:
+-        repo: ["All-Hands-AI/docs"]
++        repo: ["OpenHands/docs"]
+     steps:
+       - name: Push to docs repo
+         uses: peter-evans/repository-dispatch@v3
+diff --git a/.github/workflows/enterprise-preview.yml b/.github/workflows/enterprise-preview.yml
+index 9a66fda82534..e31222827bd2 100644
+--- a/.github/workflows/enterprise-preview.yml
++++ b/.github/workflows/enterprise-preview.yml
+@@ -26,4 +26,4 @@ jobs:
+             -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+             -H "Accept: application/vnd.github+json" \
+             -d "{\"ref\": \"main\", \"inputs\": {\"openhandsPrNumber\": \"${{ github.event.pull_request.number }}\", \"deployEnvironment\": \"feature\", \"enterpriseImageTag\": \"pr-${{ github.event.pull_request.number }}\" }}" \
+-            https://api.github.com/repos/All-Hands-AI/deploy/actions/workflows/deploy.yaml/dispatches
++            https://api.github.com/repos/OpenHands/deploy/actions/workflows/deploy.yaml/dispatches
+diff --git a/.github/workflows/ghcr-build.yml b/.github/workflows/ghcr-build.yml
+index 767591107624..c84560ab6a0c 100644
+--- a/.github/workflows/ghcr-build.yml
++++ b/.github/workflows/ghcr-build.yml
+@@ -252,7 +252,7 @@ jobs:
+             -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+             -H "Accept: application/vnd.github+json" \
+             -d "{\"ref\": \"main\", \"inputs\": {\"openhandsPrNumber\": \"${{ github.event.pull_request.number }}\", \"deployEnvironment\": \"feature\", \"enterpriseImageTag\": \"pr-${{ github.event.pull_request.number }}\" }}" \
+-            https://api.github.com/repos/All-Hands-AI/deploy/actions/workflows/deploy.yaml/dispatches
++            https://api.github.com/repos/OpenHands/deploy/actions/workflows/deploy.yaml/dispatches
+ 
+   # Run unit tests with the Docker runtime Docker images as root
+   test_runtime_root:
+diff --git a/.github/workflows/openhands-resolver.yml b/.github/workflows/openhands-resolver.yml
+index 1012df45ca38..cfb729897441 100644
+--- a/.github/workflows/openhands-resolver.yml
++++ b/.github/workflows/openhands-resolver.yml
+@@ -201,7 +201,7 @@ jobs:
+               issue_number: ${{ env.ISSUE_NUMBER }},
+               owner: context.repo.owner,
+               repo: context.repo.repo,
+-              body: `[OpenHands](https://github.com/All-Hands-AI/OpenHands) started fixing the ${issueType}! You can monitor the progress [here](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`
++              body: `[OpenHands](https://github.com/OpenHands/OpenHands) started fixing the ${issueType}! You can monitor the progress [here](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`
+             });
+ 
+       - name: Install OpenHands
+@@ -233,7 +233,7 @@ jobs:
+             if (isExperimentalLabel || isIssueCommentExperimental || isReviewCommentExperimental) {
+               console.log("Installing experimental OpenHands...");
+ 
+-              await exec.exec("pip install git+https://github.com/all-hands-ai/openhands.git");
++              await exec.exec("pip install git+https://github.com/openhands/openhands.git");
+             } else {
+               console.log("Installing from requirements.txt...");
+ 
+diff --git a/.github/workflows/run-eval.yml b/.github/workflows/run-eval.yml
+index 6bca1df097ed..d586a0b0a62c 100644
+--- a/.github/workflows/run-eval.yml
++++ b/.github/workflows/run-eval.yml
+@@ -101,7 +101,7 @@ jobs:
+             -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+             -H "Accept: application/vnd.github+json" \
+             -d "{\"ref\": \"main\", \"inputs\": {\"github-repo\": \"${{ steps.eval_params.outputs.repo_url }}\", \"github-branch\": \"${{ steps.eval_params.outputs.eval_branch }}\", \"pr-number\": \"${PR_NUMBER}\", \"eval-instances\": \"${{ steps.eval_params.outputs.eval_instances }}\"}}" \
+-            https://api.github.com/repos/All-Hands-AI/evaluation/actions/workflows/create-branch.yml/dispatches
++            https://api.github.com/repos/OpenHands/evaluation/actions/workflows/create-branch.yml/dispatches
+ 
+           # Send Slack message
+           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+diff --git a/CODE_OF_CONDUCT.md b/CODE_OF_CONDUCT.md
+index 046d897c0d6c..aa03899d44fc 100644
+--- a/CODE_OF_CONDUCT.md
++++ b/CODE_OF_CONDUCT.md
+@@ -124,7 +124,7 @@ These Slack etiquette guidelines are designed to foster an inclusive, respectful
+ - Post questions or discussions in the most relevant channel (e.g., for [slack - #general](https://openhands-ai.slack.com/archives/C06P5NCGSFP) for general topics, [slack - #questions](https://openhands-ai.slack.com/archives/C06U8UTKSAD) for queries/questions.
+ - When asking for help or raising issues, include necessary details like links, screenshots, or clear explanations to provide context.
+ - Keep discussions in public channels whenever possible to allow others to benefit from the conversation, unless the matter is sensitive or private.
+-- Always adhere to [our standards](https://github.com/All-Hands-AI/OpenHands/blob/main/CODE_OF_CONDUCT.md#our-standards) to ensure a welcoming and collaborative environment.
++- Always adhere to [our standards](https://github.com/OpenHands/OpenHands/blob/main/CODE_OF_CONDUCT.md#our-standards) to ensure a welcoming and collaborative environment.
+ - If you choose to mute a channel, consider setting up alerts for topics that still interest you to stay engaged. For Slack, Go to Settings → Notifications → My Keywords to add specific keywords that will notify you when mentioned. For example, if you're here for discussions about LLMs, mute the channel if it’s too busy, but set notifications to alert you only when “LLMs” appears in messages.
+ 
+ ## Attribution
+diff --git a/COMMUNITY.md b/COMMUNITY.md
+index 6edb4dff311e..1c49b3932e62 100644
+--- a/COMMUNITY.md
++++ b/COMMUNITY.md
+@@ -8,7 +8,7 @@ If this resonates with you, we'd love to have you join us in our quest!
+ 
+ ## 🤝 How to Join
+ 
+-Check out our [How to Join the Community section.](https://github.com/All-Hands-AI/OpenHands?tab=readme-ov-file#-how-to-join-the-community)
++Check out our [How to Join the Community section.](https://github.com/OpenHands/OpenHands?tab=readme-ov-file#-how-to-join-the-community)
+ 
+ ## 💪 Becoming a Contributor
+ 
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 39c7341dcf37..a605abaf64c3 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -13,15 +13,15 @@ To understand the codebase, please refer to the README in each module:
+ 
+ ## Setting up Your Development Environment
+ 
+-We have a separate doc [Development.md](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md) that tells you how to set up a development workflow.
++We have a separate doc [Development.md](https://github.com/OpenHands/OpenHands/blob/main/Development.md) that tells you how to set up a development workflow.
+ 
+ ## How Can I Contribute?
+ 
+ There are many ways that you can contribute:
+ 
+-1. **Download and use** OpenHands, and send [issues](https://github.com/All-Hands-AI/OpenHands/issues) when you encounter something that isn't working or a feature that you'd like to see.
++1. **Download and use** OpenHands, and send [issues](https://github.com/OpenHands/OpenHands/issues) when you encounter something that isn't working or a feature that you'd like to see.
+ 2. **Send feedback** after each session by [clicking the thumbs-up thumbs-down buttons](https://docs.all-hands.dev/usage/feedback), so we can see where things are working and failing, and also build an open dataset for training code agents.
+-3. **Improve the Codebase** by sending [PRs](#sending-pull-requests-to-openhands) (see details below). In particular, we have some [good first issues](https://github.com/All-Hands-AI/OpenHands/labels/good%20first%20issue) that may be ones to start on.
++3. **Improve the Codebase** by sending [PRs](#sending-pull-requests-to-openhands) (see details below). In particular, we have some [good first issues](https://github.com/OpenHands/OpenHands/labels/good%20first%20issue) that may be ones to start on.
+ 
+ ## What Can I Build?
+ Here are a few ways you can help improve the codebase.
+@@ -35,7 +35,7 @@ of the application, please open an issue first, or better, join the #eng-ui-ux c
+ to gather consensus from our design team first.
+ 
+ #### Improving the agent
+-Our main agent is the CodeAct agent. You can [see its prompts here](https://github.com/All-Hands-AI/OpenHands/tree/main/openhands/agenthub/codeact_agent).
++Our main agent is the CodeAct agent. You can [see its prompts here](https://github.com/OpenHands/OpenHands/tree/main/openhands/agenthub/codeact_agent).
+ 
+ Changes to these prompts, and to the underlying behavior in Python, can have a huge impact on user experience.
+ You can try modifying the prompts to see how they change the behavior of the agent as you use the app
+@@ -54,7 +54,7 @@ The agent needs a place to run code and commands. When you run OpenHands on your
+ to do this by default. But there are other ways of creating a sandbox for the agent.
+ 
+ If you work for a company that provides a cloud-based runtime, you could help us add support for that runtime
+-by implementing the [interface specified here](https://github.com/All-Hands-AI/OpenHands/blob/main/openhands/runtime/base.py).
++by implementing the [interface specified here](https://github.com/OpenHands/OpenHands/blob/main/openhands/runtime/base.py).
+ 
+ #### Testing
+ When you write code, it is also good to write tests. Please navigate to the [`./tests`](./tests) folder to see existing test suites.
+@@ -84,7 +84,7 @@ For example, a PR title could be:
+ - `refactor: modify package path`
+ - `feat(frontend): xxxx`, where `(frontend)` means that this PR mainly focuses on the frontend component.
+ 
+-You may also check out previous PRs in the [PR list](https://github.com/All-Hands-AI/OpenHands/pulls).
++You may also check out previous PRs in the [PR list](https://github.com/OpenHands/OpenHands/pulls).
+ 
+ ### Pull Request description
+ - If your PR is small (such as a typo fix), you can go brief.
+@@ -97,7 +97,7 @@ please include a short message that we can add to our changelog.
+ 
+ ### Opening Issues
+ 
+-If you notice any bugs or have any feature requests please open them via the [issues page](https://github.com/All-Hands-AI/OpenHands/issues). We will triage based on how critical the bug is or how potentially useful the improvement is, discuss, and implement the ones that the community has interest/effort for.
++If you notice any bugs or have any feature requests please open them via the [issues page](https://github.com/OpenHands/OpenHands/issues). We will triage based on how critical the bug is or how potentially useful the improvement is, discuss, and implement the ones that the community has interest/effort for.
+ 
+ Further, if you see an issue you like, please leave a "thumbs-up" or a comment, which will help us prioritize.
+ 
+diff --git a/CREDITS.md b/CREDITS.md
+index 873742b7e011..3dc74fe1035f 100644
+--- a/CREDITS.md
++++ b/CREDITS.md
+@@ -2,7 +2,7 @@
+ 
+ ## Contributors
+ 
+-We would like to thank all the [contributors](https://github.com/All-Hands-AI/OpenHands/graphs/contributors) who have helped make OpenHands possible. We greatly appreciate your dedication and hard work.
++We would like to thank all the [contributors](https://github.com/OpenHands/OpenHands/graphs/contributors) who have helped make OpenHands possible. We greatly appreciate your dedication and hard work.
+ 
+ ## Open Source Projects
+ 
+@@ -14,7 +14,7 @@ OpenHands includes and adapts the following open source projects. We are gratefu
+ 
+ #### [Aider](https://github.com/paul-gauthier/aider)
+    - License: Apache License 2.0
+-   - Description: AI pair programming tool. OpenHands has adapted and integrated its linter module for code-related tasks in [`agentskills utilities`](https://github.com/All-Hands-AI/OpenHands/tree/main/openhands/runtime/plugins/agent_skills/utils/aider)
++   - Description: AI pair programming tool. OpenHands has adapted and integrated its linter module for code-related tasks in [`agentskills utilities`](https://github.com/OpenHands/OpenHands/tree/main/openhands/runtime/plugins/agent_skills/utils/aider)
+ 
+ #### [BrowserGym](https://github.com/ServiceNow/BrowserGym)
+    - License: Apache License 2.0
+diff --git a/Development.md b/Development.md
+index 98e7f827f90d..9d90ba059075 100644
+--- a/Development.md
++++ b/Development.md
+@@ -2,7 +2,7 @@
+ 
+ This guide is for people working on OpenHands and editing the source code.
+ If you wish to contribute your changes, check out the
+-[CONTRIBUTING.md](https://github.com/All-Hands-AI/OpenHands/blob/main/CONTRIBUTING.md)
++[CONTRIBUTING.md](https://github.com/OpenHands/OpenHands/blob/main/CONTRIBUTING.md)
+ on how to clone and setup the project initially before moving on. Otherwise,
+ you can clone the OpenHands project directly.
+ 
+diff --git a/README.md b/README.md
+index a336a386353f..7b1cafc2264d 100644
+--- a/README.md
++++ b/README.md
+@@ -7,26 +7,26 @@
+ 
+ 
+ <div align="center">
+-  <a href="https://github.com/All-Hands-AI/OpenHands/graphs/contributors"><img src="https://img.shields.io/github/contributors/All-Hands-AI/OpenHands?style=for-the-badge&color=blue" alt="Contributors"></a>
+-  <a href="https://github.com/All-Hands-AI/OpenHands/stargazers"><img src="https://img.shields.io/github/stars/All-Hands-AI/OpenHands?style=for-the-badge&color=blue" alt="Stargazers"></a>
+-  <a href="https://github.com/All-Hands-AI/OpenHands/blob/main/LICENSE"><img src="https://img.shields.io/github/license/All-Hands-AI/OpenHands?style=for-the-badge&color=blue" alt="MIT License"></a>
++  <a href="https://github.com/OpenHands/OpenHands/graphs/contributors"><img src="https://img.shields.io/github/contributors/OpenHands/OpenHands?style=for-the-badge&color=blue" alt="Contributors"></a>
++  <a href="https://github.com/OpenHands/OpenHands/stargazers"><img src="https://img.shields.io/github/stars/OpenHands/OpenHands?style=for-the-badge&color=blue" alt="Stargazers"></a>
++  <a href="https://github.com/OpenHands/OpenHands/blob/main/LICENSE"><img src="https://img.shields.io/github/license/OpenHands/OpenHands?style=for-the-badge&color=blue" alt="MIT License"></a>
+   <br/>
+   <a href="https://all-hands.dev/joinslack"><img src="https://img.shields.io/badge/Slack-Join%20Us-red?logo=slack&logoColor=white&style=for-the-badge" alt="Join our Slack community"></a>
+-  <a href="https://github.com/All-Hands-AI/OpenHands/blob/main/CREDITS.md"><img src="https://img.shields.io/badge/Project-Credits-blue?style=for-the-badge&color=FFE165&logo=github&logoColor=white" alt="Credits"></a>
++  <a href="https://github.com/OpenHands/OpenHands/blob/main/CREDITS.md"><img src="https://img.shields.io/badge/Project-Credits-blue?style=for-the-badge&color=FFE165&logo=github&logoColor=white" alt="Credits"></a>
+   <br/>
+   <a href="https://docs.all-hands.dev/usage/getting-started"><img src="https://img.shields.io/badge/Documentation-000?logo=googledocs&logoColor=FFE165&style=for-the-badge" alt="Check out the documentation"></a>
+   <a href="https://arxiv.org/abs/2407.16741"><img src="https://img.shields.io/badge/Paper%20on%20Arxiv-000?logoColor=FFE165&logo=arxiv&style=for-the-badge" alt="Paper on Arxiv"></a>
+   <a href="https://docs.google.com/spreadsheets/d/1wOUdFCMyY6Nt0AIqF705KN4JKOWgeI4wUGUP60krXXs/edit?gid=0#gid=0"><img src="https://img.shields.io/badge/Benchmark%20score-000?logoColor=FFE165&logo=huggingface&style=for-the-badge" alt="Evaluation Benchmark Score"></a>
+ 
+   <!-- Keep these links. Translations will automatically update with the README. -->
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=de">Deutsch</a> |
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=es">Español</a> |
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=fr">français</a> |
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=ja">日本語</a> |
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=ko">한국어</a> |
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=pt">Português</a> |
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=ru">Русский</a> |
+-  <a href="https://www.readme-i18n.com/All-Hands-AI/OpenHands?lang=zh">中文</a>
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=de">Deutsch</a> |
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=es">Español</a> |
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=fr">français</a> |
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=ja">日本語</a> |
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=ko">한국어</a> |
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=pt">Português</a> |
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=ru">Русский</a> |
++  <a href="https://www.readme-i18n.com/OpenHands/OpenHands?lang=zh">中文</a>
+ 
+   <hr>
+ </div>
+@@ -82,17 +82,17 @@ You'll find OpenHands running at [http://localhost:3000](http://localhost:3000)
+ You can also run OpenHands directly with Docker:
+ 
+ ```bash
+-docker pull docker.all-hands.dev/all-hands-ai/runtime:0.59-nikolaik
++docker pull docker.all-hands.dev/openhands/runtime:0.59-nikolaik
+ 
+ docker run -it --rm --pull=always \
+-    -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:0.59-nikolaik \
++    -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/openhands/runtime:0.59-nikolaik \
+     -e LOG_ALL_EVENTS=true \
+     -v /var/run/docker.sock:/var/run/docker.sock \
+     -v ~/.openhands:/.openhands \
+     -p 3000:3000 \
+     --add-host host.docker.internal:host-gateway \
+     --name openhands-app \
+-    docker.all-hands.dev/all-hands-ai/openhands:0.59
++    docker.all-hands.dev/openhands/openhands:0.59
+ ```
+ 
+ </details>
+@@ -119,7 +119,7 @@ system requirements and more information.
+ > It is not appropriate for multi-tenant deployments where multiple users share the same instance. There is no built-in authentication, isolation, or scalability.
+ >
+ > If you're interested in running OpenHands in a multi-tenant environment, check out the source-available, commercially-licensed
+-> [OpenHands Cloud Helm Chart](https://github.com/all-Hands-AI/OpenHands-cloud)
++> [OpenHands Cloud Helm Chart](https://github.com/openHands/OpenHands-cloud)
+ 
+ You can [connect OpenHands to your local filesystem](https://docs.all-hands.dev/usage/runtimes/docker#connecting-to-your-filesystem),
+ interact with it via a [friendly CLI](https://docs.all-hands.dev/usage/how-to/cli-mode),
+@@ -128,7 +128,7 @@ or run it on tagged issues with [a github action](https://docs.all-hands.dev/usa
+ 
+ Visit [Running OpenHands](https://docs.all-hands.dev/usage/installation) for more information and setup instructions.
+ 
+-If you want to modify the OpenHands source code, check out [Development.md](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md).
++If you want to modify the OpenHands source code, check out [Development.md](https://github.com/OpenHands/OpenHands/blob/main/Development.md).
+ 
+ Having issues? The [Troubleshooting Guide](https://docs.all-hands.dev/usage/troubleshooting) can help.
+ 
+@@ -146,17 +146,17 @@ OpenHands is a community-driven project, and we welcome contributions from every
+ through Slack, so this is the best place to start, but we also are happy to have you contact us on Github:
+ 
+ - [Join our Slack workspace](https://all-hands.dev/joinslack) - Here we talk about research, architecture, and future development.
+-- [Read or post Github Issues](https://github.com/All-Hands-AI/OpenHands/issues) - Check out the issues we're working on, or add your own ideas.
++- [Read or post Github Issues](https://github.com/OpenHands/OpenHands/issues) - Check out the issues we're working on, or add your own ideas.
+ 
+ See more about the community in [COMMUNITY.md](./COMMUNITY.md) or find details on contributing in [CONTRIBUTING.md](./CONTRIBUTING.md).
+ 
+ ## 📈 Progress
+ 
+-See the monthly OpenHands roadmap [here](https://github.com/orgs/All-Hands-AI/projects/1) (updated at the maintainer's meeting at the end of each month).
++See the monthly OpenHands roadmap [here](https://github.com/orgs/OpenHands/projects/1) (updated at the maintainer's meeting at the end of each month).
+ 
+ <p align="center">
+-  <a href="https://star-history.com/#All-Hands-AI/OpenHands&Date">
+-    <img src="https://api.star-history.com/svg?repos=All-Hands-AI/OpenHands&type=Date" width="500" alt="Star History Chart">
++  <a href="https://star-history.com/#OpenHands/OpenHands&Date">
++    <img src="https://api.star-history.com/svg?repos=OpenHands/OpenHands&type=Date" width="500" alt="Star History Chart">
+   </a>
+ </p>
+ 
+diff --git a/config.template.toml b/config.template.toml
+index e7b7836dcd26..68b4eed281b5 100644
+--- a/config.template.toml
++++ b/config.template.toml
+@@ -189,7 +189,7 @@ model = "gpt-4o"
+ # Whether to use native tool calling if supported by the model. Can be true, false, or None by default, which chooses the model's default behavior based on the evaluation.
+ # ATTENTION: Based on evaluation, enabling native function calling may lead to worse results
+ # in some scenarios. Use with caution and consider testing with your specific use case.
+-# https://github.com/All-Hands-AI/OpenHands/pull/4711
++# https://github.com/OpenHands/OpenHands/pull/4711
+ #native_tool_calling = None
+ 
+ 
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 8e3767518e1e..f88a2d1c7f04 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -7,7 +7,7 @@ services:
+     image: openhands:latest
+     container_name: openhands-app-${DATE:-}
+     environment:
+-      - SANDBOX_RUNTIME_CONTAINER_IMAGE=${SANDBOX_RUNTIME_CONTAINER_IMAGE:-docker.all-hands.dev/all-hands-ai/runtime:0.59-nikolaik}
++      - SANDBOX_RUNTIME_CONTAINER_IMAGE=${SANDBOX_RUNTIME_CONTAINER_IMAGE:-docker.all-hands.dev/openhands/runtime:0.59-nikolaik}
+       #- SANDBOX_USER_ID=${SANDBOX_USER_ID:-1234} # enable this only if you want a specific non-root sandbox user but you will have to manually adjust permissions of ~/.openhands for this user
+       - WORKSPACE_MOUNT_PATH=${WORKSPACE_BASE:-$PWD/workspace}
+     ports:
+diff --git a/enterprise/README.md b/enterprise/README.md
+index a70abc39a896..8be6f3bd8ab9 100644
+--- a/enterprise/README.md
++++ b/enterprise/README.md
+@@ -8,7 +8,7 @@
+ This directory contains the enterprise server used by [OpenHands Cloud](https://github.com/All-Hands-AI/OpenHands-Cloud/). The official, public version of OpenHands Cloud is available at
+ [app.all-hands.dev](https://app.all-hands.dev).
+ 
+-You may also want to check out the MIT-licensed [OpenHands](https://github.com/All-Hands-AI/OpenHands)
++You may also want to check out the MIT-licensed [OpenHands](https://github.com/OpenHands/OpenHands)
+ 
+ ## Extension of OpenHands (OSS)
+ 
+@@ -16,7 +16,7 @@ The code in `/enterprise` directory builds on top of open source (OSS) code, ext
+ 
+ - Enterprise stacks on top of OSS. For example, the middleware in enterprise is stacked right on top of the middlewares in OSS. In `SAAS`, the middleware from BOTH repos will be present and running (which can sometimes cause conflicts)
+ 
+-- Enterprise overrides the implementation in OSS (only one is present at a time). For example, the server config SaasServerConfig which overrides [`ServerConfig`](https://github.com/All-Hands-AI/OpenHands/blob/main/openhands/server/config/server_config.py#L8) on OSS. This is done through dynamic imports ([see here](https://github.com/All-Hands-AI/OpenHands/blob/main/openhands/server/config/server_config.py#L37-#L45))
++- Enterprise overrides the implementation in OSS (only one is present at a time). For example, the server config SaasServerConfig which overrides [`ServerConfig`](https://github.com/OpenHands/OpenHands/blob/main/openhands/server/config/server_config.py#L8) on OSS. This is done through dynamic imports ([see here](https://github.com/OpenHands/OpenHands/blob/main/openhands/server/config/server_config.py#L37-#L45))
+ 
+ Key areas that change on `SAAS` are
+ 
+diff --git a/enterprise/integrations/slack/slack_manager.py b/enterprise/integrations/slack/slack_manager.py
+index d496d972f0ca..1fd4e2075964 100644
+--- a/enterprise/integrations/slack/slack_manager.py
++++ b/enterprise/integrations/slack/slack_manager.py
+@@ -87,7 +87,7 @@ async def authenticate_user(
+         return slack_user, saas_user_auth
+ 
+     def _infer_repo_from_message(self, user_msg: str) -> str | None:
+-        # Regular expression to match patterns like "All-Hands-AI/OpenHands" or "deploy repo"
++        # Regular expression to match patterns like "OpenHands/OpenHands" or "deploy repo"
+         pattern = r'([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)|([a-zA-Z0-9_-]+)(?=\s+repo)'
+         match = re.search(pattern, user_msg)
+ 
+diff --git a/enterprise/integrations/utils.py b/enterprise/integrations/utils.py
+index 81c5bd52a107..ffe4f81360c2 100644
+--- a/enterprise/integrations/utils.py
++++ b/enterprise/integrations/utils.py
+@@ -381,7 +381,7 @@ def infer_repo_from_message(user_msg: str) -> list[str]:
+     # Captures: protocol, domain, owner, repo (with optional .git extension)
+     git_url_pattern = r'https?://(?:github\.com|gitlab\.com|bitbucket\.org)/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+?)(?:\.git)?(?:[/?#].*?)?(?=\s|$|[^\w.-])'
+ 
+-    # Pattern to match direct owner/repo mentions (e.g., "All-Hands-AI/OpenHands")
++    # Pattern to match direct owner/repo mentions (e.g., "OpenHands/OpenHands")
+     # Must be surrounded by word boundaries or specific characters to avoid false positives
+     direct_pattern = (
+         r'(?:^|\s|[\[\(\'"])([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)(?=\s|$|[\]\)\'",.])'
+diff --git a/enterprise/pyproject.toml b/enterprise/pyproject.toml
+index 30c06307472c..f18407fea942 100644
+--- a/enterprise/pyproject.toml
++++ b/enterprise/pyproject.toml
+@@ -11,7 +11,7 @@ description = "Deploy OpenHands"
+ authors = [ "OpenHands" ]
+ license = "POLYFORM"
+ readme = "README.md"
+-repository = "https://github.com/All-Hands-AI/OpenHands"
++repository = "https://github.com/OpenHands/OpenHands"
+ packages = [
+   { include = "server" },
+   { include = "storage" },
+diff --git a/enterprise/tests/unit/test_slack_integration.py b/enterprise/tests/unit/test_slack_integration.py
+index 3f2d51ac468a..255b730459f9 100644
+--- a/enterprise/tests/unit/test_slack_integration.py
++++ b/enterprise/tests/unit/test_slack_integration.py
+@@ -14,7 +14,7 @@ def slack_manager():
+ @pytest.mark.parametrize(
+     'message,expected',
+     [
+-        ('All-Hands-AI/Openhands', 'All-Hands-AI/Openhands'),
++        ('OpenHands/Openhands', 'OpenHands/Openhands'),
+         ('deploy repo', 'deploy'),
+         ('use hello world', None),
+     ],
+diff --git a/enterprise/tests/unit/test_utils.py b/enterprise/tests/unit/test_utils.py
+index 8800c7b5a2fd..c523e8913833 100644
+--- a/enterprise/tests/unit/test_utils.py
++++ b/enterprise/tests/unit/test_utils.py
+@@ -74,8 +74,8 @@ def test_infer_repo_from_message():
+         # Single GitHub URLs
+         ('Clone https://github.com/demo123/demo1.git', ['demo123/demo1']),
+         (
+-            'Check out https://github.com/All-Hands-AI/OpenHands.git for details',
+-            ['All-Hands-AI/OpenHands'],
++            'Check out https://github.com/OpenHands/OpenHands.git for details',
++            ['OpenHands/OpenHands'],
+         ),
+         ('Visit https://github.com/microsoft/vscode', ['microsoft/vscode']),
+         # Single GitLab URLs
+@@ -92,7 +92,7 @@ def test_infer_repo_from_message():
+             ['atlassian/atlassian-connect-express'],
+         ),
+         # Single direct owner/repo mentions
+-        ('Please deploy the All-Hands-AI/OpenHands repo', ['All-Hands-AI/OpenHands']),
++        ('Please deploy the OpenHands/OpenHands repo', ['OpenHands/OpenHands']),
+         ('I need help with the microsoft/vscode repository', ['microsoft/vscode']),
+         ('Check facebook/react for examples', ['facebook/react']),
+         ('The torvalds/linux kernel', ['torvalds/linux']),
+diff --git a/evaluation/README.md b/evaluation/README.md
+index e15ea68f6057..694623f63d6f 100644
+--- a/evaluation/README.md
++++ b/evaluation/README.md
+@@ -6,14 +6,14 @@ This folder contains code and resources to run experiments and evaluations.
+ 
+ ### Setup
+ 
+-Before starting evaluation, follow the instructions [here](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md) to setup your local development environment and LLM.
++Before starting evaluation, follow the instructions [here](https://github.com/OpenHands/OpenHands/blob/main/Development.md) to setup your local development environment and LLM.
+ 
+ Once you are done with setup, you can follow the benchmark-specific instructions in each subdirectory of the [evaluation directory](#supported-benchmarks).
+ Generally these will involve running `run_infer.py` to perform inference with the agents.
+ 
+ ### Implementing and Evaluating an Agent
+ 
+-To add an agent to OpenHands, you will need to implement it in the [agenthub directory](https://github.com/All-Hands-AI/OpenHands/tree/main/openhands/agenthub). There is a README there with more information.
++To add an agent to OpenHands, you will need to implement it in the [agenthub directory](https://github.com/OpenHands/OpenHands/tree/main/openhands/agenthub). There is a README there with more information.
+ 
+ To evaluate an agent, you can provide the agent's name to the `run_infer.py` program.
+ 
+diff --git a/evaluation/benchmarks/commit0/run_infer.py b/evaluation/benchmarks/commit0/run_infer.py
+index fb125498c359..bf667dacf3fe 100644
+--- a/evaluation/benchmarks/commit0/run_infer.py
++++ b/evaluation/benchmarks/commit0/run_infer.py
+@@ -109,7 +109,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = get_default_sandbox_config_for_eval()
+diff --git a/evaluation/benchmarks/ml_bench/run_analysis.py b/evaluation/benchmarks/ml_bench/run_analysis.py
+index 8baddcffb1e9..4b7f74346300 100644
+--- a/evaluation/benchmarks/ml_bench/run_analysis.py
++++ b/evaluation/benchmarks/ml_bench/run_analysis.py
+@@ -124,7 +124,7 @@ def classify_error(llm: LLM, failed_case: dict) -> str:
+     )
+     args, _ = parser.parse_known_args()
+ 
+-    # Check https://github.com/All-Hands-AI/OpenHands/blob/main/evaluation/swe_bench/README.md#configure-openhands-and-your-llm
++    # Check https://github.com/OpenHands/OpenHands/blob/main/evaluation/swe_bench/README.md#configure-openhands-and-your-llm
+     # for details of how to set `llm_config`
+     if args.llm_config:
+         specified_llm_config = get_llm_config_arg(args.llm_config)
+diff --git a/evaluation/benchmarks/multi_swe_bench/SWE-Gym.md b/evaluation/benchmarks/multi_swe_bench/SWE-Gym.md
+index 1b136e9d3d17..5ce07e5596ae 100644
+--- a/evaluation/benchmarks/multi_swe_bench/SWE-Gym.md
++++ b/evaluation/benchmarks/multi_swe_bench/SWE-Gym.md
+@@ -36,8 +36,8 @@ We use it to train strong LM agents that achieve state-of-the-art open results o
+ The process of running SWE-Gym is very similar to how you'd run SWE-Bench evaluation.
+ 
+ 
+-1. First, clone OpenHands repo `git clone https://github.com/All-Hands-AI/OpenHands.git`
+-2. Then setup the repo following [Development.md](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md)
++1. First, clone OpenHands repo `git clone https://github.com/OpenHands/OpenHands.git`
++2. Then setup the repo following [Development.md](https://github.com/OpenHands/OpenHands/blob/main/Development.md)
+ 3. Then you can simply serve your own model as an OpenAI compatible endpoint, put those info in config.toml. You can do this by following instruction [here](../../README.md#setup).
+ 4. And then simply do the following to sample for 16x parallelism:
+ 
+diff --git a/evaluation/benchmarks/multi_swe_bench/eval_infer.py b/evaluation/benchmarks/multi_swe_bench/eval_infer.py
+index 22fdcc764b13..061e4a909eeb 100644
+--- a/evaluation/benchmarks/multi_swe_bench/eval_infer.py
++++ b/evaluation/benchmarks/multi_swe_bench/eval_infer.py
+@@ -80,7 +80,7 @@ def get_config(metadata: EvalMetadata, instance: pd.Series) -> OpenHandsConfig:
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+     sandbox_config = get_default_sandbox_config_for_eval()
+     sandbox_config.base_container_image = base_container_image
+diff --git a/evaluation/benchmarks/multi_swe_bench/run_infer.py b/evaluation/benchmarks/multi_swe_bench/run_infer.py
+index ef6bf7240bea..d42879d7f893 100644
+--- a/evaluation/benchmarks/multi_swe_bench/run_infer.py
++++ b/evaluation/benchmarks/multi_swe_bench/run_infer.py
+@@ -316,7 +316,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = get_default_sandbox_config_for_eval()
+diff --git a/evaluation/benchmarks/multi_swe_bench/scripts/setup/prepare_swe_utils.sh b/evaluation/benchmarks/multi_swe_bench/scripts/setup/prepare_swe_utils.sh
+index 2d35c6f21892..dadc6e24dd74 100644
+--- a/evaluation/benchmarks/multi_swe_bench/scripts/setup/prepare_swe_utils.sh
++++ b/evaluation/benchmarks/multi_swe_bench/scripts/setup/prepare_swe_utils.sh
+@@ -6,7 +6,7 @@ mkdir -p $EVAL_WORKSPACE
+ 
+ # 1. Prepare REPO
+ echo "==== Prepare SWE-bench repo ===="
+-OH_SWE_BENCH_REPO_PATH="https://github.com/All-Hands-AI/SWE-bench.git"
++OH_SWE_BENCH_REPO_PATH="https://github.com/OpenHands/SWE-bench.git"
+ OH_SWE_BENCH_REPO_BRANCH="eval"
+ git clone -b $OH_SWE_BENCH_REPO_BRANCH $OH_SWE_BENCH_REPO_PATH $EVAL_WORKSPACE/OH-SWE-bench
+ 
+diff --git a/evaluation/benchmarks/nocode_bench/run_infer_nc.py b/evaluation/benchmarks/nocode_bench/run_infer_nc.py
+index 3c3d40bdfc53..e102d5333a21 100644
+--- a/evaluation/benchmarks/nocode_bench/run_infer_nc.py
++++ b/evaluation/benchmarks/nocode_bench/run_infer_nc.py
+@@ -161,7 +161,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = get_default_sandbox_config_for_eval()
+diff --git a/evaluation/benchmarks/nocode_bench/scripts/eval/verify_costs.py b/evaluation/benchmarks/nocode_bench/scripts/eval/verify_costs.py
+index 628ecb4fb515..ae6ebc480146 100644
+--- a/evaluation/benchmarks/nocode_bench/scripts/eval/verify_costs.py
++++ b/evaluation/benchmarks/nocode_bench/scripts/eval/verify_costs.py
+@@ -10,7 +10,7 @@ def verify_instance_costs(row: pd.Series) -> float:
+     Verifies that the accumulated_cost matches the sum of individual costs in metrics.
+     Also checks for duplicate consecutive costs which might indicate buggy counting.
+     If the consecutive costs are identical, the file is affected by this bug:
+-    https://github.com/All-Hands-AI/OpenHands/issues/5383
++    https://github.com/OpenHands/OpenHands/issues/5383
+ 
+     Args:
+         row: DataFrame row containing instance data with metrics
+diff --git a/evaluation/benchmarks/swe_bench/SWE-Gym.md b/evaluation/benchmarks/swe_bench/SWE-Gym.md
+index 613d912022e1..e0f94caaf5fa 100644
+--- a/evaluation/benchmarks/swe_bench/SWE-Gym.md
++++ b/evaluation/benchmarks/swe_bench/SWE-Gym.md
+@@ -34,8 +34,8 @@ We use it to train strong LM agents that achieve state-of-the-art open results o
+ The process of running SWE-Gym is very similar to how you'd run SWE-Bench evaluation.
+ 
+ 
+-1. First, clone OpenHands repo `git clone https://github.com/All-Hands-AI/OpenHands.git`
+-2. Then setup the repo following [Development.md](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md)
++1. First, clone OpenHands repo `git clone https://github.com/OpenHands/OpenHands.git`
++2. Then setup the repo following [Development.md](https://github.com/OpenHands/OpenHands/blob/main/Development.md)
+ 3. Then you can simply serve your own model as an OpenAI compatible endpoint, put those info in config.toml. You can do this by following instruction [here](../../README.md#setup).
+ 4. And then simply do the following to sample for 16x parallelism:
+ 
+diff --git a/evaluation/benchmarks/swe_bench/eval_infer.py b/evaluation/benchmarks/swe_bench/eval_infer.py
+index 46f3629be86b..132d1e1c2d4e 100644
+--- a/evaluation/benchmarks/swe_bench/eval_infer.py
++++ b/evaluation/benchmarks/swe_bench/eval_infer.py
+@@ -76,7 +76,7 @@ def get_config(metadata: EvalMetadata, instance: pd.Series) -> OpenHandsConfig:
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+     sandbox_config = get_default_sandbox_config_for_eval()
+     sandbox_config.base_container_image = base_container_image
+diff --git a/evaluation/benchmarks/swe_bench/run_infer.py b/evaluation/benchmarks/swe_bench/run_infer.py
+index 2b86cc3baac0..f7290bc52da8 100644
+--- a/evaluation/benchmarks/swe_bench/run_infer.py
++++ b/evaluation/benchmarks/swe_bench/run_infer.py
+@@ -217,7 +217,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = get_default_sandbox_config_for_eval()
+diff --git a/evaluation/benchmarks/swe_bench/run_localize.py b/evaluation/benchmarks/swe_bench/run_localize.py
+index 2f7f09912a76..a1d169860d4f 100644
+--- a/evaluation/benchmarks/swe_bench/run_localize.py
++++ b/evaluation/benchmarks/swe_bench/run_localize.py
+@@ -180,7 +180,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = get_default_sandbox_config_for_eval()
+diff --git a/evaluation/benchmarks/swe_bench/scripts/eval/verify_costs.py b/evaluation/benchmarks/swe_bench/scripts/eval/verify_costs.py
+index 4d7ac3089574..6193df5577f9 100644
+--- a/evaluation/benchmarks/swe_bench/scripts/eval/verify_costs.py
++++ b/evaluation/benchmarks/swe_bench/scripts/eval/verify_costs.py
+@@ -9,7 +9,7 @@ def verify_instance_costs(row: pd.Series) -> float:
+     """Verifies that the accumulated_cost matches the sum of individual costs in metrics.
+     Also checks for duplicate consecutive costs which might indicate buggy counting.
+     If the consecutive costs are identical, the file is affected by this bug:
+-    https://github.com/All-Hands-AI/OpenHands/issues/5383
++    https://github.com/OpenHands/OpenHands/issues/5383
+ 
+     Args:
+         row: DataFrame row containing instance data with metrics
+diff --git a/evaluation/benchmarks/swe_bench/scripts/setup/prepare_swe_utils.sh b/evaluation/benchmarks/swe_bench/scripts/setup/prepare_swe_utils.sh
+index f41c45e3f6d1..0ca743422721 100755
+--- a/evaluation/benchmarks/swe_bench/scripts/setup/prepare_swe_utils.sh
++++ b/evaluation/benchmarks/swe_bench/scripts/setup/prepare_swe_utils.sh
+@@ -6,7 +6,7 @@ mkdir -p $EVAL_WORKSPACE
+ 
+ # 1. Prepare REPO
+ echo "==== Prepare SWE-bench repo ===="
+-OH_SWE_BENCH_REPO_PATH="https://github.com/All-Hands-AI/SWE-bench.git"
++OH_SWE_BENCH_REPO_PATH="https://github.com/OpenHands/SWE-bench.git"
+ OH_SWE_BENCH_REPO_BRANCH="eval"
+ git clone -b $OH_SWE_BENCH_REPO_BRANCH $OH_SWE_BENCH_REPO_PATH $EVAL_WORKSPACE/OH-SWE-bench
+ 
+diff --git a/evaluation/benchmarks/swe_perf/run_infer.py b/evaluation/benchmarks/swe_perf/run_infer.py
+index 22b9912de66c..7ee15a640f68 100644
+--- a/evaluation/benchmarks/swe_perf/run_infer.py
++++ b/evaluation/benchmarks/swe_perf/run_infer.py
+@@ -255,7 +255,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = get_default_sandbox_config_for_eval()
+diff --git a/evaluation/benchmarks/testgeneval/README.md b/evaluation/benchmarks/testgeneval/README.md
+index 653534857920..2055546c29e0 100644
+--- a/evaluation/benchmarks/testgeneval/README.md
++++ b/evaluation/benchmarks/testgeneval/README.md
+@@ -74,7 +74,7 @@ To contribute your evaluation results:
+ ## Additional Resources
+ 
+ - [TestGenEval Paper](https://arxiv.org/abs/2410.00752)
+-- [OpenHands Documentation](https://github.com/All-Hands-AI/OpenHands)
++- [OpenHands Documentation](https://github.com/OpenHands/OpenHands)
+ - [HuggingFace Datasets](https://huggingface.co/datasets)
+ 
+-For any questions or issues, please open an issue in the [OpenHands repository](https://github.com/All-Hands-AI/OpenHands/issues).
++For any questions or issues, please open an issue in the [OpenHands repository](https://github.com/OpenHands/OpenHands/issues).
+diff --git a/evaluation/benchmarks/testgeneval/run_infer.py b/evaluation/benchmarks/testgeneval/run_infer.py
+index c8171cca949d..5809a2646903 100644
+--- a/evaluation/benchmarks/testgeneval/run_infer.py
++++ b/evaluation/benchmarks/testgeneval/run_infer.py
+@@ -124,7 +124,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = SandboxConfig(
+diff --git a/evaluation/benchmarks/testgeneval/scripts/setup/prepare_swe_utils.sh b/evaluation/benchmarks/testgeneval/scripts/setup/prepare_swe_utils.sh
+index 3b782a50c3ee..528224fe560b 100755
+--- a/evaluation/benchmarks/testgeneval/scripts/setup/prepare_swe_utils.sh
++++ b/evaluation/benchmarks/testgeneval/scripts/setup/prepare_swe_utils.sh
+@@ -6,7 +6,7 @@ mkdir -p $EVAL_WORKSPACE
+ 
+ # 1. Prepare REPO
+ echo "==== Prepare SWE-bench repo ===="
+-OH_SWE_BENCH_REPO_PATH="https://github.com/All-Hands-AI/SWE-bench.git"
++OH_SWE_BENCH_REPO_PATH="https://github.com/OpenHands/SWE-bench.git"
+ OH_SWE_BENCH_REPO_BRANCH="eval"
+ git clone -b $OH_SWE_BENCH_REPO_BRANCH $OH_SWE_BENCH_REPO_PATH $EVAL_WORKSPACE/OH-SWE-bench
+ 
+diff --git a/evaluation/benchmarks/visual_swe_bench/run_infer.py b/evaluation/benchmarks/visual_swe_bench/run_infer.py
+index ca096d9e194c..6d9f3d6811a3 100644
+--- a/evaluation/benchmarks/visual_swe_bench/run_infer.py
++++ b/evaluation/benchmarks/visual_swe_bench/run_infer.py
+@@ -147,7 +147,7 @@ def get_config(
+     logger.info(
+         f'Using instance container image: {base_container_image}. '
+         f'Please make sure this image exists. '
+-        f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
++        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+     )
+ 
+     sandbox_config = get_default_sandbox_config_for_eval()
+diff --git a/evaluation/integration_tests/README.md b/evaluation/integration_tests/README.md
+index ce98b2d00adf..afe48d70f47b 100644
+--- a/evaluation/integration_tests/README.md
++++ b/evaluation/integration_tests/README.md
+@@ -1,8 +1,8 @@
+ # Integration tests
+ 
+-This directory implements integration tests that [was running in CI](https://github.com/All-Hands-AI/OpenHands/tree/23d3becf1d6f5d07e592f7345750c314a826b4e9/tests/integration).
++This directory implements integration tests that [was running in CI](https://github.com/OpenHands/OpenHands/tree/23d3becf1d6f5d07e592f7345750c314a826b4e9/tests/integration).
+ 
+-[PR 3985](https://github.com/All-Hands-AI/OpenHands/pull/3985) introduce LLM-based editing, which requires access to LLM to perform edit. Hence, we remove integration tests from CI and intend to run them as nightly evaluation to ensure the quality of OpenHands softwares.
++[PR 3985](https://github.com/OpenHands/OpenHands/pull/3985) introduce LLM-based editing, which requires access to LLM to perform edit. Hence, we remove integration tests from CI and intend to run them as nightly evaluation to ensure the quality of OpenHands softwares.
+ 
+ ## To add new tests
+ 
+diff --git a/evaluation/integration_tests/tests/t06_github_pr_browsing.py b/evaluation/integration_tests/tests/t06_github_pr_browsing.py
+index 3c25e0300a35..b85e868401c4 100644
+--- a/evaluation/integration_tests/tests/t06_github_pr_browsing.py
++++ b/evaluation/integration_tests/tests/t06_github_pr_browsing.py
+@@ -6,7 +6,7 @@
+ 
+ 
+ class Test(BaseIntegrationTest):
+-    INSTRUCTION = 'Look at https://github.com/All-Hands-AI/OpenHands/pull/8, and tell me what is happening there and what did @asadm suggest.'
++    INSTRUCTION = 'Look at https://github.com/OpenHands/OpenHands/pull/8, and tell me what is happening there and what did @asadm suggest.'
+ 
+     @classmethod
+     def initialize_runtime(cls, runtime: Runtime) -> None:
+diff --git a/frontend/README.md b/frontend/README.md
+index a6ebbd1a6c98..f11e38bca783 100644
+--- a/frontend/README.md
++++ b/frontend/README.md
+@@ -27,7 +27,7 @@ This is the frontend of the OpenHands project. It is a React application that pr
+ 
+ ```sh
+ # Clone the repository
+-git clone https://github.com/All-Hands-AI/OpenHands.git
++git clone https://github.com/OpenHands/OpenHands.git
+ 
+ # Change the directory to the frontend
+ cd OpenHands/frontend
+@@ -163,7 +163,7 @@ npm run test:coverage
+ 
+ 1. **Component Testing**
+    - Test components in isolation
+-   - Use our custom [`renderWithProviders()`](https://github.com/All-Hands-AI/OpenHands/blob/ce26f1c6d3feec3eedf36f823dee732b5a61e517/frontend/test-utils.tsx#L56-L85) that wraps the components we want to test in our providers. It is especially useful for components that use Redux
++   - Use our custom [`renderWithProviders()`](https://github.com/OpenHands/OpenHands/blob/ce26f1c6d3feec3eedf36f823dee732b5a61e517/frontend/test-utils.tsx#L56-L85) that wraps the components we want to test in our providers. It is especially useful for components that use Redux
+    - Use `render()` from React Testing Library to render components
+    - Prefer querying elements by role, label, or test ID over CSS selectors
+    - Test both rendering and interaction scenarios
+@@ -223,12 +223,12 @@ describe("ComponentName", () => {
+ For real-world examples of testing, check out these test files:
+ 
+ 1. **Chat Input Component Test**:
+-   [`__tests__/components/chat/chat-input.test.tsx`](https://github.com/All-Hands-AI/OpenHands/blob/main/frontend/__tests__/components/chat/chat-input.test.tsx)
++   [`__tests__/components/chat/chat-input.test.tsx`](https://github.com/OpenHands/OpenHands/blob/main/frontend/__tests__/components/chat/chat-input.test.tsx)
+    - Demonstrates comprehensive testing of a complex input component
+    - Covers various scenarios like submission, disabled states, and user interactions
+ 
+ 2. **File Explorer Component Test**:
+-   [`__tests__/components/file-explorer/file-explorer.test.tsx`](https://github.com/All-Hands-AI/OpenHands/blob/main/frontend/__tests__/components/file-explorer/file-explorer.test.tsx)
++   [`__tests__/components/file-explorer/file-explorer.test.tsx`](https://github.com/OpenHands/OpenHands/blob/main/frontend/__tests__/components/file-explorer/file-explorer.test.tsx)
+    - Shows testing of a more complex component with multiple interactions
+    - Illustrates testing of nested components and state management
+ 
+diff --git a/frontend/__tests__/components/features/home/repo-connector.test.tsx b/frontend/__tests__/components/features/home/repo-connector.test.tsx
+index 7948c6d1125a..8e186257a092 100644
+--- a/frontend/__tests__/components/features/home/repo-connector.test.tsx
++++ b/frontend/__tests__/components/features/home/repo-connector.test.tsx
+@@ -57,7 +57,7 @@ const MOCK_RESPOSITORIES: GitRepository[] = [
+   },
+   {
+     id: "2",
+-    full_name: "All-Hands-AI/OpenHands",
++    full_name: "OpenHands/OpenHands",
+     git_provider: "github",
+     is_public: true,
+     main_branch: "main",
+@@ -114,7 +114,7 @@ describe("RepoConnector", () => {
+     // Wait for the options to be loaded and displayed
+     await waitFor(() => {
+       expect(screen.getByText("rbren/polaris")).toBeInTheDocument();
+-      expect(screen.getByText("All-Hands-AI/OpenHands")).toBeInTheDocument();
++      expect(screen.getByText("OpenHands/OpenHands")).toBeInTheDocument();
+     });
+   });
+ 
+diff --git a/frontend/__tests__/parse-pr-url.test.ts b/frontend/__tests__/parse-pr-url.test.ts
+index fc4ed69ee86c..477a40c2550a 100644
+--- a/frontend/__tests__/parse-pr-url.test.ts
++++ b/frontend/__tests__/parse-pr-url.test.ts
+@@ -118,7 +118,7 @@ describe("parse-pr-url", () => {
+     it("should handle typical microagent finish messages", () => {
+       const text = `
+         I have successfully created a pull request with the requested changes.
+-        You can view the PR here: https://github.com/All-Hands-AI/OpenHands/pull/1234
++        You can view the PR here: https://github.com/OpenHands/OpenHands/pull/1234
+ 
+         The changes include:
+         - Updated the component
+@@ -126,7 +126,7 @@ describe("parse-pr-url", () => {
+         - Fixed the issue
+       `;
+       const url = getFirstPRUrl(text);
+-      expect(url).toBe("https://github.com/All-Hands-AI/OpenHands/pull/1234");
++      expect(url).toBe("https://github.com/OpenHands/OpenHands/pull/1234");
+     });
+ 
+     it("should handle messages with PR URLs in the middle", () => {
+diff --git a/frontend/src/stores/browser-store.ts b/frontend/src/stores/browser-store.ts
+index cb28f3aa67e6..a62770285332 100644
+--- a/frontend/src/stores/browser-store.ts
++++ b/frontend/src/stores/browser-store.ts
+@@ -14,7 +14,7 @@ interface BrowserStore extends BrowserState {
+ }
+ 
+ const initialState: BrowserState = {
+-  url: "https://github.com/All-Hands-AI/OpenHands",
++  url: "https://github.com/OpenHands/OpenHands",
+   screenshotSrc: "",
+ };
+ 
+diff --git a/microagents/README.md b/microagents/README.md
+index 33a4193a085d..97e920e535f1 100644
+--- a/microagents/README.md
++++ b/microagents/README.md
+@@ -66,7 +66,7 @@ Key characteristics:
+ - **Reusable**: Knowledge can be applied across multiple projects
+ - **Versioned**: Support multiple versions of tools/frameworks
+ 
+-You can see an example of a knowledge-based agent in [OpenHands's github microagent](https://github.com/All-Hands-AI/OpenHands/tree/main/microagents/github.md).
++You can see an example of a knowledge-based agent in [OpenHands's github microagent](https://github.com/OpenHands/OpenHands/tree/main/microagents/github.md).
+ 
+ ### 2. Repository Agents
+ 
+@@ -82,7 +82,7 @@ Key features:
+ - **Always active**: Automatically loaded for the repository
+ - **Locally maintained**: Updated with the project
+ 
+-You can see an example of a repo agent in [the agent for the OpenHands repo itself](https://github.com/All-Hands-AI/OpenHands/blob/main/.openhands/microagents/repo.md).
++You can see an example of a repo agent in [the agent for the OpenHands repo itself](https://github.com/OpenHands/OpenHands/blob/main/.openhands/microagents/repo.md).
+ 
+ 
+ ## Contributing
+diff --git a/microagents/add_agent.md b/microagents/add_agent.md
+index 44316e1b5e28..e3fccd19eb42 100644
+--- a/microagents/add_agent.md
++++ b/microagents/add_agent.md
+@@ -37,4 +37,4 @@ When creating a new microagent:
+ For detailed information, see:
+ 
+ - [Microagents Overview](https://docs.all-hands.dev/usage/prompting/microagents-overview)
+-- [Example GitHub Microagent](https://github.com/All-Hands-AI/OpenHands/blob/main/microagents/github.md)
++- [Example GitHub Microagent](https://github.com/OpenHands/OpenHands/blob/main/microagents/github.md)
+diff --git a/openhands-cli/README.md b/openhands-cli/README.md
+index 740a50b99c6d..be936f622309 100644
+--- a/openhands-cli/README.md
++++ b/openhands-cli/README.md
+@@ -1,8 +1,8 @@
+ # OpenHands V1 CLI
+ 
+-A **lightweight, modern CLI** to interact with the OpenHands agent (powered by [agent-sdk](https://github.com/All-Hands-AI/agent-sdk)). 
++A **lightweight, modern CLI** to interact with the OpenHands agent (powered by [agent-sdk](https://github.com/OpenHands/agent-sdk)). 
+ 
+-The [OpenHands V0 CLI (legacy)](https://github.com/All-Hands-AI/OpenHands/tree/main/openhands/cli) is being deprecated.
++The [OpenHands V0 CLI (legacy)](https://github.com/OpenHands/OpenHands/tree/main/openhands/cli) is being deprecated.
+ 
+ ---
+ 
+diff --git a/openhands-cli/openhands_cli/gui_launcher.py b/openhands-cli/openhands_cli/gui_launcher.py
+index d2c149c9d5d8..554817379f69 100644
+--- a/openhands-cli/openhands_cli/gui_launcher.py
++++ b/openhands-cli/openhands_cli/gui_launcher.py
+@@ -104,8 +104,8 @@ def launch_gui_server(mount_cwd: bool = False, gpu: bool = False) -> None:
+ 
+     # Get the current version for the Docker image
+     version = get_openhands_version()
+-    runtime_image = f'docker.all-hands.dev/all-hands-ai/runtime:{version}-nikolaik'
+-    app_image = f'docker.all-hands.dev/all-hands-ai/openhands:{version}'
++    runtime_image = f'docker.all-hands.dev/openhands/runtime:{version}-nikolaik'
++    app_image = f'docker.all-hands.dev/openhands/openhands:{version}'
+ 
+     print_formatted_text(HTML('<grey>Pulling required Docker images...</grey>'))
+ 
+diff --git a/openhands-cli/openhands_cli/pt_style.py b/openhands-cli/openhands_cli/pt_style.py
+index 24fab6a9f0c9..3b4ade6c9ad6 100644
+--- a/openhands-cli/openhands_cli/pt_style.py
++++ b/openhands-cli/openhands_cli/pt_style.py
+@@ -20,7 +20,7 @@ def get_cli_style() -> BaseStyle:
+             'prompt': f'{COLOR_GOLD} bold',
+             # Ensure good contrast for fuzzy matches on the selected completion row
+             # across terminals/themes (e.g., Ubuntu GNOME, Alacritty, Kitty).
+-            # See https://github.com/All-Hands-AI/OpenHands/issues/10330
++            # See https://github.com/OpenHands/OpenHands/issues/10330
+             'completion-menu.completion.current fuzzymatch.outside': 'fg:#ffffff bg:#888888',
+             'selected': COLOR_GOLD,
+             'risk-high': '#FF0000 bold',  # Red bold for HIGH risk
+diff --git a/openhands-cli/tests/test_gui_launcher.py b/openhands-cli/tests/test_gui_launcher.py
+index 05d5c00c74d2..dfcca32bc025 100644
+--- a/openhands-cli/tests/test_gui_launcher.py
++++ b/openhands-cli/tests/test_gui_launcher.py
+@@ -182,7 +182,7 @@ def test_launch_gui_server_scenarios(
+             # Check pull command
+             pull_call = mock_run.call_args_list[0]
+             pull_cmd = pull_call[0][0]
+-            assert pull_cmd[0:3] == ['docker', 'pull', 'docker.all-hands.dev/all-hands-ai/runtime:latest-nikolaik']
++            assert pull_cmd[0:3] == ['docker', 'pull', 'docker.all-hands.dev/openhands/runtime:latest-nikolaik']
+ 
+             # Check run command
+             run_call = mock_run.call_args_list[1]
+diff --git a/openhands-ui/package.json b/openhands-ui/package.json
+index 50b5f0080718..49cc397425e5 100644
+--- a/openhands-ui/package.json
++++ b/openhands-ui/package.json
+@@ -44,12 +44,12 @@
+   ],
+   "repository": {
+     "type": "git",
+-    "url": "https://github.com/All-Hands-AI/OpenHands.git",
++    "url": "https://github.com/OpenHands/OpenHands.git",
+     "directory": "openhands-ui"
+   },
+   "homepage": "https://www.all-hands.dev/",
+   "bugs": {
+-    "url": "https://github.com/All-Hands-AI/OpenHands/issues"
++    "url": "https://github.com/OpenHands/OpenHands/issues"
+   },
+   "devDependencies": {
+     "@chromatic-com/storybook": "^4.0.0",
+diff --git a/openhands/agenthub/codeact_agent/README.md b/openhands/agenthub/codeact_agent/README.md
+index 9686845e5017..3a36f6b3c231 100644
+--- a/openhands/agenthub/codeact_agent/README.md
++++ b/openhands/agenthub/codeact_agent/README.md
+@@ -13,7 +13,7 @@ The CodeAct agent operates through a function calling interface. At each turn, t
+    - Interact with web browsers using `browser` and `fetch`
+    - Edit files using `str_replace_editor` or `edit_file`
+ 
+-![image](https://github.com/All-Hands-AI/OpenHands/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
++![image](https://github.com/OpenHands/OpenHands/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
+ 
+ ## Built-in Tools
+ 
+diff --git a/openhands/agenthub/codeact_agent/codeact_agent.py b/openhands/agenthub/codeact_agent/codeact_agent.py
+index 83e72010c486..85e5f88cbcb7 100644
+--- a/openhands/agenthub/codeact_agent/codeact_agent.py
++++ b/openhands/agenthub/codeact_agent/codeact_agent.py
+@@ -63,7 +63,7 @@ class CodeActAgent(Agent):
+     - Execute any valid Linux `bash` command
+     - Execute any valid `Python` code with [an interactive Python interpreter](https://ipython.org/). This is simulated through `bash` command, see plugin system below for more details.
+ 
+-    ![image](https://github.com/All-Hands-AI/OpenHands/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
++    ![image](https://github.com/OpenHands/OpenHands/assets/38853559/92b622e3-72ad-4a61-8f41-8c040b6d5fb3)
+ 
+     """
+ 
+diff --git a/openhands/cli/gui_launcher.py b/openhands/cli/gui_launcher.py
+index 544f8987c7f3..7946bc87964b 100644
+--- a/openhands/cli/gui_launcher.py
++++ b/openhands/cli/gui_launcher.py
+@@ -94,8 +94,8 @@ def launch_gui_server(mount_cwd: bool = False, gpu: bool = False) -> None:
+ 
+     # Get the current version for the Docker image
+     version = __version__
+-    runtime_image = f'docker.all-hands.dev/all-hands-ai/runtime:{version}-nikolaik'
+-    app_image = f'docker.all-hands.dev/all-hands-ai/openhands:{version}'
++    runtime_image = f'docker.all-hands.dev/openhands/runtime:{version}-nikolaik'
++    app_image = f'docker.all-hands.dev/openhands/openhands:{version}'
+ 
+     print_formatted_text(HTML('<grey>Pulling required Docker images...</grey>'))
+ 
+diff --git a/openhands/cli/pt_style.py b/openhands/cli/pt_style.py
+index 9df4f0a0a51f..d171214e33d7 100644
+--- a/openhands/cli/pt_style.py
++++ b/openhands/cli/pt_style.py
+@@ -19,7 +19,7 @@ def get_cli_style() -> Style:
+             'prompt': f'{COLOR_GOLD} bold',
+             # Ensure good contrast for fuzzy matches on the selected completion row
+             # across terminals/themes (e.g., Ubuntu GNOME, Alacritty, Kitty).
+-            # See https://github.com/All-Hands-AI/OpenHands/issues/10330
++            # See https://github.com/OpenHands/OpenHands/issues/10330
+             'completion-menu.completion.current fuzzymatch.outside': 'fg:#ffffff bg:#888888',
+             'selected': COLOR_GOLD,
+             'risk-high': '#FF0000 bold',  # Red bold for HIGH risk
+diff --git a/openhands/cli/vscode_extension.py b/openhands/cli/vscode_extension.py
+index b458d3db14c7..3cc92e8b96f9 100644
+--- a/openhands/cli/vscode_extension.py
++++ b/openhands/cli/vscode_extension.py
+@@ -16,7 +16,7 @@ def download_latest_vsix_from_github() -> str | None:
+     Returns:
+         Path to downloaded .vsix file, or None if failed
+     """
+-    api_url = 'https://api.github.com/repos/All-Hands-AI/OpenHands/releases'
++    api_url = 'https://api.github.com/repos/OpenHands/OpenHands/releases'
+     try:
+         with urllib.request.urlopen(api_url, timeout=10) as response:
+             if response.status != 200:
+diff --git a/openhands/controller/agent_controller.py b/openhands/controller/agent_controller.py
+index ce0b5e0b3a03..e9616c66b5fa 100644
+--- a/openhands/controller/agent_controller.py
++++ b/openhands/controller/agent_controller.py
+@@ -974,7 +974,7 @@ async def _step(self) -> None:
+                 if self.agent.config.cli_mode:
+                     # TODO(refactor): this is not ideal to have CLI been an exception
+                     # We should refactor agent controller to consider this in the future
+-                    # See issue: https://github.com/All-Hands-AI/OpenHands/issues/10464
++                    # See issue: https://github.com/OpenHands/OpenHands/issues/10464
+                     action.confirmation_state = (  # type: ignore[union-attr]
+                         ActionConfirmationStatus.AWAITING_CONFIRMATION
+                     )
+diff --git a/openhands/core/config/llm_config.py b/openhands/core/config/llm_config.py
+index f8f1bce72617..c5caaf3a2cd2 100644
+--- a/openhands/core/config/llm_config.py
++++ b/openhands/core/config/llm_config.py
+@@ -179,7 +179,7 @@ def model_post_init(self, __context: Any) -> None:
+ 
+         # Set an API version by default for Azure models
+         # Required for newer models.
+-        # Azure issue: https://github.com/All-Hands-AI/OpenHands/issues/7755
++        # Azure issue: https://github.com/OpenHands/OpenHands/issues/7755
+         if self.model.startswith('azure') and self.api_version is None:
+             self.api_version = '2024-12-01-preview'
+ 
+diff --git a/openhands/events/serialization/action.py b/openhands/events/serialization/action.py
+index b86d4aa52a23..98f2b89e6106 100644
+--- a/openhands/events/serialization/action.py
++++ b/openhands/events/serialization/action.py
+@@ -56,7 +56,7 @@
+ 
+ 
+ def handle_action_deprecated_args(args: dict[str, Any]) -> dict[str, Any]:
+-    # keep_prompt has been deprecated in https://github.com/All-Hands-AI/OpenHands/pull/4881
++    # keep_prompt has been deprecated in https://github.com/OpenHands/OpenHands/pull/4881
+     if 'keep_prompt' in args:
+         args.pop('keep_prompt')
+ 
+diff --git a/openhands/events/serialization/observation.py b/openhands/events/serialization/observation.py
+index 0b3a87a19af0..d55493ad918c 100644
+--- a/openhands/events/serialization/observation.py
++++ b/openhands/events/serialization/observation.py
+@@ -82,7 +82,7 @@ def _update_cmd_output_metadata(
+ 
+ 
+ def handle_observation_deprecated_extras(extras: dict) -> dict:
+-    # These are deprecated in https://github.com/All-Hands-AI/OpenHands/pull/4881
++    # These are deprecated in https://github.com/OpenHands/OpenHands/pull/4881
+     if 'exit_code' in extras:
+         extras['metadata'] = _update_cmd_output_metadata(
+             extras.get('metadata', None), exit_code=extras.pop('exit_code')
+@@ -92,7 +92,7 @@ def handle_observation_deprecated_extras(extras: dict) -> dict:
+             extras.get('metadata', None), pid=extras.pop('command_id')
+         )
+ 
+-    # formatted_output_and_error has been deprecated in https://github.com/All-Hands-AI/OpenHands/pull/6671
++    # formatted_output_and_error has been deprecated in https://github.com/OpenHands/OpenHands/pull/6671
+     if 'formatted_output_and_error' in extras:
+         extras.pop('formatted_output_and_error')
+     return extras
+diff --git a/openhands/integrations/vscode/README.md b/openhands/integrations/vscode/README.md
+index da291dd829e7..c17a58ff19b7 100644
+--- a/openhands/integrations/vscode/README.md
++++ b/openhands/integrations/vscode/README.md
+@@ -4,7 +4,7 @@ The official OpenHands companion extension for Visual Studio Code.
+ 
+ This extension seamlessly integrates OpenHands into your VSCode workflow, allowing you to start coding sessions with your AI agent directly from your editor.
+ 
+-![OpenHands VSCode Extension Demo](https://raw.githubusercontent.com/All-Hands-AI/OpenHands/main/assets/images/vscode-extension-demo.gif)
++![OpenHands VSCode Extension Demo](https://raw.githubusercontent.com/OpenHands/OpenHands/main/assets/images/vscode-extension-demo.gif)
+ 
+ ## Features
+ 
+@@ -32,7 +32,7 @@ You can access the extension's commands in two ways:
+ For the best experience, the OpenHands CLI will attempt to install the extension for you automatically the first time you run it inside VSCode.
+ 
+ If you need to install it manually:
+-1.  Download the latest `.vsix` file from the [GitHub Releases page](https://github.com/All-Hands-AI/OpenHands/releases).
++1.  Download the latest `.vsix` file from the [GitHub Releases page](https://github.com/OpenHands/OpenHands/releases).
+ 2.  In VSCode, open the Command Palette (`Ctrl+Shift+P`).
+ 3.  Run the **"Extensions: Install from VSIX..."** command.
+ 4.  Select the `.vsix` file you downloaded.
+diff --git a/openhands/integrations/vscode/package.json b/openhands/integrations/vscode/package.json
+index 248aaf2aab6f..849e9c085f07 100644
+--- a/openhands/integrations/vscode/package.json
++++ b/openhands/integrations/vscode/package.json
+@@ -7,7 +7,7 @@
+   "license": "MIT",
+   "repository": {
+     "type": "git",
+-    "url": "https://github.com/all-hands-ai/OpenHands.git"
++    "url": "https://github.com/openhands/OpenHands.git"
+   },
+   "engines": {
+     "vscode": "^1.98.2",
+diff --git a/openhands/linter/__init__.py b/openhands/linter/__init__.py
+index 23e5d0de6e48..dc0c91ba4a82 100644
+--- a/openhands/linter/__init__.py
++++ b/openhands/linter/__init__.py
+@@ -3,7 +3,7 @@
+ Part of this Linter module is adapted from Aider (Apache 2.0 License, [original
+ code](https://github.com/paul-gauthier/aider/blob/main/aider/linter.py)).
+ - Please see the [original repository](https://github.com/paul-gauthier/aider) for more information.
+-- The detailed implementation of the linter can be found at: https://github.com/All-Hands-AI/openhands-aci.
++- The detailed implementation of the linter can be found at: https://github.com/OpenHands/openhands-aci.
+ """
+ 
+ from openhands_aci.linter import DefaultLinter, LintResult
+diff --git a/openhands/llm/llm.py b/openhands/llm/llm.py
+index 9589ec94e3f7..8595813d2a37 100644
+--- a/openhands/llm/llm.py
++++ b/openhands/llm/llm.py
+@@ -160,7 +160,7 @@ def __init__(
+                 'temperature'
+             )  # temperature is not supported for reasoning models
+             kwargs.pop('top_p')  # reasoning model like o3 doesn't support top_p
+-        # Azure issue: https://github.com/All-Hands-AI/OpenHands/issues/6777
++        # Azure issue: https://github.com/OpenHands/OpenHands/issues/6777
+         if self.config.model.startswith('azure'):
+             kwargs['max_tokens'] = self.config.max_output_tokens
+             kwargs.pop('max_completion_tokens')
+diff --git a/openhands/resolver/README.md b/openhands/resolver/README.md
+index 55a169e0b69b..0bcd5a230799 100644
+--- a/openhands/resolver/README.md
++++ b/openhands/resolver/README.md
+@@ -2,7 +2,7 @@
+ 
+ Need help resolving a GitHub, GitLab, or Bitbucket issue but don't have the time to do it yourself? Let an AI agent help you out!
+ 
+-This tool allows you to use open-source AI agents based on [OpenHands](https://github.com/all-hands-ai/openhands)
++This tool allows you to use open-source AI agents based on [OpenHands](https://github.com/openhands/openhands)
+ to attempt to resolve GitHub, GitLab, and Bitbucket issues automatically. While it can handle multiple issues, it's primarily designed
+ to help you resolve one issue at a time with high quality.
+ 
+@@ -62,7 +62,7 @@ Follow these steps to use this workflow in your own repository:
+         2. Create a draft PR if successful, or push a branch if unsuccessful
+         3. Comment on the issue with the results
+ 
+-Need help? Feel free to [open an issue](https://github.com/all-hands-ai/openhands/issues) or email us at [contact@all-hands.dev](mailto:contact@all-hands.dev).
++Need help? Feel free to [open an issue](https://github.com/openhands/openhands/issues).
+ 
+ ## Manual Installation
+ 
+@@ -142,7 +142,7 @@ python -m openhands.resolver.resolve_issue --selected-repo [OWNER]/[REPO] --issu
+ For instance, if you want to resolve issue #100 in this repo, you would run:
+ 
+ ```bash
+-python -m openhands.resolver.resolve_issue --selected-repo all-hands-ai/openhands --issue-number 100
++python -m openhands.resolver.resolve_issue --selected-repo openhands/openhands --issue-number 100
+ ```
+ 
+ The output will be written to the `output/` directory.
+@@ -150,7 +150,7 @@ The output will be written to the `output/` directory.
+ If you've installed the package from source using poetry, you can use:
+ 
+ ```bash
+-poetry run python openhands/resolver/resolve_issue.py --selected-repo all-hands-ai/openhands --issue-number 100
++poetry run python openhands/resolver/resolve_issue.py --selected-repo openhands/openhands --issue-number 100
+ ```
+ 
+ ## Responding to PR Comments
+@@ -198,7 +198,7 @@ python -m openhands.resolver.send_pull_request --issue-number ISSUE_NUMBER --use
+ 
+ ## Providing Custom Instructions
+ 
+-You can customize how the AI agent approaches issue resolution by adding a repository microagent file at `.openhands/microagents/repo.md` in your repository. This file's contents will be automatically loaded in the prompt when working with your repository. For more information about repository microagents, see [Repository Instructions](https://github.com/All-Hands-AI/OpenHands/tree/main/microagents#2-repository-instructions-private).
++You can customize how the AI agent approaches issue resolution by adding a repository microagent file at `.openhands/microagents/repo.md` in your repository. This file's contents will be automatically loaded in the prompt when working with your repository. For more information about repository microagents, see [Repository Instructions](https://github.com/OpenHands/OpenHands/tree/main/microagents#2-repository-instructions-private).
+ 
+ ## Troubleshooting
+ 
+diff --git a/openhands/resolver/examples/openhands-resolver.yml b/openhands/resolver/examples/openhands-resolver.yml
+index 4268545e9662..66508c999073 100644
+--- a/openhands/resolver/examples/openhands-resolver.yml
++++ b/openhands/resolver/examples/openhands-resolver.yml
+@@ -19,7 +19,7 @@ permissions:
+ 
+ jobs:
+   call-openhands-resolver:
+-    uses: All-Hands-AI/OpenHands/.github/workflows/openhands-resolver.yml@main
++    uses: OpenHands/OpenHands/.github/workflows/openhands-resolver.yml@main
+     with:
+       macro: ${{ vars.OPENHANDS_MACRO || '@openhands-agent' }}
+       max_iterations: ${{ fromJson(vars.OPENHANDS_MAX_ITER || 50) }}
+diff --git a/openhands/resolver/send_pull_request.py b/openhands/resolver/send_pull_request.py
+index f77ba7f540d3..8857602ec10c 100644
+--- a/openhands/resolver/send_pull_request.py
++++ b/openhands/resolver/send_pull_request.py
+@@ -349,7 +349,7 @@ def send_pull_request(
+     pr_body = f'This pull request fixes #{issue.number}.'
+     if additional_message:
+         pr_body += f'\n\n{additional_message}'
+-    pr_body += '\n\nAutomatic fix generated by [OpenHands](https://github.com/All-Hands-AI/OpenHands/) 🙌'
++    pr_body += '\n\nAutomatic fix generated by [OpenHands](https://github.com/OpenHands/OpenHands/) 🙌'
+ 
+     # For cross repo pull request, we need to send head parameter like fork_owner:branch as per git documentation here : https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28#create-a-pull-request
+     # head parameter usage : The name of the branch where your changes are implemented. For cross-repository pull requests in the same network, namespace head with a user like this: username:branch.
+diff --git a/openhands/runtime/README.md b/openhands/runtime/README.md
+index 69501f31add7..76661c4f075a 100644
+--- a/openhands/runtime/README.md
++++ b/openhands/runtime/README.md
+@@ -150,7 +150,7 @@ Key features:
+ - Support for cloud-based deployments
+ - Potential for improved security through isolation
+ 
+-At the time of this writing, this is mostly used in parallel evaluation, such as this example for [SWE-Bench](https://github.com/All-Hands-AI/OpenHands/tree/main/evaluation/benchmarks/swe_bench#run-inference-on-remoteruntime-experimental).
++At the time of this writing, this is mostly used in parallel evaluation, such as this example for [SWE-Bench](https://github.com/OpenHands/OpenHands/tree/main/evaluation/benchmarks/swe_bench#run-inference-on-remoteruntime-experimental).
+ 
+ ## Related Components
+ 
+diff --git a/openhands/runtime/impl/kubernetes/README.md b/openhands/runtime/impl/kubernetes/README.md
+index a9469f313f33..67788fcaaf6c 100644
+--- a/openhands/runtime/impl/kubernetes/README.md
++++ b/openhands/runtime/impl/kubernetes/README.md
+@@ -40,7 +40,7 @@ Two configuration options are required to use the Kubernetes runtime:
+ 2. **Runtime Container Image**: Specify the container image to use for the runtime environment
+    ```toml
+    [sandbox]
+-   runtime_container_image = "docker.all-hands.dev/all-hands-ai/runtime:0.59-nikolaik"
++   runtime_container_image = "docker.all-hands.dev/openhands/runtime:0.59-nikolaik"
+    ```
+ 
+ #### Additional Kubernetes Options
+diff --git a/openhands/runtime/impl/local/local_runtime.py b/openhands/runtime/impl/local/local_runtime.py
+index ee9fc7a706d4..01df02dfe622 100644
+--- a/openhands/runtime/impl/local/local_runtime.py
++++ b/openhands/runtime/impl/local/local_runtime.py
+@@ -79,7 +79,7 @@ def get_user_info() -> tuple[int, str | None]:
+ 
+ 
+ def check_dependencies(code_repo_path: str, check_browser: bool) -> None:
+-    ERROR_MESSAGE = 'Please follow the instructions in https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md to install OpenHands.'
++    ERROR_MESSAGE = 'Please follow the instructions in https://github.com/OpenHands/OpenHands/blob/main/Development.md to install OpenHands.'
+     if not os.path.exists(code_repo_path):
+         raise ValueError(
+             f'Code repo path {code_repo_path} does not exist. ' + ERROR_MESSAGE
+@@ -158,7 +158,7 @@ def __init__(
+ 
+         logger.warning(
+             'Initializing LocalRuntime. WARNING: NO SANDBOX IS USED. '
+-            'This is an experimental feature, please report issues to https://github.com/All-Hands-AI/OpenHands/issues. '
++            'This is an experimental feature, please report issues to https://github.com/OpenHands/OpenHands/issues. '
+             '`run_as_openhands` will be ignored since the current user will be used to launch the server. '
+             'We highly recommend using a sandbox (eg. DockerRuntime) unless you '
+             'are running in a controlled environment.\n'
+diff --git a/openhands/runtime/plugins/agent_skills/README.md b/openhands/runtime/plugins/agent_skills/README.md
+index 2ce9e869ada0..652a5c6df2f2 100644
+--- a/openhands/runtime/plugins/agent_skills/README.md
++++ b/openhands/runtime/plugins/agent_skills/README.md
+@@ -5,7 +5,7 @@ This folder implements a skill/tool set `agentskills` for OpenHands.
+ It is intended to be used by the agent **inside sandbox**.
+ The skill set will be exposed as a `pip` package that can be installed as a plugin inside the sandbox.
+ 
+-The skill set can contain a bunch of wrapped tools for agent ([many examples here](https://github.com/All-Hands-AI/OpenHands/pull/1914)), for example:
++The skill set can contain a bunch of wrapped tools for agent ([many examples here](https://github.com/OpenHands/OpenHands/pull/1914)), for example:
+ - Audio/Video to text (these are a temporary solution, and we should switch to multimodal models when they are sufficiently cheap
+ - PDF to text
+ - etc.
+diff --git a/openhands/runtime/plugins/agent_skills/file_editor/__init__.py b/openhands/runtime/plugins/agent_skills/file_editor/__init__.py
+index 06d5bcca6325..971335eeea4a 100644
+--- a/openhands/runtime/plugins/agent_skills/file_editor/__init__.py
++++ b/openhands/runtime/plugins/agent_skills/file_editor/__init__.py
+@@ -1,6 +1,6 @@
+ """This file imports a global singleton of the `EditTool` class as well as raw functions that expose
+ its __call__.
+-The implementation of the `EditTool` class can be found at: https://github.com/All-Hands-AI/openhands-aci/.
++The implementation of the `EditTool` class can be found at: https://github.com/OpenHands/openhands-aci/.
+ """
+ 
+ from openhands_aci.editor import file_editor
+diff --git a/tests/runtime/test_bash.py b/tests/runtime/test_bash.py
+index dcf1b6aadfa9..b6ecc7f2bbbd 100644
+--- a/tests/runtime/test_bash.py
++++ b/tests/runtime/test_bash.py
+@@ -271,7 +271,7 @@ def test_no_ps2_in_output(temp_dir, runtime_cls, run_as_openhands):
+     is_windows(), reason='Test uses Linux-specific bash loops and sed commands'
+ )
+ def test_multiline_command_loop(temp_dir, runtime_cls):
+-    # https://github.com/All-Hands-AI/OpenHands/issues/3143
++    # https://github.com/OpenHands/OpenHands/issues/3143
+     init_cmd = """mkdir -p _modules && \
+ for month in {01..04}; do
+     for day in {01..05}; do
+@@ -1453,7 +1453,7 @@ def test_bash_remove_prefix(temp_dir, runtime_cls, run_as_openhands):
+     try:
+         # create a git repo - same for both platforms
+         action = CmdRunAction(
+-            'git init && git remote add origin https://github.com/All-Hands-AI/OpenHands'
++            'git init && git remote add origin https://github.com/OpenHands/OpenHands'
+         )
+         obs = runtime.run_action(action)
+         # logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+@@ -1463,7 +1463,7 @@ def test_bash_remove_prefix(temp_dir, runtime_cls, run_as_openhands):
+         obs = runtime.run_action(CmdRunAction('git remote -v'))
+         # logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+         assert obs.metadata.exit_code == 0
+-        assert 'https://github.com/All-Hands-AI/OpenHands' in obs.content
++        assert 'https://github.com/OpenHands/OpenHands' in obs.content
+         assert 'git remote -v' not in obs.content
+     finally:
+         _close_test_runtime(runtime)
+diff --git a/tests/runtime/test_microagent.py b/tests/runtime/test_microagent.py
+index 0ffd98bdbe61..c43b55eecd9b 100644
+--- a/tests/runtime/test_microagent.py
++++ b/tests/runtime/test_microagent.py
+@@ -114,7 +114,7 @@ def test_load_microagents_with_selected_repo(temp_dir, runtime_cls, run_as_openh
+     try:
+         # Load microagents with selected repository
+         loaded_agents = runtime.get_microagents_from_selected_repo(
+-            'All-Hands-AI/OpenHands'
++            'OpenHands/OpenHands'
+         )
+ 
+         # Verify all agents are loaded
+diff --git a/tests/runtime/test_setup.py b/tests/runtime/test_setup.py
+index 8ee1096b7769..0a1ea675b97d 100644
+--- a/tests/runtime/test_setup.py
++++ b/tests/runtime/test_setup.py
+@@ -17,7 +17,7 @@ def test_initialize_repository_for_runtime(temp_dir, runtime_cls, run_as_openhan
+     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
+     mock_repo = Repository(
+         id='1232',
+-        full_name='All-Hands-AI/OpenHands',
++        full_name='OpenHands/OpenHands',
+         git_provider=ProviderType.GITHUB,
+         is_public=True,
+     )
+@@ -27,7 +27,7 @@ def test_initialize_repository_for_runtime(temp_dir, runtime_cls, run_as_openhan
+         return_value=mock_repo,
+     ):
+         repository_dir = initialize_repository_for_runtime(
+-            runtime, selected_repository='All-Hands-AI/OpenHands'
++            runtime, selected_repository='OpenHands/OpenHands'
+         )
+ 
+     assert repository_dir is not None
+diff --git a/tests/unit/integrations/bitbucket/test_bitbucket.py b/tests/unit/integrations/bitbucket/test_bitbucket.py
+index 513ce3f2b747..5d29ee303276 100644
+--- a/tests/unit/integrations/bitbucket/test_bitbucket.py
++++ b/tests/unit/integrations/bitbucket/test_bitbucket.py
+@@ -219,7 +219,7 @@ def test_send_pull_request_bitbucket(
+     mock_service_context.assert_called_once()
+ 
+     # Verify create_pull_request was called with the correct data
+-    expected_body = 'This pull request fixes #123.\n\nAutomatic fix generated by [OpenHands](https://github.com/All-Hands-AI/OpenHands/) 🙌'
++    expected_body = 'This pull request fixes #123.\n\nAutomatic fix generated by [OpenHands](https://github.com/OpenHands/OpenHands/) 🙌'
+     mock_service.create_pull_request.assert_called_once_with(
+         {
+             'title': 'Test PR',
+@@ -733,7 +733,7 @@ def test_initialize_repository_for_runtime_with_bitbucket_token(
+     # Set up environment with BITBUCKET_TOKEN
+     with patch.dict(os.environ, {'BITBUCKET_TOKEN': 'username:app_password'}):
+         result = initialize_repository_for_runtime(
+-            runtime=mock_runtime, selected_repository='all-hands-ai/test-repo'
++            runtime=mock_runtime, selected_repository='openhands/test-repo'
+         )
+ 
+     # Verify the result
+@@ -756,7 +756,7 @@ def test_initialize_repository_for_runtime_with_bitbucket_token(
+     )
+ 
+     # Check that the repository was passed correctly
+-    assert args[3] == 'all-hands-ai/test-repo'  # selected_repository
++    assert args[3] == 'openhands/test-repo'  # selected_repository
+     assert args[4] is None  # selected_branch
+ 
+ 
+@@ -789,7 +789,7 @@ def test_initialize_repository_for_runtime_with_multiple_tokens(
+         },
+     ):
+         result = initialize_repository_for_runtime(
+-            runtime=mock_runtime, selected_repository='all-hands-ai/test-repo'
++            runtime=mock_runtime, selected_repository='openhands/test-repo'
+         )
+ 
+     # Verify the result
+@@ -853,7 +853,7 @@ def test_initialize_repository_for_runtime_without_bitbucket_token(
+             del os.environ['BITBUCKET_TOKEN']
+ 
+         result = initialize_repository_for_runtime(
+-            runtime=mock_runtime, selected_repository='all-hands-ai/test-repo'
++            runtime=mock_runtime, selected_repository='openhands/test-repo'
+         )
+ 
+     # Verify the result
+diff --git a/tests/unit/resolver/test_patch_apply.py b/tests/unit/resolver/test_patch_apply.py
+index eb6cef2c43aa..4360f1dcd277 100644
+--- a/tests/unit/resolver/test_patch_apply.py
++++ b/tests/unit/resolver/test_patch_apply.py
+@@ -4,7 +4,7 @@
+ 
+ def test_patch_apply_with_empty_lines():
+     # The original file has no indentation and uses \n line endings
+-    original_content = '# PR Viewer\n\nThis React application allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the All-Hands-AI organization.\n\n## Setup'
++    original_content = '# PR Viewer\n\nThis React application allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the OpenHands organization.\n\n## Setup'
+ 
+     # The patch has spaces at the start of each line and uses \n line endings
+     patch = """diff --git a/README.md b/README.md
+@@ -14,8 +14,8 @@ def test_patch_apply_with_empty_lines():
+ @@ -1,3 +1,3 @@
+  # PR Viewer
+ 
+--This React application allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the All-Hands-AI organization.
+-+This React application was created by Graham Neubig and OpenHands. It allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the All-Hands-AI organization."""
++-This React application allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the OpenHands organization.
+++This React application was created by Graham Neubig and OpenHands. It allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the OpenHands organization."""
+ 
+     print('Original content lines:')
+     for i, line in enumerate(original_content.splitlines(), 1):
+@@ -40,7 +40,7 @@ def test_patch_apply_with_empty_lines():
+     expected_result = [
+         '# PR Viewer',
+         '',
+-        'This React application was created by Graham Neubig and OpenHands. It allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the All-Hands-AI organization.',
++        'This React application was created by Graham Neubig and OpenHands. It allows you to view open pull requests from GitHub repositories in a GitHub organization. By default, it uses the OpenHands organization.',
+         '',
+         '## Setup',
+     ]
+diff --git a/third_party/runtime/impl/daytona/README.md b/third_party/runtime/impl/daytona/README.md
+index 926c343982ce..53dc30a8c6ee 100644
+--- a/third_party/runtime/impl/daytona/README.md
++++ b/third_party/runtime/impl/daytona/README.md
+@@ -48,7 +48,7 @@ Once executed, OpenHands should be running locally and ready for use.
+ ## Manual Initialization
+ 
+ ### Step 1: Set the `OPENHANDS_VERSION` Environment Variable
+-Run the following command in your terminal, replacing `<openhands-release>` with the latest release's version seen in the [main README.md file](https://github.com/All-Hands-AI/OpenHands?tab=readme-ov-file#-quick-start):
++Run the following command in your terminal, replacing `<openhands-release>` with the latest release's version seen in the [main README.md file](https://github.com/OpenHands/OpenHands?tab=readme-ov-file#-quick-start):
+ 
+ #### Mac/Linux:
+ ```bash
+@@ -85,14 +85,14 @@ This command pulls and runs the OpenHands container using Docker. Once executed,
+ #### Mac/Linux:
+ ```bash
+ docker run -it --rm --pull=always \
+-    -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:${OPENHANDS_VERSION}-nikolaik \
++    -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/openhands/runtime:${OPENHANDS_VERSION}-nikolaik \
+     -e LOG_ALL_EVENTS=true \
+     -e RUNTIME=daytona \
+     -e DAYTONA_API_KEY=${DAYTONA_API_KEY} \
+     -v ~/.openhands:/.openhands \
+     -p 3000:3000 \
+     --name openhands-app \
+-    docker.all-hands.dev/all-hands-ai/openhands:${OPENHANDS_VERSION}
++    docker.all-hands.dev/openhands/openhands:${OPENHANDS_VERSION}
+ ```
+ 
+ > **Note**: If you used OpenHands before version 0.44, you may want to run `mv ~/.openhands-state ~/.openhands` to migrate your conversation history to the new location.
+@@ -100,14 +100,14 @@ docker run -it --rm --pull=always \
+ #### Windows:
+ ```powershell
+ docker run -it --rm --pull=always `
+-    -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:${env:OPENHANDS_VERSION}-nikolaik `
++    -e SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/openhands/runtime:${env:OPENHANDS_VERSION}-nikolaik `
+     -e LOG_ALL_EVENTS=true `
+     -e RUNTIME=daytona `
+     -e DAYTONA_API_KEY=${env:DAYTONA_API_KEY} `
+     -v ~/.openhands:/.openhands `
+     -p 3000:3000 `
+     --name openhands-app `
+-    docker.all-hands.dev/all-hands-ai/openhands:${env:OPENHANDS_VERSION}
++    docker.all-hands.dev/openhands/openhands:${env:OPENHANDS_VERSION}
+ ```
+ 
+ > **Note**: If you used OpenHands before version 0.44, you may want to run `mv ~/.openhands-state ~/.openhands` to migrate your conversation history to the new location.

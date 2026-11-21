@@ -1,0 +1,866 @@
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+index 08cc850524c4..511368182958 100644
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -1711,6 +1711,7 @@ dependencies = [
+  "tempfile",
+  "time",
+  "tokio",
++ "toml 0.9.5",
+  "tracing",
+  "tracing-subscriber",
+  "url",
+diff --git a/codex-rs/core/config.schema.json b/codex-rs/core/config.schema.json
+index 717eddc6127f..8b1ab303ca9e 100644
+--- a/codex-rs/core/config.schema.json
++++ b/codex-rs/core/config.schema.json
+@@ -455,6 +455,92 @@
+       ],
+       "type": "object"
+     },
++    "NetworkConfigToml": {
++      "additionalProperties": false,
++      "description": "Network proxy configuration from the `[network]` table in `config.toml`.",
++      "properties": {
++        "allow_upstream_proxy": {
++          "description": "Allow upstream proxy env vars to be honored by the network proxy.",
++          "type": "boolean"
++        },
++        "dangerously_allow_non_loopback_admin": {
++          "description": "Allow non-loopback binding for admin listener (dangerous).",
++          "type": "boolean"
++        },
++        "dangerously_allow_non_loopback_proxy": {
++          "description": "Allow non-loopback binding for proxy listeners (dangerous).",
++          "type": "boolean"
++        },
++        "enabled": {
++          "description": "Enable proxy configuration for sandboxed tool execution.",
++          "type": "boolean"
++        },
++        "http_port": {
++          "description": "HTTP proxy listener port (loopback).",
++          "format": "uint16",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "mode": {
++          "allOf": [
++            {
++              "$ref": "#/definitions/NetworkMode"
++            }
++          ],
++          "description": "Network proxy mode."
++        },
++        "policy": {
++          "allOf": [
++            {
++              "$ref": "#/definitions/NetworkPolicyToml"
++            }
++          ],
++          "default": null,
++          "description": "Policy configuration."
++        },
++        "socks_port": {
++          "description": "SOCKS5 proxy listener port (loopback).",
++          "format": "uint16",
++          "minimum": 0.0,
++          "type": "integer"
++        }
++      },
++      "type": "object"
++    },
++    "NetworkMode": {
++      "enum": [
++        "limited",
++        "full"
++      ],
++      "type": "string"
++    },
++    "NetworkPolicyToml": {
++      "additionalProperties": false,
++      "properties": {
++        "allow_local_binding": {
++          "type": "boolean"
++        },
++        "allow_unix_sockets": {
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "allowed_domains": {
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "denied_domains": {
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        }
++      },
++      "type": "object"
++    },
+     "Notice": {
+       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
+       "properties": {
+@@ -1397,6 +1483,15 @@
+       ],
+       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
+     },
++    "network": {
++      "allOf": [
++        {
++          "$ref": "#/definitions/NetworkConfigToml"
++        }
++      ],
++      "default": null,
++      "description": "Network proxy configuration."
++    },
+     "notice": {
+       "allOf": [
+         {
+diff --git a/codex-rs/core/src/config/mod.rs b/codex-rs/core/src/config/mod.rs
+index 895e54c04011..5020b46ab445 100644
+--- a/codex-rs/core/src/config/mod.rs
++++ b/codex-rs/core/src/config/mod.rs
+@@ -6,6 +6,8 @@ use crate::config::types::History;
+ use crate::config::types::McpServerConfig;
+ use crate::config::types::McpServerDisabledReason;
+ use crate::config::types::McpServerTransportConfig;
++use crate::config::types::NetworkConfig;
++use crate::config::types::NetworkConfigToml;
+ use crate::config::types::Notice;
+ use crate::config::types::NotificationMethod;
+ use crate::config::types::Notifications;
+@@ -150,6 +152,9 @@ pub struct Config {
+ 
+     pub shell_environment_policy: ShellEnvironmentPolicy,
+ 
++    /// Resolved network proxy configuration from the `[network]` table.
++    pub network: NetworkConfig,
++
+     /// When `true`, `AgentReasoning` events emitted by the backend will be
+     /// suppressed from the frontend output. This can reduce visual noise when
+     /// users are only interested in the final agent responses.
+@@ -782,6 +787,10 @@ pub struct ConfigToml {
+     #[serde(default)]
+     pub shell_environment_policy: ShellEnvironmentPolicyToml,
+ 
++    /// Network proxy configuration.
++    #[serde(default)]
++    pub network: Option<NetworkConfigToml>,
++
+     /// Sandbox mode to use.
+     pub sandbox_mode: Option<SandboxMode>,
+ 
+@@ -1239,6 +1248,50 @@ pub(crate) fn resolve_web_search_mode_for_turn(
+     }
+ }
+ 
++fn resolve_network_config(entry: Option<&NetworkConfigToml>) -> NetworkConfig {
++    let mut resolved = NetworkConfig::default();
++
++    if let Some(entry) = entry {
++        if let Some(enabled) = entry.enabled {
++            resolved.enabled = enabled;
++        }
++        if let Some(mode) = entry.mode.as_ref() {
++            resolved.mode = mode.clone();
++        }
++        if let Some(allow_upstream_proxy) = entry.allow_upstream_proxy {
++            resolved.allow_upstream_proxy = allow_upstream_proxy;
++        }
++        if let Some(value) = entry.dangerously_allow_non_loopback_proxy {
++            resolved.dangerously_allow_non_loopback_proxy = value;
++        }
++        if let Some(value) = entry.dangerously_allow_non_loopback_admin {
++            resolved.dangerously_allow_non_loopback_admin = value;
++        }
++        if let Some(http_port) = entry.http_port {
++            resolved.http_port = Some(http_port);
++        }
++        if let Some(socks_port) = entry.socks_port {
++            resolved.socks_port = Some(socks_port);
++        }
++        if let Some(policy) = entry.policy.as_ref() {
++            if let Some(allowed_domains) = policy.allowed_domains.as_ref() {
++                resolved.policy.allowed_domains = allowed_domains.clone();
++            }
++            if let Some(denied_domains) = policy.denied_domains.as_ref() {
++                resolved.policy.denied_domains = denied_domains.clone();
++            }
++            if let Some(allow_unix_sockets) = policy.allow_unix_sockets.as_ref() {
++                resolved.policy.allow_unix_sockets = allow_unix_sockets.clone();
++            }
++            if let Some(allow_local_binding) = policy.allow_local_binding {
++                resolved.policy.allow_local_binding = allow_local_binding;
++            }
++        }
++    }
++
++    resolved
++}
++
+ impl Config {
+     #[cfg(test)]
+     fn load_from_base_config_with_overrides(
+@@ -1398,6 +1451,7 @@ impl Config {
+             .clone();
+ 
+         let shell_environment_policy = cfg.shell_environment_policy.into();
++        let network = resolve_network_config(cfg.network.as_ref());
+ 
+         let history = cfg.history.unwrap_or_default();
+ 
+@@ -1524,6 +1578,7 @@ impl Config {
+             did_user_set_custom_approval_policy_or_sandbox_mode,
+             forced_auto_mode_downgraded_on_windows,
+             shell_environment_policy,
++            network,
+             notify: cfg.notify,
+             user_instructions,
+             base_instructions,
+@@ -1857,6 +1912,56 @@ persistence = "none"
+         );
+     }
+ 
++    #[test]
++    fn network_config_parses_network_table() {
++        let cfg = r#"
++[network]
++enabled = true
++mode = "limited"
++allow_upstream_proxy = true
++http_port = 8080
++socks_port = 1080
++[network.policy]
++allowed_domains = ["example.com"]
++denied_domains = ["internal.local"]
++allow_unix_sockets = ["/var/run/docker.sock"]
++"#;
++
++        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
++        let resolved = resolve_network_config(parsed.network.as_ref());
++
++        assert_eq!(
++            resolved,
++            NetworkConfig {
++                enabled: true,
++                mode: crate::config::types::NetworkMode::Limited,
++                allow_upstream_proxy: true,
++                dangerously_allow_non_loopback_proxy: false,
++                dangerously_allow_non_loopback_admin: false,
++                http_port: Some(8080),
++                socks_port: Some(1080),
++                policy: crate::config::types::NetworkPolicy {
++                    allowed_domains: vec!["example.com".to_string()],
++                    denied_domains: vec!["internal.local".to_string()],
++                    allow_unix_sockets: vec!["/var/run/docker.sock".to_string()],
++                    allow_local_binding: false,
++                },
++            }
++        );
++    }
++
++    #[test]
++    fn network_config_defaults_mode_to_full() {
++        let cfg = r#"
++[network]
++enabled = true
++"#;
++
++        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
++        let resolved = resolve_network_config(parsed.network.as_ref());
++        assert_eq!(resolved.mode, crate::config::types::NetworkMode::Full);
++    }
++
+     #[test]
+     fn tui_config_missing_notifications_field_defaults_to_enabled() {
+         let cfg = r#"
+@@ -3756,6 +3861,7 @@ model_verbosity = "high"
+                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
+                 forced_auto_mode_downgraded_on_windows: false,
+                 shell_environment_policy: ShellEnvironmentPolicy::default(),
++                network: NetworkConfig::default(),
+                 user_instructions: None,
+                 notify: None,
+                 cwd: fixture.cwd(),
+@@ -3840,6 +3946,7 @@ model_verbosity = "high"
+             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+             forced_auto_mode_downgraded_on_windows: false,
+             shell_environment_policy: ShellEnvironmentPolicy::default(),
++            network: NetworkConfig::default(),
+             user_instructions: None,
+             notify: None,
+             cwd: fixture.cwd(),
+@@ -3939,6 +4046,7 @@ model_verbosity = "high"
+             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+             forced_auto_mode_downgraded_on_windows: false,
+             shell_environment_policy: ShellEnvironmentPolicy::default(),
++            network: NetworkConfig::default(),
+             user_instructions: None,
+             notify: None,
+             cwd: fixture.cwd(),
+@@ -4024,6 +4132,7 @@ model_verbosity = "high"
+             did_user_set_custom_approval_policy_or_sandbox_mode: true,
+             forced_auto_mode_downgraded_on_windows: false,
+             shell_environment_policy: ShellEnvironmentPolicy::default(),
++            network: NetworkConfig::default(),
+             user_instructions: None,
+             notify: None,
+             cwd: fixture.cwd(),
+diff --git a/codex-rs/core/src/config/types.rs b/codex-rs/core/src/config/types.rs
+index e949d869a619..56751373e2a4 100644
+--- a/codex-rs/core/src/config/types.rs
++++ b/codex-rs/core/src/config/types.rs
+@@ -556,6 +556,79 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings
+     }
+ }
+ 
++/// Network proxy configuration from the `[network]` table in `config.toml`.
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
++#[schemars(deny_unknown_fields)]
++pub struct NetworkConfigToml {
++    /// Enable proxy configuration for sandboxed tool execution.
++    pub enabled: Option<bool>,
++
++    /// Network proxy mode.
++    pub mode: Option<NetworkMode>,
++
++    /// Allow upstream proxy env vars to be honored by the network proxy.
++    pub allow_upstream_proxy: Option<bool>,
++
++    /// Allow non-loopback binding for proxy listeners (dangerous).
++    pub dangerously_allow_non_loopback_proxy: Option<bool>,
++
++    /// Allow non-loopback binding for admin listener (dangerous).
++    pub dangerously_allow_non_loopback_admin: Option<bool>,
++
++    /// HTTP proxy listener port (loopback).
++    pub http_port: Option<u16>,
++
++    /// SOCKS5 proxy listener port (loopback).
++    pub socks_port: Option<u16>,
++
++    /// Policy configuration.
++    #[serde(default)]
++    pub policy: Option<NetworkPolicyToml>,
++}
++
++/// Resolved network proxy configuration.
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
++#[schemars(deny_unknown_fields)]
++pub struct NetworkConfig {
++    pub enabled: bool,
++    pub mode: NetworkMode,
++    pub allow_upstream_proxy: bool,
++    pub dangerously_allow_non_loopback_proxy: bool,
++    pub dangerously_allow_non_loopback_admin: bool,
++    pub http_port: Option<u16>,
++    pub socks_port: Option<u16>,
++    pub policy: NetworkPolicy,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
++#[serde(rename_all = "lowercase")]
++pub enum NetworkMode {
++    Limited,
++    #[default]
++    Full,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
++#[schemars(deny_unknown_fields)]
++pub struct NetworkPolicyToml {
++    pub allowed_domains: Option<Vec<String>>,
++    pub denied_domains: Option<Vec<String>>,
++    pub allow_unix_sockets: Option<Vec<String>>,
++    pub allow_local_binding: Option<bool>,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
++#[schemars(deny_unknown_fields)]
++pub struct NetworkPolicy {
++    #[serde(default)]
++    pub allowed_domains: Vec<String>,
++    #[serde(default)]
++    pub denied_domains: Vec<String>,
++    #[serde(default)]
++    pub allow_unix_sockets: Vec<String>,
++    pub allow_local_binding: bool,
++}
++
+ #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+ #[serde(rename_all = "kebab-case")]
+ pub enum ShellEnvironmentPolicyInherit {
+diff --git a/codex-rs/network-proxy/Cargo.toml b/codex-rs/network-proxy/Cargo.toml
+index 959837d4e2a0..8af3ece37e62 100644
+--- a/codex-rs/network-proxy/Cargo.toml
++++ b/codex-rs/network-proxy/Cargo.toml
+@@ -27,6 +27,7 @@ serde = { workspace = true, features = ["derive"] }
+ serde_json = { workspace = true }
+ time = { workspace = true }
+ tokio = { workspace = true, features = ["full"] }
++toml = { workspace = true }
+ tracing = { workspace = true }
+ tracing-subscriber = { workspace = true, features = ["fmt"] }
+ url = { workspace = true }
+diff --git a/codex-rs/network-proxy/README.md b/codex-rs/network-proxy/README.md
+index 3d8c20307d3c..ea5dd8a0fea5 100644
+--- a/codex-rs/network-proxy/README.md
++++ b/codex-rs/network-proxy/README.md
+@@ -17,14 +17,12 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
+ Example config:
+ 
+ ```toml
+-[network_proxy]
++[network]
+ enabled = true
+-proxy_url = "http://127.0.0.1:3128"
+-admin_url = "http://127.0.0.1:8080"
+-# Optional SOCKS5 listener (disabled by default).
+-enable_socks5 = false
+-socks_url = "http://127.0.0.1:8081"
+-enable_socks5_udp = false
++# Optional override for HTTP proxy port (default 3128).
++http_port = 3128
++# Optional SOCKS5 port. When set, SOCKS5 listener is enabled.
++socks_port = 8081
+ # When `enabled` is false, the proxy no-ops and does not bind listeners.
+ # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
+ # including CONNECT tunnels in full mode.
+@@ -35,7 +33,7 @@ dangerously_allow_non_loopback_proxy = false
+ dangerously_allow_non_loopback_admin = false
+ mode = "full" # default when unset; use "limited" for read-only mode
+ 
+-[network_proxy.policy]
++[network.policy]
+ # Hosts must match the allowlist (unless denied).
+ # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
+ allowed_domains = ["*.openai.com"]
+diff --git a/codex-rs/network-proxy/src/config.rs b/codex-rs/network-proxy/src/config.rs
+index ae4a45017917..740e73a198de 100644
+--- a/codex-rs/network-proxy/src/config.rs
++++ b/codex-rs/network-proxy/src/config.rs
+@@ -14,7 +14,7 @@ pub struct NetworkProxyConfig {
+     pub network_proxy: NetworkProxySettings,
+ }
+ 
+-#[derive(Debug, Clone, Serialize, Deserialize)]
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+ pub struct NetworkProxySettings {
+     #[serde(default)]
+     pub enabled: bool,
+@@ -58,7 +58,7 @@ impl Default for NetworkProxySettings {
+     }
+ }
+ 
+-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
++#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+ pub struct NetworkPolicy {
+     #[serde(default)]
+     pub allowed_domains: Vec<String>,
+@@ -70,6 +70,33 @@ pub struct NetworkPolicy {
+     pub allow_local_binding: bool,
+ }
+ 
++#[derive(Debug, Clone, Deserialize, Default)]
++pub struct NetworkConfigTable {
++    pub enabled: Option<bool>,
++    pub mode: Option<NetworkMode>,
++    pub allow_upstream_proxy: Option<bool>,
++    pub dangerously_allow_non_loopback_proxy: Option<bool>,
++    pub dangerously_allow_non_loopback_admin: Option<bool>,
++    pub http_port: Option<u16>,
++    pub socks_port: Option<u16>,
++    #[serde(default)]
++    pub policy: Option<NetworkPolicyTable>,
++}
++
++#[derive(Debug, Clone, Deserialize, Default)]
++pub struct NetworkPolicyTable {
++    pub allowed_domains: Option<Vec<String>>,
++    pub denied_domains: Option<Vec<String>>,
++    pub allow_unix_sockets: Option<Vec<String>>,
++    pub allow_local_binding: Option<bool>,
++}
++
++#[derive(Debug, Clone, Deserialize, Default)]
++struct RawNetworkProxyConfig {
++    #[serde(default)]
++    network: Option<NetworkConfigTable>,
++}
++
+ #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+ #[serde(rename_all = "lowercase")]
+ pub enum NetworkMode {
+@@ -103,6 +130,68 @@ fn default_socks_url() -> String {
+     "http://127.0.0.1:8081".to_string()
+ }
+ 
++pub fn deserialize_network_proxy_config(value: toml::Value) -> Result<NetworkProxyConfig> {
++    if let toml::Value::Table(table) = &value
++        && table.contains_key("network_proxy")
++    {
++        warn!("`[network_proxy]` is ignored; use `[network]` instead");
++    }
++    let parsed: RawNetworkProxyConfig = value
++        .try_into()
++        .context("failed to deserialize network proxy config")?;
++
++    let network_proxy = parsed
++        .network
++        .as_ref()
++        .map(resolve_network_table)
++        .unwrap_or_default();
++
++    Ok(NetworkProxyConfig { network_proxy })
++}
++
++fn resolve_network_table(entry: &NetworkConfigTable) -> NetworkProxySettings {
++    let mut resolved = NetworkProxySettings::default();
++
++    if let Some(enabled) = entry.enabled {
++        resolved.enabled = enabled;
++    }
++    if let Some(mode) = entry.mode {
++        resolved.mode = mode;
++    }
++    if let Some(allow_upstream_proxy) = entry.allow_upstream_proxy {
++        resolved.allow_upstream_proxy = allow_upstream_proxy;
++    }
++    if let Some(value) = entry.dangerously_allow_non_loopback_proxy {
++        resolved.dangerously_allow_non_loopback_proxy = value;
++    }
++    if let Some(value) = entry.dangerously_allow_non_loopback_admin {
++        resolved.dangerously_allow_non_loopback_admin = value;
++    }
++    if let Some(http_port) = entry.http_port {
++        resolved.proxy_url = format!("http://127.0.0.1:{http_port}");
++    }
++    if let Some(socks_port) = entry.socks_port {
++        resolved.enable_socks5 = true;
++        resolved.socks_url = format!("http://127.0.0.1:{socks_port}");
++    }
++    if let Some(policy) = entry.policy.as_ref() {
++        if let Some(allowed_domains) = policy.allowed_domains.as_ref() {
++            resolved.policy.allowed_domains = allowed_domains.clone();
++        }
++        if let Some(denied_domains) = policy.denied_domains.as_ref() {
++            resolved.policy.denied_domains = denied_domains.clone();
++        }
++        if let Some(allow_unix_sockets) = policy.allow_unix_sockets.as_ref() {
++            resolved.policy.allow_unix_sockets = allow_unix_sockets.clone();
++        }
++        if let Some(allow_local_binding) = policy.allow_local_binding {
++            resolved.policy.allow_local_binding = allow_local_binding;
++        }
++    }
++
++    resolved
++}
++
+ /// Clamp non-loopback bind addresses to loopback unless explicitly allowed.
+ fn clamp_non_loopback(addr: SocketAddr, allow_non_loopback: bool, name: &str) -> SocketAddr {
+     if addr.ip().is_loopback() {
+@@ -470,4 +559,72 @@ mod tests {
+         assert_eq!(socks_addr, "127.0.0.1:8081".parse::<SocketAddr>().unwrap());
+         assert_eq!(admin_addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+     }
++
++    #[test]
++    fn deserialize_network_proxy_config_from_network_table() {
++        let value: toml::Value = toml::from_str(
++            r#"
++[network]
++enabled = true
++mode = "limited"
++allow_upstream_proxy = true
++http_port = 9000
++socks_port = 1901
++[network.policy]
++allowed_domains = ["example.com"]
++"#,
++        )
++        .expect("parse config");
++
++        let parsed = deserialize_network_proxy_config(value).expect("deserialize config");
++
++        assert!(parsed.network_proxy.enabled);
++        assert_eq!(parsed.network_proxy.mode, NetworkMode::Limited);
++        assert!(parsed.network_proxy.allow_upstream_proxy);
++        assert_eq!(parsed.network_proxy.proxy_url, "http://127.0.0.1:9000");
++        assert!(parsed.network_proxy.enable_socks5);
++        assert_eq!(parsed.network_proxy.socks_url, "http://127.0.0.1:1901");
++        assert_eq!(
++            parsed.network_proxy.policy.allowed_domains,
++            vec!["example.com".to_string()]
++        );
++    }
++
++    #[test]
++    fn deserialize_network_proxy_config_ignores_legacy_network_proxy() {
++        let value: toml::Value = toml::from_str(
++            r#"
++[network_proxy]
++enabled = true
++mode = "limited"
++proxy_url = "http://127.0.0.1:3328"
++"#,
++        )
++        .expect("parse config");
++
++        let parsed = deserialize_network_proxy_config(value).expect("deserialize config");
++
++        assert_eq!(parsed.network_proxy, NetworkProxySettings::default());
++    }
++
++    #[test]
++    fn deserialize_network_proxy_config_prefers_network_when_both_exist() {
++        let value: toml::Value = toml::from_str(
++            r#"
++[network]
++enabled = true
++http_port = 8777
++
++[network_proxy]
++enabled = false
++proxy_url = "http://127.0.0.1:4444"
++"#,
++        )
++        .expect("parse config");
++
++        let parsed = deserialize_network_proxy_config(value).expect("deserialize config");
++
++        assert!(parsed.network_proxy.enabled);
++        assert_eq!(parsed.network_proxy.proxy_url, "http://127.0.0.1:8777");
++    }
+ }
+diff --git a/codex-rs/network-proxy/src/proxy.rs b/codex-rs/network-proxy/src/proxy.rs
+index cb09b9959dd0..0e1560b580ac 100644
+--- a/codex-rs/network-proxy/src/proxy.rs
++++ b/codex-rs/network-proxy/src/proxy.rs
+@@ -96,7 +96,7 @@ impl NetworkProxy {
+     pub async fn run(&self) -> Result<NetworkProxyHandle> {
+         let current_cfg = self.state.current_cfg().await?;
+         if !current_cfg.network_proxy.enabled {
+-            warn!("network_proxy.enabled is false; skipping proxy listeners");
++            warn!("network.enabled is false; skipping proxy listeners");
+             return Ok(NetworkProxyHandle::noop());
+         }
+ 
+diff --git a/codex-rs/network-proxy/src/state.rs b/codex-rs/network-proxy/src/state.rs
+index 552455f51003..288d09970b11 100644
+--- a/codex-rs/network-proxy/src/state.rs
++++ b/codex-rs/network-proxy/src/state.rs
+@@ -1,5 +1,7 @@
++use crate::config::NetworkConfigTable;
+ use crate::config::NetworkMode;
+ use crate::config::NetworkProxyConfig;
++use crate::config::deserialize_network_proxy_config;
+ use crate::policy::DomainPattern;
+ use crate::policy::compile_globset;
+ use crate::runtime::ConfigState;
+@@ -40,9 +42,7 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
+     // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
+     // This avoids a second parser/merger implementation (and the drift that comes with it).
+     let merged_toml = config_layer_stack.effective_config();
+-    let config: NetworkProxyConfig = merged_toml
+-        .try_into()
+-        .context("failed to deserialize network proxy config")?;
++    let config = deserialize_network_proxy_config(merged_toml)?;
+ 
+     // Security boundary: user-controlled layers must not be able to widen restrictions set by
+     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
+@@ -87,30 +87,7 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
+ #[derive(Debug, Default, Deserialize)]
+ struct PartialConfig {
+     #[serde(default)]
+-    network_proxy: PartialNetworkProxyConfig,
+-}
+-
+-#[derive(Debug, Default, Deserialize)]
+-struct PartialNetworkProxyConfig {
+-    enabled: Option<bool>,
+-    mode: Option<NetworkMode>,
+-    allow_upstream_proxy: Option<bool>,
+-    dangerously_allow_non_loopback_proxy: Option<bool>,
+-    dangerously_allow_non_loopback_admin: Option<bool>,
+-    #[serde(default)]
+-    policy: PartialNetworkPolicy,
+-}
+-
+-#[derive(Debug, Default, Deserialize)]
+-struct PartialNetworkPolicy {
+-    #[serde(default)]
+-    allowed_domains: Option<Vec<String>>,
+-    #[serde(default)]
+-    denied_domains: Option<Vec<String>>,
+-    #[serde(default)]
+-    allow_unix_sockets: Option<Vec<String>>,
+-    #[serde(default)]
+-    allow_local_binding: Option<bool>,
++    network: Option<NetworkConfigTable>,
+ }
+ 
+ #[derive(Debug, Default, Clone, PartialEq, Eq)]
+@@ -156,42 +133,49 @@ fn network_proxy_constraints_from_trusted_layers(
+             .try_into()
+             .context("failed to deserialize trusted config layer")?;
+ 
+-        if let Some(enabled) = partial.network_proxy.enabled {
+-            constraints.enabled = Some(enabled);
+-        }
+-        if let Some(mode) = partial.network_proxy.mode {
+-            constraints.mode = Some(mode);
+-        }
+-        if let Some(allow_upstream_proxy) = partial.network_proxy.allow_upstream_proxy {
+-            constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
+-        }
+-        if let Some(dangerously_allow_non_loopback_proxy) =
+-            partial.network_proxy.dangerously_allow_non_loopback_proxy
+-        {
+-            constraints.dangerously_allow_non_loopback_proxy =
+-                Some(dangerously_allow_non_loopback_proxy);
+-        }
+-        if let Some(dangerously_allow_non_loopback_admin) =
+-            partial.network_proxy.dangerously_allow_non_loopback_admin
+-        {
+-            constraints.dangerously_allow_non_loopback_admin =
+-                Some(dangerously_allow_non_loopback_admin);
++        if let Some(network) = partial.network.as_ref() {
++            apply_network_constraints(&mut constraints, network);
+         }
++    }
++    Ok(constraints)
++}
++
++fn apply_network_constraints(
++    constraints: &mut NetworkProxyConstraints,
++    entry: &NetworkConfigTable,
++) {
++    if let Some(enabled) = entry.enabled {
++        constraints.enabled = Some(enabled);
++    }
++    if let Some(mode) = entry.mode {
++        constraints.mode = Some(mode);
++    }
++    if let Some(allow_upstream_proxy) = entry.allow_upstream_proxy {
++        constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
++    }
++    if let Some(dangerously_allow_non_loopback_proxy) = entry.dangerously_allow_non_loopback_proxy {
++        constraints.dangerously_allow_non_loopback_proxy =
++            Some(dangerously_allow_non_loopback_proxy);
++    }
++    if let Some(dangerously_allow_non_loopback_admin) = entry.dangerously_allow_non_loopback_admin {
++        constraints.dangerously_allow_non_loopback_admin =
++            Some(dangerously_allow_non_loopback_admin);
++    }
+ 
+-        if let Some(allowed_domains) = partial.network_proxy.policy.allowed_domains {
++    if let Some(policy) = entry.policy.as_ref() {
++        if let Some(allowed_domains) = policy.allowed_domains.clone() {
+             constraints.allowed_domains = Some(allowed_domains);
+         }
+-        if let Some(denied_domains) = partial.network_proxy.policy.denied_domains {
++        if let Some(denied_domains) = policy.denied_domains.clone() {
+             constraints.denied_domains = Some(denied_domains);
+         }
+-        if let Some(allow_unix_sockets) = partial.network_proxy.policy.allow_unix_sockets {
++        if let Some(allow_unix_sockets) = policy.allow_unix_sockets.clone() {
+             constraints.allow_unix_sockets = Some(allow_unix_sockets);
+         }
+-        if let Some(allow_local_binding) = partial.network_proxy.policy.allow_local_binding {
++        if let Some(allow_local_binding) = policy.allow_local_binding {
+             constraints.allow_local_binding = Some(allow_local_binding);
+         }
+     }
+-    Ok(constraints)
+ }
+ 
+ fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
+@@ -225,7 +209,7 @@ pub(crate) fn validate_policy_against_constraints(
+         let _ = Constrained::new(enabled, move |candidate| {
+             if *candidate && !max_enabled {
+                 Err(invalid_value(
+-                    "network_proxy.enabled",
++                    "network.enabled",
+                     "true",
+                     "false (disabled by managed config)",
+                 ))
+@@ -239,7 +223,7 @@ pub(crate) fn validate_policy_against_constraints(
+         let _ = Constrained::new(config.network_proxy.mode, move |candidate| {
+             if network_mode_rank(*candidate) > network_mode_rank(max_mode) {
+                 Err(invalid_value(
+-                    "network_proxy.mode",
++                    "network.mode",
+                     format!("{candidate:?}"),
+                     format!("{max_mode:?} or more restrictive"),
+                 ))
+@@ -257,7 +241,7 @@ pub(crate) fn validate_policy_against_constraints(
+             Some(false) => {
+                 if *candidate {
+                     Err(invalid_value(
+-                        "network_proxy.allow_upstream_proxy",
++                        "network.allow_upstream_proxy",
+                         "true",
+                         "false (disabled by managed config)",
+                     ))
+@@ -276,7 +260,7 @@ pub(crate) fn validate_policy_against_constraints(
+             Some(false) => {
+                 if *candidate {
+                     Err(invalid_value(
+-                        "network_proxy.dangerously_allow_non_loopback_admin",
++                        "network.dangerously_allow_non_loopback_admin",
+                         "true",
+                         "false (disabled by managed config)",
+                     ))
+@@ -295,7 +279,7 @@ pub(crate) fn validate_policy_against_constraints(
+             Some(false) => {
+                 if *candidate {
+                     Err(invalid_value(
+-                        "network_proxy.dangerously_allow_non_loopback_proxy",
++                        "network.dangerously_allow_non_loopback_proxy",
+                         "true",
+                         "false (disabled by managed config)",
+                     ))
+@@ -312,7 +296,7 @@ pub(crate) fn validate_policy_against_constraints(
+             move |candidate| {
+                 if *candidate && !allow_local_binding {
+                     Err(invalid_value(
+-                        "network_proxy.policy.allow_local_binding",
++                        "network.policy.allow_local_binding",
+                         "true",
+                         "false (disabled by managed config)",
+                     ))
+@@ -345,7 +329,7 @@ pub(crate) fn validate_policy_against_constraints(
+                     Ok(())
+                 } else {
+                     Err(invalid_value(
+-                        "network_proxy.policy.allowed_domains",
++                        "network.policy.allowed_domains",
+                         format!("{invalid:?}"),
+                         "subset of managed allowed_domains",
+                     ))
+@@ -373,7 +357,7 @@ pub(crate) fn validate_policy_against_constraints(
+                     Ok(())
+                 } else {
+                     Err(invalid_value(
+-                        "network_proxy.policy.denied_domains",
++                        "network.policy.denied_domains",
+                         "missing managed denied_domains entries",
+                         format!("{missing:?}"),
+                     ))
+@@ -400,7 +384,7 @@ pub(crate) fn validate_policy_against_constraints(
+                     Ok(())
+                 } else {
+                     Err(invalid_value(
+-                        "network_proxy.policy.allow_unix_sockets",
++                        "network.policy.allow_unix_sockets",
+                         format!("{invalid:?}"),
+                         "subset of managed allow_unix_sockets",
+                     ))

@@ -1,0 +1,68 @@
+diff --git a/src/core/prompts/sections/capabilities.ts b/src/core/prompts/sections/capabilities.ts
+index e2d27db5bbf..65aa925dc5b 100644
+--- a/src/core/prompts/sections/capabilities.ts
++++ b/src/core/prompts/sections/capabilities.ts
+@@ -33,7 +33,7 @@ CAPABILITIES
+ 			? "\n- You can use the browser_action tool to interact with websites (including html files and locally running development servers) through a Puppeteer-controlled browser when you feel it is necessary in accomplishing the user's task. This tool is particularly useful for web development tasks as it allows you to launch a browser, navigate to pages, interact with elements through clicks and keyboard input, and capture the results through screenshots and console logs. This tool may be useful at key stages of web development tasks-such as after implementing new features, making substantial changes, when troubleshooting issues, or to verify the result of your work. You can analyze the provided screenshots to ensure correct rendering or identify errors, and review console logs for runtime issues.\n  - For example, if asked to add a component to a react website, you might create the necessary files, use execute_command to run the site locally, then use browser_action to launch the browser, navigate to the local server, and verify the component renders & functions correctly before closing the browser."
+ 			: ""
+ 	}${
+-		mcpHub
++		mcpHub && (mcpHub.getAllServers()?.length ?? 0) > 0
+ 			? `
+ - You have access to MCP servers that may provide additional tools and resources. Each server may provide different capabilities that you can use to accomplish tasks more effectively.
+ `
+diff --git a/src/core/prompts/sections/mcp-servers.ts b/src/core/prompts/sections/mcp-servers.ts
+index 643233ab6f8..21072000a65 100644
+--- a/src/core/prompts/sections/mcp-servers.ts
++++ b/src/core/prompts/sections/mcp-servers.ts
+@@ -6,7 +6,7 @@ export async function getMcpServersSection(
+ 	diffStrategy?: DiffStrategy,
+ 	enableMcpServerCreation?: boolean,
+ ): Promise<string> {
+-	if (!mcpHub) {
++	if (!mcpHub || (mcpHub.getAllServers()?.length ?? 0) === 0) {
+ 		return ""
+ 	}
+ 
+diff --git a/src/core/task/Task.ts b/src/core/task/Task.ts
+index 53b8ef5b87d..5a80d57c7ad 100644
+--- a/src/core/task/Task.ts
++++ b/src/core/task/Task.ts
+@@ -1608,6 +1608,8 @@ export class Task extends EventEmitter<ClineEvents> {
+ 			})
+ 		}
+ 
++		const hasMcpServers = mcpHub && (mcpHub.getAllServers().length ?? 0) > 0
++
+ 		const rooIgnoreInstructions = this.rooIgnoreController?.getInstructions()
+ 
+ 		const state = await this.providerRef.deref()?.getState()
+@@ -1637,7 +1639,7 @@ export class Task extends EventEmitter<ClineEvents> {
+ 				provider.context,
+ 				this.cwd,
+ 				(this.api.getModel().info.supportsComputerUse ?? false) && (browserToolEnabled ?? true),
+-				mcpHub,
++				hasMcpServers ? mcpHub : undefined,
+ 				this.diffStrategy,
+ 				browserViewportSize,
+ 				mode,
+diff --git a/src/core/webview/generateSystemPrompt.ts b/src/core/webview/generateSystemPrompt.ts
+index 2c88b98d2e2..afa047e8db2 100644
+--- a/src/core/webview/generateSystemPrompt.ts
++++ b/src/core/webview/generateSystemPrompt.ts
+@@ -63,11 +63,14 @@ export const generateSystemPrompt = async (provider: ClineProvider, message: Web
+ 	// and browser tools are enabled in settings
+ 	const canUseBrowserTool = modelSupportsComputerUse && modeSupportsBrowser && (browserToolEnabled ?? true)
+ 
++	const mcpHub = provider.getMcpHub()
++	const hasMcpServers = mcpHub && (mcpHub.getAllServers().length ?? 0) > 0
++
+ 	const systemPrompt = await SYSTEM_PROMPT(
+ 		provider.context,
+ 		cwd,
+ 		canUseBrowserTool,
+-		mcpEnabled ? provider.getMcpHub() : undefined,
++		mcpEnabled && hasMcpServers ? mcpHub : undefined,
+ 		diffStrategy,
+ 		browserViewportSize ?? "900x600",
+ 		mode,

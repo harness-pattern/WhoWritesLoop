@@ -1,0 +1,18 @@
+diff --git a/.gemini/config.yaml b/.gemini/config.yaml
+index 9ab8c37a1e7..32699c1d487 100644
+--- a/.gemini/config.yaml
++++ b/.gemini/config.yaml
+@@ -1,10 +1,10 @@
+ have_fun: false
+ code_review:
+-  disable: true
++  disable: false
+   comment_severity_threshold: HIGH
+   max_review_comments: -1
+   pull_request_opened:
+     help: false
+-    summary: false
+-    code_review: false
++    summary: true
++    code_review: true
+ ignore_patterns: []

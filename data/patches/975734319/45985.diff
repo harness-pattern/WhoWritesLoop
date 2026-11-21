@@ -1,0 +1,226 @@
+diff --git a/packages/app/src/session/requests/model.ts b/packages/app/src/session/requests/model.ts
+index 2f618ee18b55..99cc2689c86f 100644
+--- a/packages/app/src/session/requests/model.ts
++++ b/packages/app/src/session/requests/model.ts
+@@ -80,8 +80,8 @@ export function createSessionRequestModel() {
+         if (message.type !== "synthetic") return []
+         if (message.metadata?.source === "subagent" && typeof message.metadata.childID === "string")
+           return [message.metadata.childID]
+-        if (message.metadata?.source === "shell" && typeof message.metadata.jobID === "string")
+-          return [message.metadata.jobID]
++        if (message.metadata?.source === "shell")
++          return [message.metadata.shellID, message.metadata.jobID].filter((id): id is string => typeof id === "string")
+         return []
+       }),
+     )
+@@ -121,6 +121,7 @@ export function createSessionRequestModel() {
+         if (part.type !== "tool" || part.name !== "shell" || completed.has(part.id)) return []
+         if (part.state.status !== "completed" || part.state.metadata?.status !== "running") return []
+         const shellID = part.state.metadata.shellID
++        if (typeof shellID === "string" && completed.has(shellID)) return []
+         const command = part.state.input.command
+         return [
+           {
+diff --git a/packages/core/src/tool/plugin/shell.ts b/packages/core/src/tool/plugin/shell.ts
+index 6b7fd1d70c07..b3955165cb9b 100644
+--- a/packages/core/src/tool/plugin/shell.ts
++++ b/packages/core/src/tool/plugin/shell.ts
+@@ -280,7 +280,8 @@ export const Plugin = {
+                 Effect.onInterrupt(() => shell.remove(info.id).pipe(Effect.ignore)),
+               )
+               const job = yield* runtime.job.start({
+-                id: context.id,
++                // CodeMode children share a tool-call ID, but each shell must own its job.
++                id: info.id,
+                 type: name,
+                 title: info.command,
+                 metadata: { sessionID: context.sessionID, shellID: info.id },
+@@ -295,7 +296,7 @@ export const Plugin = {
+ 
+               if (input.background === true) {
+                 yield* runtime.job.background(job.id)
+-                yield* notifyWhenDone(context.sessionID, context.id, info.id, info.command, settled)
++                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                 return backgroundResult(info.id, info.file)
+               }
+ 
+@@ -304,7 +305,7 @@ export const Plugin = {
+                 .pipe(Effect.onInterrupt(() => runtime.job.cancel(job.id).pipe(Effect.ignore)))
+               if (result?.type === "backgrounded") {
+                 yield* shell.timeout(info.id, 0)
+-                yield* notifyWhenDone(context.sessionID, context.id, info.id, info.command, settled)
++                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                 return backgroundResult(info.id, info.file)
+               }
+               if (result?.info.status === "error")
+diff --git a/packages/core/test/session-execution.test.ts b/packages/core/test/session-execution.test.ts
+index d585e7cf3b1d..9dabbde747bb 100644
+--- a/packages/core/test/session-execution.test.ts
++++ b/packages/core/test/session-execution.test.ts
+@@ -379,7 +379,7 @@ describe("SessionRestart background recovery", () => {
+       yield* seedSessions(database, [parent])
+       yield* seedSessions(database, [child], { parent_id: parent, time_suspended: Date.now() })
+       yield* seedBackground(jobs, parent, [
+-        { id: "call-background-shell", shellID: "sh_background_orphan", command: "sleep 60" },
++        { id: "sh_background_orphan", shellID: "sh_background_orphan", command: "sleep 60" },
+       ])
+       yield* seedBackground(jobs, child, [{ id: "call-child-shell", shellID: "sh_child_orphan", command: "sleep 30" }])
+ 
+@@ -413,7 +413,7 @@ describe("SessionRestart background recovery", () => {
+           text: expect.stringContaining("server restarted"),
+           metadata: {
+             source: "shell",
+-            jobID: "call-background-shell",
++            jobID: "sh_background_orphan",
+             shellID: "sh_background_orphan",
+             state: "cancelled",
+           },
+diff --git a/packages/core/test/tool-shell.test.ts b/packages/core/test/tool-shell.test.ts
+index 198b9e8b657c..25155590f1af 100644
+--- a/packages/core/test/tool-shell.test.ts
++++ b/packages/core/test/tool-shell.test.ts
+@@ -702,6 +702,42 @@ describe("ShellTool ordinary shell syntax", () => {
+ })
+ 
+ describe("ShellTool", () => {
++  it.live("returns both parallel CodeMode shell results", () =>
++    Effect.acquireUseRelease(
++      Effect.promise(() => tmpdir()),
++      (tmp) => {
++        reset()
++        return withSession(tmp.path, (registry) =>
++          Effect.gen(function* () {
++            yield* registry.transform((draft) =>
++              draft.update("shell", (tool) => {
++                tool.options = { ...tool.options, codemode: true }
++              }),
++            )
++            const command = isWindows ? helloCommand : `${helloCommand}; sleep 0.1`
++            const inputs = ["one", "two"].map((text) => JSON.stringify({ command: command.replace("hello", text) }))
++            const result = yield* executeTool(registry, {
++              sessionID,
++              ...toolIdentity,
++              call: {
++                type: "tool-call",
++                id: "call-parallel-shells",
++                name: "execute",
++                input: { code: `return await Promise.all([tools.shell(${inputs[0]}), tools.shell(${inputs[1]})])` },
++              },
++            }).pipe(Effect.timeout("3 seconds"))
++            expect(result.status).toBe("completed")
++            expect(JSON.parse(result.output.output)).toEqual([
++              { output: "one", exit: 0, truncated: false, status: "completed" },
++              { output: "two", exit: 0, truncated: false, status: "completed" },
++            ])
++          }),
++        )
++      },
++      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
++    ),
++  )
++
+   productionIt.live(
+     "registers and returns real successful output from the active Location",
+     () =>
+@@ -1342,7 +1378,7 @@ describe("ShellTool", () => {
+               description: bodyExitCommand,
+               metadata: {
+                 source: "shell",
+-                jobID: "call-background-nonzero",
++                jobID: shellID,
+                 shellID,
+                 state: "completed",
+                 exit: 7,
+@@ -1375,7 +1411,7 @@ describe("ShellTool", () => {
+                   )
+                 : Effect.void,
+             )
+-            yield* executeTool(registry, {
++            const settled = yield* executeTool(registry, {
+               ...call({ command: "exit 7", background: true }, "call-background-silent-nonzero"),
+               // The command can finish while its initial progress update is being published.
+               progress: (update) =>
+@@ -1386,7 +1422,7 @@ describe("ShellTool", () => {
+ 
+             expect(yield* Deferred.await(persisted)).toMatchObject([
+               {
+-                id: "call-background-silent-nonzero",
++                id: settled.metadata?.shellID,
+                 status: "completed",
+                 output: "(no output)\n\nCommand exited with code 7.",
+               },
+@@ -1519,9 +1555,10 @@ describe("ShellTool", () => {
+                 yield* Effect.promise(() => Bun.sleep(1))
+                 return yield* backgroundWhenReady(remaining - 1)
+               })
+-            expect(yield* backgroundWhenReady()).toMatchObject([{ id: "call-background-signal", type: "shell" }])
++            const backgrounded = yield* backgroundWhenReady()
+             const settled = yield* Fiber.join(waiting)
+             const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : undefined
++            expect(backgrounded).toMatchObject([{ id: shellID, type: "shell" }])
+             expect(settled.metadata).toMatchObject({ truncated: false })
+             expect(shellID).toStartWith("sh_")
+ 
+diff --git a/packages/tui/src/routes/session/index.tsx b/packages/tui/src/routes/session/index.tsx
+index 4bcd0c1820ec..205d7ccb79c9 100644
+--- a/packages/tui/src/routes/session/index.tsx
++++ b/packages/tui/src/routes/session/index.tsx
+@@ -2037,7 +2037,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
+   const source = () => stringValue(metadata()?.source)
+   const target = createMemo<BackgroundToolTarget | undefined>(() => {
+     if (source() === "shell") {
+-      const id = stringValue(metadata()?.jobID)
++      const id = stringValue(metadata()?.shellID) ?? stringValue(metadata()?.jobID)
+       return id ? { source: "shell", id } : undefined
+     }
+     if (source() === "subagent") {
+diff --git a/packages/tui/src/routes/session/rows.ts b/packages/tui/src/routes/session/rows.ts
+index f54b9c76f12e..a3632d01f2f7 100644
+--- a/packages/tui/src/routes/session/rows.ts
++++ b/packages/tui/src/routes/session/rows.ts
+@@ -410,10 +410,17 @@ export function backgroundToolRowIndex(
+   const end = rows.findIndex((row) => row.type === "message" && row.messageID === beforeMessageID)
+   return rows.slice(0, end === -1 ? rows.length : end).findLastIndex((row) => {
+     if (row.type !== "part") return false
+-    if (target.source === "shell") return row.ref.partID === target.id
++    if (target.source === "shell" && row.ref.partID === target.id) return true
+     const message = byID.get(row.ref.messageID)
+     if (message?.type !== "assistant") return false
+     const part = resolvePart(message, row.ref.partID)
++    if (target.source === "shell")
++      return (
++        part?.type === "tool" &&
++        part.name.toLowerCase() === "shell" &&
++        part.state.status !== "streaming" &&
++        part.state.metadata?.shellID === target.id
++      )
+     return (
+       part?.type === "tool" &&
+       part.name.toLowerCase() === "subagent" &&
+diff --git a/packages/tui/test/cli/tui/session-rows.test.ts b/packages/tui/test/cli/tui/session-rows.test.ts
+index a7513940d7f6..0efa465906f6 100644
+--- a/packages/tui/test/cli/tui/session-rows.test.ts
++++ b/packages/tui/test/cli/tui/session-rows.test.ts
+@@ -169,7 +169,13 @@ test("assigns stable IDs to tool rows for direct navigation", () => {
+ test("finds background tool launch rows for completion navigation", () => {
+   const messages: SessionMessageInfo[] = [
+     assistant("assistant-1", [
+-      { type: "tool", id: "shell-1", name: "shell", state: pending(), time: { created: 1 } },
++      {
++        type: "tool",
++        id: "shell-1",
++        name: "shell",
++        state: completed({ shellID: "sh_first", status: "running" }),
++        time: { created: 1 },
++      },
+     ]),
+     assistant("assistant-2", [
+       {
+@@ -214,6 +220,7 @@ test("finds background tool launch rows for completion navigation", () => {
+   const rows = reduceSessionRows(messages)
+ 
+   expect(backgroundToolRowIndex(rows, messages, { source: "shell", id: "shell-1" }, "completion-2")).toBe(0)
++  expect(backgroundToolRowIndex(rows, messages, { source: "shell", id: "sh_first" }, "completion-2")).toBe(0)
+   expect(backgroundToolRowIndex(rows, messages, { source: "subagent", id: "child-1" }, "completion-1")).toBe(1)
+   expect(backgroundToolRowIndex(rows, messages, { source: "subagent", id: "child-1" }, "completion-2")).toBe(3)
+ })

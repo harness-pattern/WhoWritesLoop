@@ -1,0 +1,281 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 5738a04febfc..ebfc4fd6d9ae 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -204,7 +204,8 @@ const table = sqliteTable("session", {
+ 
+ ## Plugin Loading
+ 
+-- Plugins load asynchronously. Server handlers never wait for them (`Plugin.awaitActivation`), never retry until something appears, and never turn slow plugins into a timeout or 503. This applies to reads and to actions such as `generate.*`, `rpc.call`, `vcs.init` and `websearch.query`.
++- Plugins load asynchronously. Server handlers never wait for them (`Plugin.awaitActivation`), never retry until something appears, and never turn slow plugins into a timeout or 503. This applies to reads and to actions such as `rpc.call` and `vcs.init`.
++- Temporary exception: endpoints that list or use providers managed policy can deny (`model.list`, `model.default`, `provider.list`, `generate.*`, `voice.*` and `websearch.query`) wait through `awaitPlugins` in `packages/server/src/location.ts`, because policy is applied by the last plugin to activate and is missing until then. Don't add new waits; this goes away once a plugin batch becomes visible only when it ends.
+ - The server answers with what is loaded now: lists may be empty or partial on a cold Location, and an action whose model, provider or RPC hasn't loaded yet fails with not-found. That is expected, not a bug to fix on the server.
+ - Clients are responsible for making sure what they need is loaded before they call. Long-lived clients refresh on the matching `*.updated` event (`model.updated`, `agent.updated`, `skill.updated`, `integration.updated`, `plugin.updated`, ...). One-shot clients (CLI commands, ACP, SDK callers) wait on their side, for example by polling `plugin.list` or the entry they need. See `packages/cli/src/services/plugin-startup.ts`.
+ - Running the hooks that are registered and waiting for their result is fine (for example `hooks.trigger("session", "http.request", ...)`). What is not allowed is waiting for plugins to load first: if the plugin that adds a hook hasn't loaded yet, the call runs without that hook.
+diff --git a/packages/server/src/handlers/generate.ts b/packages/server/src/handlers/generate.ts
+index 0799842e5ed3..73b916fea9d7 100644
+--- a/packages/server/src/handlers/generate.ts
++++ b/packages/server/src/handlers/generate.ts
+@@ -15,7 +15,7 @@ import { Model } from "@opencode/schema/model"
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/http-api"
+ import { Api } from "../api"
+-import { locationErrors } from "../location"
++import { awaitPlugins, locationErrors } from "../location"
+ 
+ export const GenerateHandler = HttpApiBuilder.group(Api, "server.generate", (handlers) =>
+   Effect.gen(function* () {
+@@ -24,6 +24,7 @@ export const GenerateHandler = HttpApiBuilder.group(Api, "server.generate", (han
+     const services = locations.get(Location.Ref.make({ directory: AbsolutePath.make(global.config) }))
+     const text = Effect.fn("server.generate.text")(
+       function* (request: { readonly payload: { readonly prompt: string; readonly model?: Model.Ref } }) {
++        yield* awaitPlugins
+         const generate = yield* Generate.Service
+         return { data: { text: yield* generate.text(request.payload).pipe(Effect.mapError(generateError)) } }
+       },
+@@ -32,6 +33,7 @@ export const GenerateHandler = HttpApiBuilder.group(Api, "server.generate", (han
+     )
+     const image = Effect.fn("server.generate.image")(
+       function* (request: { readonly payload: ImageRequest }) {
++        yield* awaitPlugins
+         const generate = yield* Generate.Service
+         return { data: yield* generate.image(request.payload).pipe(Effect.mapError(generateError)) }
+       },
+@@ -46,6 +48,7 @@ export const GenerateHandler = HttpApiBuilder.group(Api, "server.generate", (han
+             message: "Decision question names must be unique",
+             field: "questions",
+           })
++        yield* awaitPlugins
+         const generate = yield* Generate.Service
+         return { data: yield* generate.decisions(request.payload).pipe(Effect.mapError(generateError)) }
+       },
+diff --git a/packages/server/src/handlers/model.ts b/packages/server/src/handlers/model.ts
+index af2bb0daced4..eb5517449947 100644
+--- a/packages/server/src/handlers/model.ts
++++ b/packages/server/src/handlers/model.ts
+@@ -2,7 +2,7 @@ import { Model } from "@opencode/core/model"
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/http-api"
+ import { Api } from "../api"
+-import { response } from "../location"
++import { awaitPlugins, response } from "../location"
+ 
+ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers) =>
+   Effect.gen(function* () {
+@@ -10,6 +10,7 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
+       .handle(
+         "model.list",
+         Effect.fn(function* (ctx) {
++          yield* awaitPlugins
+           const models = yield* Model.Service
+           return yield* response(models.available(ctx.query.types))
+         }),
+@@ -17,6 +18,7 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
+       .handle(
+         "model.default",
+         Effect.fn(function* () {
++          yield* awaitPlugins
+           const models = yield* Model.Service
+           return yield* response(models.default())
+         }),
+diff --git a/packages/server/src/handlers/provider.ts b/packages/server/src/handlers/provider.ts
+index ab9c2201a5ee..3b0bdf4a4956 100644
+--- a/packages/server/src/handlers/provider.ts
++++ b/packages/server/src/handlers/provider.ts
+@@ -3,7 +3,7 @@ import { ProviderNotFoundError } from "@opencode/protocol/errors"
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/http-api"
+ import { Api } from "../api"
+-import { response } from "../location"
++import { awaitPlugins, response } from "../location"
+ 
+ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (handlers) =>
+   Effect.gen(function* () {
+@@ -11,6 +11,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
+       .handle(
+         "provider.list",
+         Effect.fn(function* () {
++          yield* awaitPlugins
+           const providers = yield* Provider.Service
+           return yield* response(providers.available())
+         }),
+diff --git a/packages/server/src/handlers/voice.ts b/packages/server/src/handlers/voice.ts
+index ff9d46a7385b..f9507a98c335 100644
+--- a/packages/server/src/handlers/voice.ts
++++ b/packages/server/src/handlers/voice.ts
+@@ -7,7 +7,7 @@ import { Global } from "@opencode/util/global"
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/http-api"
+ import { Api } from "../api"
+-import { locationErrors } from "../location"
++import { awaitPlugins, locationErrors } from "../location"
+ 
+ export const VoiceHandler = HttpApiBuilder.group(Api, "server.voice", (handlers) =>
+   Effect.gen(function* () {
+@@ -19,6 +19,7 @@ export const VoiceHandler = HttpApiBuilder.group(Api, "server.voice", (handlers)
+         "voice.models",
+         Effect.fn("server.voice.models")(
+           function* () {
++            yield* awaitPlugins
+             const voice = yield* Voice.Service
+             return { data: yield* voice.models() }
+           },
+@@ -30,6 +31,7 @@ export const VoiceHandler = HttpApiBuilder.group(Api, "server.voice", (handlers)
+         "voice.session",
+         Effect.fn("server.voice.session")(
+           function* (request) {
++            yield* awaitPlugins
+             const voice = yield* Voice.Service
+             const transport = yield* voice
+               .session(request.payload)
+diff --git a/packages/server/src/handlers/websearch.ts b/packages/server/src/handlers/websearch.ts
+index 71808b86e206..853e223d54b0 100644
+--- a/packages/server/src/handlers/websearch.ts
++++ b/packages/server/src/handlers/websearch.ts
+@@ -3,7 +3,7 @@ import { InvalidRequestError, ServiceUnavailableError } from "@opencode/protocol
+ import { Effect } from "effect"
+ import { HttpApiBuilder } from "effect/http-api"
+ import { Api } from "../api"
+-import { response } from "../location"
++import { awaitPlugins, response } from "../location"
+ 
+ export const WebSearchHandler = HttpApiBuilder.group(Api, "server.websearch", (handlers) =>
+   Effect.gen(function* () {
+@@ -18,6 +18,8 @@ export const WebSearchHandler = HttpApiBuilder.group(Api, "server.websearch", (h
+       .handle(
+         "websearch.query",
+         Effect.fn("server.websearch.query")(function* (request) {
++          // A cold Location must finish activating plugins before their providers can be resolved.
++          yield* awaitPlugins
+           const websearch = yield* WebSearch.Service
+           return yield* response(
+             websearch.query(request.payload).pipe(
+diff --git a/packages/server/src/location.ts b/packages/server/src/location.ts
+index c37979e94138..25fecc82f52c 100644
+--- a/packages/server/src/location.ts
++++ b/packages/server/src/location.ts
+@@ -1,9 +1,10 @@
+ import { FileSystem } from "@opencode/core/filesystem"
+ import { Location } from "@opencode/core/location"
++import { Plugin } from "@opencode/core/plugin"
+ import { LocationServiceMap } from "@opencode/core/location-services"
+ import { AbsolutePath } from "@opencode/core/schema"
+ import { Session } from "@opencode/core/session"
+-import { LocationNotFoundError, InvalidRequestError } from "@opencode/protocol/errors"
++import { LocationNotFoundError, InvalidRequestError, ServiceUnavailableError } from "@opencode/protocol/errors"
+ import { Effect, Layer, Schema } from "effect"
+ import { HttpServerRequest } from "effect/http"
+ import { HttpApiMiddleware } from "effect/http-api"
+@@ -32,6 +33,22 @@ export function locationErrors<A, E, R>(effect: Effect.Effect<A, E, R>) {
+   )
+ }
+ 
++// Temporary: managed policy is applied by the last internal plugin, and State shows each registration as soon as it is
++// made, so until activation finishes a provider the policy denies is still listed and usable. Only the endpoints that
++// list or use providers wait. Remove once a plugin batch becomes visible only when it ends.
++export const awaitPlugins = Plugin.awaitActivation.pipe(
++  Effect.timeoutOrElse({
++    duration: "5 seconds",
++    orElse: () =>
++      Effect.fail(
++        new ServiceUnavailableError({
++          message: "Location plugins did not finish activating",
++          service: "plugin",
++        }),
++      ),
++  }),
++)
++
+ export function response<A, E, R>(data: Effect.Effect<A, E, R>) {
+   return Effect.gen(function* () {
+     const location = yield* Location.Service
+diff --git a/packages/server/test/provider.test.ts b/packages/server/test/provider.test.ts
+index 037fc5323588..d8dd59b51bdd 100644
+--- a/packages/server/test/provider.test.ts
++++ b/packages/server/test/provider.test.ts
+@@ -1,14 +1,14 @@
+ import { expect } from "bun:test"
+ import { SdkPlugins } from "@opencode/core/plugin/sdk"
+ import { Plugin } from "@opencode/plugin/effect"
+-import { Context, Deferred, Effect, Layer } from "effect"
++import { Context, Deferred, Effect, Fiber, Layer, Option } from "effect"
+ import { HttpEffect, HttpRouter, HttpServer } from "effect/http"
+ import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
+ import { it } from "../../core/test/lib/effect"
+ import { createRoutes } from "../src/routes"
+ 
+ it.live(
+-  "catalog reads answer while plugins are still activating",
++  "policy-controlled endpoints wait for plugins while other catalog reads answer",
+   () =>
+     Effect.gen(function* () {
+       const tmp = yield* tmpdirScoped("opencode-provider-endpoints-")
+@@ -51,38 +51,57 @@ it.live(
+       const handler = Context.get(context, HttpRouter.HttpRouter)
+         .asHttpEffect()
+         .pipe(HttpEffect.toWebHandlerWith(context))
+-      const request = (method: "GET" | "POST", route: string) =>
++      const request = (method: "GET" | "POST", route: string, body?: unknown) =>
+         Effect.promise((signal) => {
+           const url = new URL(route, "http://opencode.local")
+           url.searchParams.set("location[directory]", tmp.path)
+           return handler(
+             new Request(url, {
+               method,
+-              headers: { authorization: `Basic ${btoa("opencode:secret")}` },
++              headers: {
++                authorization: `Basic ${btoa("opencode:secret")}`,
++                ...(body === undefined ? {} : { "content-type": "application/json" }),
++              },
++              body: body === undefined ? undefined : JSON.stringify(body),
+               signal,
+             }),
+           )
+         })
+-      // Config providers and agents activate after SDK plugins. Reads return the current snapshot without waiting,
+-      // and clients refresh on the matching *.updated events.
+-      yield* request("GET", "/api/provider").pipe(Effect.timeout("2 seconds"))
++      yield* request("GET", "/api/agent").pipe(Effect.timeout("2 seconds"))
+       yield* Deferred.await(started)
+-      for (const route of ["/api/provider", "/api/agent", "/api/model", "/api/skill", "/api/integration"]) {
++      // Managed policy is applied by the last internal plugin, so endpoints whose entries it can deny wait until
++      // activation finishes rather than serve a provider it would remove.
++      const providers = yield* request("GET", "/api/provider").pipe(Effect.forkScoped)
++      const models = yield* request("GET", "/api/model").pipe(Effect.forkScoped)
++      const search = yield* request("POST", "/api/websearch", { query: "opencode" }).pipe(
++        Effect.forkScoped,
++      )
++      // Everything else answers with the current snapshot, and clients refresh on the matching *.updated events.
++      for (const route of ["/api/agent", "/api/skill", "/api/integration"]) {
+         const response = yield* request("GET", route).pipe(Effect.timeout("2 seconds"))
+         expect(response.status).toBe(200)
+       }
+-      const list = yield* request("GET", "/api/provider").pipe(Effect.timeout("2 seconds"))
+-      expect(yield* Effect.promise(() => list.json())).toMatchObject({
+-        location: { directory: tmp.path },
+-        data: expect.not.arrayContaining([expect.objectContaining({ id: "custom" })]),
+-      })
+       const get = yield* request("GET", "/api/provider/custom").pipe(Effect.timeout("2 seconds"))
+       expect(get.status).toBe(404)
+       expect(yield* Effect.promise(() => get.json())).toMatchObject({
+         _tag: "ProviderNotFoundError",
+         providerID: "custom",
+       })
++      const pending = yield* Effect.all(
++        [providers, models, search].map((fiber) => Fiber.await(fiber).pipe(Effect.timeoutOption("500 millis"))),
++        { concurrency: "unbounded" },
++      )
++      expect(pending.every(Option.isNone)).toBeTrue()
++
+       yield* Deferred.succeed(release, undefined)
++      const list = yield* Fiber.join(providers)
++      expect(list.status).toBe(200)
++      expect(yield* Effect.promise(() => list.json())).toMatchObject({
++        location: { directory: tmp.path },
++        data: expect.arrayContaining([expect.objectContaining({ id: "custom" })]),
++      })
++      expect((yield* Fiber.join(models)).status).toBe(200)
++      expect((yield* Fiber.join(search)).status).toBe(400)
+     }),
+   15_000,
+ )

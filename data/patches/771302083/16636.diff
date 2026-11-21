@@ -1,0 +1,420 @@
+diff --git a/__tests__/scripts/ingress.test.ts b/__tests__/scripts/ingress.test.ts
+index fe769bfa0885..750558025b2b 100644
+--- a/__tests__/scripts/ingress.test.ts
++++ b/__tests__/scripts/ingress.test.ts
+@@ -738,3 +738,111 @@ describe("ingress socket-error resilience", () => {
+     expect(ingressStderr).not.toContain("Unhandled 'error' event");
+   });
+ });
++
++describe("ingress --disable-secure workspace-session cookie", () => {
++  let backend: Server;
++  let defaultIngress: ChildProcess;
++  let disableSecureIngress: ChildProcess;
++  let backendPort: number;
++  let defaultPort: number;
++  let disableSecurePort: number;
++
++  beforeAll(async () => {
++    backend = createServer((_req, res) => {
++      res.writeHead(200, {
++        "Content-Type": "application/json",
++        "Set-Cookie": [
++          "oh_workspace_session_key=abc123; Path=/api/conversations; HttpOnly; Secure; SameSite=None; Partitioned",
++          "other_cookie=xyz; Path=/; HttpOnly; Secure; SameSite=None",
++        ],
++      });
++      res.end(JSON.stringify({ ok: true }));
++    });
++    backendPort = await listenOnLoopback(backend);
++
++    defaultPort = await getFreePort();
++    defaultIngress = spawn(
++      process.execPath,
++      [
++        ingressScript,
++        "--port",
++        defaultPort.toString(),
++        "--route",
++        `/api=${originForPort(backendPort)}`,
++      ],
++      { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
++    );
++    await waitForPort(defaultPort, defaultIngress);
++
++    disableSecurePort = await getFreePort();
++    disableSecureIngress = spawn(
++      process.execPath,
++      [
++        ingressScript,
++        "--port",
++        disableSecurePort.toString(),
++        "--disable-secure",
++        "--route",
++        `/api=${originForPort(backendPort)}`,
++      ],
++      { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
++    );
++    await waitForPort(disableSecurePort, disableSecureIngress);
++  });
++
++  afterAll(async () => {
++    await stopChild(defaultIngress);
++    await stopChild(disableSecureIngress);
++    await closeServer(backend);
++  });
++
++  async function getCookies(port: number) {
++    return new Promise<{ status: number; cookies: string[] }>(
++      (resolve, reject) => {
++        const req = request(
++          `http://127.0.0.1:${port}/api/auth/workspace-session`,
++          { method: "GET" },
++          (res) => {
++            resolve({
++              status: res.statusCode ?? 0,
++              cookies: (res.headers["set-cookie"] as string[]) ?? [],
++            });
++          },
++        );
++        req.on("error", reject);
++        req.end();
++      },
++    );
++  }
++
++  it("keeps Secure/SameSite=None/Partitioned on the workspace cookie by default", async () => {
++    const { status, cookies } = await getCookies(defaultPort);
++    expect(status).toBe(200);
++
++    const workspaceCookie = cookies.find((c) =>
++      c.startsWith("oh_workspace_session_key="),
++    );
++    expect(workspaceCookie).toBeDefined();
++    expect(workspaceCookie).toMatch(/;\s*Secure(?:;|$)/i);
++    expect(workspaceCookie).toMatch(/SameSite=None/i);
++    expect(workspaceCookie).toMatch(/Partitioned/i);
++  });
++
++  it("drops Secure/Partitioned and downgrades SameSite with --disable-secure", async () => {
++    const { status, cookies } = await getCookies(disableSecurePort);
++    expect(status).toBe(200);
++
++    const workspaceCookie = cookies.find((c) =>
++      c.startsWith("oh_workspace_session_key="),
++    );
++    expect(workspaceCookie).toBeDefined();
++    expect(workspaceCookie).not.toMatch(/;\s*Secure(?:;|$)/i);
++    expect(workspaceCookie).not.toMatch(/Partitioned/i);
++    expect(workspaceCookie).toMatch(/SameSite=Lax/i);
++
++    // Other cookies are left untouched.
++    const otherCookie = cookies.find((c) => c.startsWith("other_cookie="));
++    expect(otherCookie).toMatch(/;\s*Secure(?:;|$)/i);
++    expect(otherCookie).toMatch(/SameSite=None/i);
++  });
++});
+diff --git a/__tests__/scripts/proxy-utils.test.ts b/__tests__/scripts/proxy-utils.test.ts
+new file mode 100644
+index 000000000000..1c9e1a73b4b7
+--- /dev/null
++++ b/__tests__/scripts/proxy-utils.test.ts
+@@ -0,0 +1,92 @@
++import { describe, expect, it } from "vitest";
++
++import {
++  downgradeWorkspaceSessionCookie,
++  rewriteWorkspaceSessionCookies,
++} from "../../scripts/proxy-utils.mjs";
++
++describe("downgradeWorkspaceSessionCookie", () => {
++  const workspaceCookie =
++    "oh_workspace_session_key=abc123; Path=/api/conversations; HttpOnly; Secure; SameSite=None; Partitioned";
++
++  it("strips Secure and Partitioned and downgrades SameSite=None to Lax", () => {
++    const result = downgradeWorkspaceSessionCookie(workspaceCookie);
++
++    expect(result).toContain("oh_workspace_session_key=abc123");
++    expect(result).toContain("Path=/api/conversations");
++    expect(result).toContain("HttpOnly");
++    expect(result.toLowerCase()).not.toContain("secure");
++    expect(result.toLowerCase()).not.toContain("partitioned");
++    expect(result).toContain("SameSite=Lax");
++  });
++
++  it("leaves non-workspace cookies unchanged", () => {
++    const other = "other_cookie=xyz; Path=/; HttpOnly; Secure; SameSite=None";
++    expect(downgradeWorkspaceSessionCookie(other)).toBe(other);
++  });
++
++  it("is a no-op when the workspace cookie has nothing to rewrite", () => {
++    const alreadyLax =
++      "oh_workspace_session_key=abc123; Path=/api/conversations; HttpOnly; SameSite=Lax";
++    expect(downgradeWorkspaceSessionCookie(alreadyLax)).toBe(alreadyLax);
++  });
++
++  it("handles attribute casing", () => {
++    const mixed =
++      "oh_workspace_session_key=abc123; Path=/api/conversations; secure; samesite=none; partitioned";
++    const result = downgradeWorkspaceSessionCookie(mixed);
++    expect(result.toLowerCase()).not.toContain("secure");
++    expect(result.toLowerCase()).not.toContain("partitioned");
++    expect(result).toContain("SameSite=Lax");
++  });
++});
++
++describe("rewriteWorkspaceSessionCookies", () => {
++  it("rewrites the workspace cookie in an array and leaves others alone", () => {
++    const proxyRes = {
++      headers: {
++        "set-cookie": [
++          "oh_workspace_session_key=abc123; Path=/api/conversations; HttpOnly; Secure; SameSite=None; Partitioned",
++          "other_cookie=xyz; Path=/; HttpOnly; Secure; SameSite=None",
++        ],
++      },
++    };
++    rewriteWorkspaceSessionCookies(proxyRes);
++
++    const cookies = proxyRes.headers["set-cookie"] as string[];
++    const workspace = cookies.find((c) =>
++      c.startsWith("oh_workspace_session_key="),
++    );
++    const other = cookies.find((c) => c.startsWith("other_cookie="));
++
++    expect(workspace).toBeDefined();
++    expect(workspace!.toLowerCase()).not.toContain("secure");
++    expect(workspace!.toLowerCase()).not.toContain("partitioned");
++    expect(workspace).toContain("SameSite=Lax");
++
++    expect(other).toBe(
++      "other_cookie=xyz; Path=/; HttpOnly; Secure; SameSite=None",
++    );
++  });
++
++  it("rewrites a single string header", () => {
++    const proxyRes = {
++      headers: {
++        "set-cookie":
++          "oh_workspace_session_key=abc123; Path=/api/conversations; HttpOnly; Secure; SameSite=None; Partitioned",
++      },
++    };
++    rewriteWorkspaceSessionCookies(proxyRes);
++
++    const cookie = proxyRes.headers["set-cookie"] as string;
++    expect(cookie.toLowerCase()).not.toContain("secure");
++    expect(cookie.toLowerCase()).not.toContain("partitioned");
++    expect(cookie).toContain("SameSite=Lax");
++  });
++
++  it("is a no-op when no Set-Cookie header is present", () => {
++    const proxyRes = { headers: {} };
++    rewriteWorkspaceSessionCookies(proxyRes);
++    expect(proxyRes.headers).toEqual({});
++  });
++});
+diff --git a/scripts/ingress.mjs b/scripts/ingress.mjs
+index 72eb75082e59..27b8b9e70a5c 100644
+--- a/scripts/ingress.mjs
++++ b/scripts/ingress.mjs
+@@ -44,6 +44,7 @@ function parseArgs() {
+     routes: {},
+     defaultBackend: null,
+     runtimeServicesInfo: null,
++    disableSecure: false,
+   };
+ 
+   for (let i = 0; i < args.length; i++) {
+@@ -65,6 +66,9 @@ function parseArgs() {
+       case "--runtime-services-info":
+         config.runtimeServicesInfo = args[++i] || null;
+         break;
++      case "--disable-secure":
++        config.disableSecure = true;
++        break;
+       case "-h":
+       case "--help":
+         showHelp();
+@@ -89,6 +93,12 @@ OPTIONS:
+   -r, --route <path=url>      Add a route (can be repeated)
+   -d, --default <url>         Default backend for unmatched routes
+   --runtime-services-info     Runtime services JSON for /server_info
++  --disable-secure            Strip the Secure attribute from the workspace-
++                              session cookie (and downgrade SameSite=None to
++                              Lax) forwarded from backends. Use when serving
++                              over plain http:// to a non-loopback host
++                              (e.g. a LAN/VM IP) so browsers will send the
++                              session cookie back.
+   -h, --help                  Show this help
+ 
+ ENVIRONMENT VARIABLES:
+@@ -138,6 +148,7 @@ function buildConfig(args, env = process.env) {
+     defaultBackend: args.defaultBackend || env.INGRESS_DEFAULT || null,
+     runtimeServicesInfo:
+       args.runtimeServicesInfo || env.INGRESS_RUNTIME_SERVICES_INFO || null,
++    disableSecure: args.disableSecure || false,
+   };
+ }
+ 
+@@ -147,7 +158,10 @@ function buildConfig(args, env = process.env) {
+ 
+ export function startIngress(config) {
+   const route = createRouter(config.routes, config.defaultBackend);
+-  const proxy = createProxyHandlers({ label: `ingress:${config.port}` });
++  const proxy = createProxyHandlers({
++    label: `ingress:${config.port}`,
++    stripSecureCookie: config.disableSecure === true,
++  });
+   const uninstallDiagnostics = proxy.installDiagnostics();
+ 
+   const server = createServer((req, res) => {
+diff --git a/scripts/proxy-utils.mjs b/scripts/proxy-utils.mjs
+index 4d81dd870fd8..188b7a45e533 100644
+--- a/scripts/proxy-utils.mjs
++++ b/scripts/proxy-utils.mjs
+@@ -4,6 +4,7 @@ import { createProxyServer } from "httpxy";
+ 
+ const DEFAULT_PROXY_TIMEOUT_MS = 120_000;
+ const SERVER_INFO_PATH = "/server_info";
++const WORKSPACE_SESSION_COOKIE_NAME = "oh_workspace_session_key";
+ const BENIGN_SOCKET_ERRORS = new Set([
+   "ECONNRESET",
+   "EPIPE",
+@@ -11,6 +12,65 @@ const BENIGN_SOCKET_ERRORS = new Set([
+   "ERR_STREAM_PREMATURE_CLOSE",
+ ]);
+ 
++/**
++ * Rewrite a single `Set-Cookie` value for the workspace-session cookie so a
++ * browser will store it when the GUI is served over plain `http://` on a
++ * non-loopback host (LAN / VM / container IP).
++ *
++ * The agent-server mints `oh_workspace_session_key` with `Secure`,
++ * `SameSite=None` and `Partitioned`; browsers reject that combination over
++ * plain HTTP. We drop `Secure` and `Partitioned` (the latter requires
++ * `Secure`) and downgrade `SameSite=None` to `SameSite=Lax`.  Any other
++ * cookie is returned unchanged.
++ */
++export function downgradeWorkspaceSessionCookie(setCookieValue) {
++  const parts = setCookieValue.split(";").map((part) => part.trim());
++  const name = parts[0].split("=")[0].trim();
++  if (name !== WORKSPACE_SESSION_COOKIE_NAME) return setCookieValue;
++
++  let changed = false;
++  const rewritten = parts
++    .filter((part, index) => {
++      if (index === 0) return true;
++      const attrName = part.split("=")[0].trim().toLowerCase();
++      if (attrName === "secure" || attrName === "partitioned") {
++        changed = true;
++        return false;
++      }
++      return true;
++    })
++    .map((part, index) => {
++      if (index === 0) return part;
++      const [attrName, ...rest] = part.split("=");
++      const lowerName = attrName.trim().toLowerCase();
++      if (lowerName === "samesite") {
++        const value = rest.join("=").trim().toLowerCase();
++        if (value === "none") {
++          changed = true;
++          return "SameSite=Lax";
++        }
++      }
++      return part;
++    });
++
++  return changed ? rewritten.join("; ") : setCookieValue;
++}
++
++/**
++ * Rewrite the workspace-session cookie(s) in a proxied response's
++ * `Set-Cookie` header(s) so they can be stored by a browser over plain HTTP.
++ * Only invoked when the caller opts in via `stripSecureCookie`.
++ */
++export function rewriteWorkspaceSessionCookies(proxyRes) {
++  const raw = proxyRes.headers["set-cookie"];
++  if (raw === undefined) return;
++  if (Array.isArray(raw)) {
++    proxyRes.headers["set-cookie"] = raw.map(downgradeWorkspaceSessionCookie);
++  } else {
++    proxyRes.headers["set-cookie"] = downgradeWorkspaceSessionCookie(raw);
++  }
++}
++
+ export function matchesPathPrefix(url, prefix) {
+   return (
+     url === prefix ||
+@@ -207,6 +267,7 @@ export function createProxyHandlers({
+   label = "proxy",
+   timeout = DEFAULT_PROXY_TIMEOUT_MS,
+   proxyTimeout = DEFAULT_PROXY_TIMEOUT_MS,
++  stripSecureCookie = false,
+ } = {}) {
+   const proxy = createProxyServer({
+     ws: true,
+@@ -215,6 +276,17 @@ export function createProxyHandlers({
+     timeout,
+     proxyTimeout,
+   });
++
++  // When the operator opts in with `--disable-secure` (a trusted plain-HTTP
++  // deployment such as a LAN / VM / container IP), rewrite the
++  // workspace-session cookie so the browser will store it over plain HTTP.
++  // This fixes workspace file-preview 401s in those setups.
++  if (stripSecureCookie) {
++    proxy.on("proxyRes", (proxyRes) => {
++      rewriteWorkspaceSessionCookies(proxyRes);
++    });
++  }
++
+   const metrics = {
+     activeHttpRequests: 0,
+     activeWebSockets: 0,
+diff --git a/scripts/static-server.mjs b/scripts/static-server.mjs
+index 8e399259bfcc..db99d2eb9e30 100644
+--- a/scripts/static-server.mjs
++++ b/scripts/static-server.mjs
+@@ -89,6 +89,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
+     runtimeServicesInfo: null,
+     lockToCloud: null,
+     basePath: "/",
++    disableSecure: false,
+   };
+ 
+   for (let i = 0; i < argv.length; i++) {
+@@ -133,6 +134,9 @@ export function parseArgs(argv = process.argv.slice(2)) {
+       case "--base-path":
+         config.basePath = normalizeBasePath(argv[++i]);
+         break;
++      case "--disable-secure":
++        config.disableSecure = true;
++        break;
+ 
+       case "--auth-required":
+         config.authRequired = true;
+@@ -215,6 +219,12 @@ OPTIONS:
+                                instead of SPA-fallbacking to index.html;
+                                may be repeated. Useful in --frontend-only
+                                mode to cleanly reject API paths.
++  --disable-secure             Strip the Secure attribute from the workspace-
++                               session cookie (and downgrade SameSite=None to
++                               Lax) forwarded from backends. Use when serving
++                               over plain http:// to a non-loopback host
++                               (e.g. a LAN/VM IP) so browsers will send the
++                               session cookie back.
+   -h, --help                   Show this help
+ 
+ ROUTING:
+@@ -542,7 +552,10 @@ async function handleStatic(
+ 
+ export function startStaticServer(config) {
+   const route = createRouter(config.routes);
+-  const proxy = createProxyHandlers({ label: `static:${config.port}` });
++  const proxy = createProxyHandlers({
++    label: `static:${config.port}`,
++    stripSecureCookie: config.disableSecure === true,
++  });
+   const dirAbs = resolve(config.dir);
+   const injectionOpts = {
+     sessionApiKey: config.sessionApiKey || null,

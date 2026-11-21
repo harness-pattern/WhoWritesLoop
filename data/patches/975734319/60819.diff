@@ -1,0 +1,1997 @@
+diff --git a/packages/app/e2e/regression/btw-sidebar.spec.ts b/packages/app/e2e/regression/btw-sidebar.spec.ts
+index 9fab34633166..6ae47c9a64e7 100644
+--- a/packages/app/e2e/regression/btw-sidebar.spec.ts
++++ b/packages/app/e2e/regression/btw-sidebar.spec.ts
+@@ -225,7 +225,7 @@ test("answers /btw in the side panel without admitting a prompt", async ({ page
+   await expect(panel.getByText("exponential backoff", { exact: false })).toBeVisible()
+   await expect(panel.getByText("const delay = 2 ** attempt", { exact: true })).toBeVisible()
+   await expect(panel.getByRole("button", { name: "Copy message", exact: true })).toHaveCount(1)
+-  await expect(panel.getByRole("button", { name: "Rewind to here", exact: true })).toHaveCount(0)
++  await expect(panel.getByRole("button", { name: "Revert to here", exact: true })).toHaveCount(0)
+   await expect(panel.getByRole("button", { name: "Copy answer", exact: true })).toHaveCount(1)
+   await expect(panel.locator('[data-slot="text-part-meta"]')).toContainText(/\d+s/)
+   await panel.locator('[data-component="user-message"]').hover()
+diff --git a/packages/app/e2e/regression/session-header.spec.ts b/packages/app/e2e/regression/session-header.spec.ts
+index a46def6643bb..640a7a597090 100644
+--- a/packages/app/e2e/regression/session-header.spec.ts
++++ b/packages/app/e2e/regression/session-header.spec.ts
+@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test"
+ import { REMOTE_SERVER, seed, sessionHref } from "../utils/app"
+ import { fixture, mockStressTimeline } from "../utils/session-fixture"
+ import { reviewTabs } from "../utils/side-panel"
++import { chooseUserMessageAction, openUserMessageMenu } from "../utils/timeline"
+ import { expectSessionTitle } from "../utils/waits"
+ import { mockRemoteServer, mockWorkspace, openSession } from "../utils/workspace"
+ 
+@@ -724,7 +725,6 @@ test.describe("revert", () => {
+       if (step) settles.push(step)
+     })
+     const message = page.locator('[data-message-id="msg_second"]')
+-    await message.hover()
+ 
+     const response = page.waitForResponse(
+       (response) =>
+@@ -732,7 +732,8 @@ test.describe("revert", () => {
+         new URL(response.url()).pathname === `/api/session/${session.id}/revert/stage`,
+     )
+ 
+-    await message.getByRole("button", { name: "Rewind to here" }).click()
++    // The newest prompt's revert undoes the last turn.
++    await chooseUserMessageAction(page, message, "Undo")
+     expect((await response).ok()).toBe(true)
+ 
+     await expect(page.getByRole("textbox", { name: "Prompt" })).toHaveText("Second prompt")
+@@ -741,15 +742,14 @@ test.describe("revert", () => {
+     expect(settles).toEqual(["/interrupt", "/wait", "/revert/stage"])
+   })
+ 
+-  test("Undo on the Rewound toast clears the revert and puts the draft back before the staged event arrives", async ({
++  test("Undo on the Reverted toast clears the revert and puts the draft back before the staged event arrives", async ({
+     page,
+   }) => {
+     const { session, editor } = await openSession(page, workspace)
+     const prompt = page.getByRole("textbox", { name: "Prompt" })
+     await editor.pressSequentially("Unsent draft")
+     const message = page.locator('[data-message-id="msg_second"]')
+-    await message.hover()
+-    await message.getByRole("button", { name: "Rewind to here" }).click()
++    await chooseUserMessageAction(page, message, "Undo")
+     await expect(prompt).toHaveText("Second prompt")
+ 
+     const cleared = page.waitForRequest(
+@@ -821,9 +821,9 @@ test.describe("revert", () => {
+     })
+     const prompt = page.getByRole("textbox", { name: "Prompt" })
+     await editor.pressSequentially("Draft in source")
++    // The session is already reverted to msg_second, so msg_first is the newest prompt left.
+     const message = page.locator('[data-timeline-row="UserMessage"][data-message-id="msg_first"]')
+-    await message.hover()
+-    await message.getByRole("button", { name: "Rewind to here" }).click()
++    await chooseUserMessageAction(page, message, "Undo")
+     await expect(prompt).toHaveText("First prompt")
+ 
+     await tabs(page).filter({ hasText: "Rewind other" }).click()
+@@ -883,8 +883,7 @@ test.describe("revert", () => {
+     })
+     await page.goto(sessionHref("ses_child"))
+     await expectSessionTitle(page, "Session message revert")
+-    const message = page.locator('[data-message-id="msg_second"]')
+-    await message.hover()
+-    await expect(message.getByRole("button", { name: "Rewind to here" })).toHaveCount(0)
++    const menu = await openUserMessageMenu(page, page.locator('[data-message-id="msg_second"]'))
++    await expect(menu.getByRole("menuitem", { name: /^(Revert to here|Undo)$/ })).toHaveCount(0)
+   })
+ })
+diff --git a/packages/app/e2e/regression/session-queue.spec.ts b/packages/app/e2e/regression/session-queue.spec.ts
+index f9cc211908d3..e032f7c55971 100644
+--- a/packages/app/e2e/regression/session-queue.spec.ts
++++ b/packages/app/e2e/regression/session-queue.spec.ts
+@@ -8,6 +8,7 @@ import { Schema } from "effect"
+ import { holdRoute, provider, seed, SERVER } from "../utils/app"
+ import type { MockServerConfig } from "../utils/mock-server"
+ import { installSseTransport } from "../utils/sse-transport"
++import { chooseUserMessageAction, openUserMessageMenu } from "../utils/timeline"
+ import { openSession } from "../utils/workspace"
+ 
+ const sessionID = "ses_session_queue_regression"
+@@ -1067,14 +1068,12 @@ test("reverting to another prompt replaces the file chips of an earlier restore"
+   const view = await openQueue(page, mock)
+   const chip = view.composer.locator('[data-slot="composer-context-file"]')
+ 
+-  for (const [id, text, chips] of [
+-    ["msg_queue_second", "Second prompt", 1],
+-    ["msg_queue_first", "First prompt", 0],
++  // The newest prompt's revert is Undo. The mock never hides the reverted prompt, so the first stays an earlier one.
++  for (const [id, text, chips, action] of [
++    ["msg_queue_second", "Second prompt", 1, "Undo"],
++    ["msg_queue_first", "First prompt", 0, "Revert to here"],
+   ] as const) {
+-    const row = userRow(page, id)
+-
+-    await row.hover()
+-    await row.getByRole("button", { name: "Rewind to here" }).click()
++    await chooseUserMessageAction(page, userRow(page, id), action)
+     await expect(view.input).toHaveText(text)
+     await expect(chip).toHaveCount(chips)
+   }
+@@ -1120,8 +1119,7 @@ test("reverting a delivered prompt leaves queued prompts alone, as in the TUI",
+     (response) => new URL(response.url()).pathname === `/api/session/${sessionID}/revert/stage`,
+   )
+ 
+-  await delivered.hover()
+-  await delivered.getByRole("button", { name: "Rewind to here" }).click()
++  await chooseUserMessageAction(page, delivered, "Undo")
+   expect((await staged).ok()).toBe(true)
+ 
+   await expect(view.input).toHaveText("First prompt")
+@@ -1194,9 +1192,9 @@ for (const [action, status] of [
+ 
+     if (status === "steering") await expect(message).toHaveAttribute("data-pending", "true")
+     else await expect(message).not.toHaveAttribute("data-pending")
+-    await pending.hover()
+-    await expect(pending.getByRole("button", { name: "Rewind to here" })).toHaveCount(0)
+-    await pending.getByRole("button", { name: action }).click()
++    const menu = await openUserMessageMenu(page, pending)
++    await expect(menu.getByRole("menuitem", { name: /^(Revert to here|Undo)$/ })).toHaveCount(0)
++    await menu.getByRole("menuitem", { name: action, exact: true }).click()
+ 
+     await expect(pending).toHaveCount(0)
+     expect(mock.changes).toEqual([{ inboxID, action: action === "Delete" ? "cancel" : "queue" }])
+@@ -1208,7 +1206,7 @@ for (const [action, status] of [
+   })
+ }
+ 
+-test("waiting steers group under one Pending line, each keeping its own actions beside its bubble", async ({
++test("waiting steers group under one Pending line, each keeping its own actions in its chevron menu", async ({
+   page,
+ }) => {
+   const mock = createQueueMock(
+@@ -1228,8 +1226,8 @@ test("waiting steers group under one Pending line, each keeping its own actions
+   await expect(first.locator('[data-slot="user-message-meta"]')).toBeHidden()
+ 
+   await first.locator('[data-slot="user-message-text"]').hover()
+-  await expect(first.locator('[data-slot="user-message-run-actions"]')).toHaveCSS("opacity", "1")
+-  await first.getByRole("button", { name: "Move to queue" }).click()
++  await expect(first.locator('[data-slot="user-message-menu"]')).toHaveCSS("opacity", "1")
++  await chooseUserMessageAction(page, first, "Move to queue")
+   await expect.poll(() => mock.changes).toEqual([{ inboxID: mock.rows[0].id, action: "queue" }])
+ })
+ 
+@@ -1367,8 +1365,10 @@ for (const delivery of ["steer", "queue"] as const) {
+       await expect(bubble).toHaveCSS("color", colors.pending.text)
+       await expect(bubble).toHaveCSS("transition-duration", "0s")
+       await expect(pending.locator('[data-slot="user-message-copy-wrapper"]')).toHaveCSS("opacity", "1")
+-      // The steer keeps U1's agent and model, so Pending is all its meta line says.
+-      await expect(pending.locator('[data-slot="user-message-meta"]')).toHaveText(/^Pending$/, { useInnerText: true })
++      // Pending closes the meta line, after the agent and model that show on hover.
++      await expect(pending.locator('[data-slot="user-message-meta"]')).toHaveText(/^Queue Model\s*·\s*Pending$/, {
++        useInnerText: true,
++      })
+       await bubble.evaluate((element) => (element.dataset.deliveryMarker = "pending"))
+     }
+ 
+diff --git a/packages/app/e2e/regression/timeline-geometry.spec.ts b/packages/app/e2e/regression/timeline-geometry.spec.ts
+index f5990a4fd69a..29a4482109a8 100644
+--- a/packages/app/e2e/regression/timeline-geometry.spec.ts
++++ b/packages/app/e2e/regression/timeline-geometry.spec.ts
+@@ -853,9 +853,9 @@ test("groups consecutive sent prompts under the last one's meta line, with each
+   await expect(first.locator('[data-slot="user-message-copy-wrapper"]')).toBeHidden()
+   await expect(last.locator('[data-slot="user-message-copy-wrapper"]')).toBeVisible()
+ 
+-  // The first message keeps its own actions, shown beside its bubble on hover.
++  // The first message keeps its own actions, in a chevron its bubble shows on hover.
+   await bubble(first).hover()
+-  await expect(first.locator('[data-slot="user-message-run-actions"]')).toHaveCSS("opacity", "1")
++  await expect(first.locator('[data-slot="user-message-menu"]')).toHaveCSS("opacity", "1")
+   await expect(first.getByRole("button", { name: "More actions" })).toHaveCount(1)
+ })
+ 
+diff --git a/packages/app/e2e/utils/timeline.ts b/packages/app/e2e/utils/timeline.ts
+index 5a8ae0fd5b89..bfedc7ba9369 100644
+--- a/packages/app/e2e/utils/timeline.ts
++++ b/packages/app/e2e/utils/timeline.ts
+@@ -11,7 +11,7 @@ import type {
+ import { EventManifest } from "@opencode/schema/event-manifest"
+ import { SessionMessage } from "@opencode/schema/session-message"
+ import type { TimelineDetail } from "@opencode/session-ui/timeline/detail"
+-import { expect, test, type Page, type TestInfo } from "@playwright/test"
++import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test"
+ import { Schema } from "effect"
+ import { SERVER, seed, sessionHref } from "./app"
+ import { mockOpenCodeServer, type MockServerConfig } from "./mock-server"
+@@ -1117,3 +1117,24 @@ function provider() {
+     default: { providerID: "opencode", modelID: "claude-opus-4-6" },
+   }
+ }
++
++/** Hovers a user message, opens the chevron menu its bubble (or, without text, its footer) shows, and picks an action. */
++export async function chooseUserMessageAction(page: Page, row: Locator, name: string) {
++  const bubble = row.locator('[data-slot="user-message-text"]')
++
++  if ((await bubble.count()) > 0) await bubble.hover()
++  else await row.locator('[data-component="user-message"]').hover()
++  await row.getByRole("button", { name: "More actions", exact: true }).click()
++  await page.getByRole("menuitem", { name, exact: true }).click()
++}
++
++/** Hovers a user message, opens its chevron menu, and returns the open menu. */
++export async function openUserMessageMenu(page: Page, row: Locator) {
++  const bubble = row.locator('[data-slot="user-message-text"]')
++
++  if ((await bubble.count()) > 0) await bubble.hover()
++  else await row.locator('[data-component="user-message"]').hover()
++  await row.getByRole("button", { name: "More actions", exact: true }).click()
++
++  return page.getByRole("menu")
++}
+diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
+index e37694393deb..369faacd26e4 100644
+--- a/packages/app/src/runtime/i18n/en.ts
++++ b/packages/app/src/runtime/i18n/en.ts
+@@ -24,7 +24,7 @@ export const dict = {
+   "session.location.choose": "Choose directory",
+   "session.location.worktree": "Choose worktree",
+   "session.location.worktreesFailed": "Failed to load worktrees",
+-  "session.rewind.toast.title": "Rewound",
++  "session.rewind.toast.title": "Reverted",
+   "session.rewind.toast.undo": "Undo",
+   "session.location.moving": "Moving session…",
+   "session.location.moveFailed": "Failed to move session",
+diff --git a/packages/session-ui/component-tests/session-message-projection.spec.ts b/packages/session-ui/component-tests/session-message-projection.spec.ts
+index dbbd89a47d7a..cc1ca0535f67 100644
+--- a/packages/session-ui/component-tests/session-message-projection.spec.ts
++++ b/packages/session-ui/component-tests/session-message-projection.spec.ts
+@@ -69,113 +69,217 @@ story("keeps quote attachment icons fixed while long text truncates", async ({ m
+ story.describe("message actions menu", () => {
+   story.use({ timezoneId: "UTC" })
+ 
+-  story("shows the creation time and disables actions the message cannot take", async ({ mount, page }) => {
+-    const timeline = await mount("current-prompt-message--pending")
+-    const message = timeline.locator('[data-component="user-message"]')
+-    const more = timeline.getByRole("button", { name: "More actions", exact: true })
+-    const fork = page.getByRole("menuitem", { name: "Fork from here", exact: true })
+-    const copy = page.getByRole("menuitem", { name: "Copy message", exact: true })
+-
+-    // The meta line keeps agent and model; the time moved into the menu.
+-    await expect(timeline.locator('[data-slot="user-message-meta"] time')).toHaveCount(0)
+-
+-    await timeline.getByLabel("Delivery state").selectOption("delivered")
+-    await message.hover()
+-    await expect(timeline.getByRole("button", { name: "Rewind to here", exact: true })).toBeVisible()
+-    await more.click()
+-    const menu = page.getByRole("menu")
+-    await expect(menu.locator("time")).toHaveText("Jan 1, 2025, 12:00 AM")
+-    await expect(fork).toBeEnabled()
+-    await expect(copy).toBeEnabled()
+-    // An open menu keeps the footer in view after the pointer leaves the message.
+-    await page.mouse.move(0, 0)
+-    await expect(timeline.locator('[data-slot="user-message-copy-wrapper"]')).toHaveCSS("opacity", "1")
+-    await page.keyboard.press("Escape")
+-    await expect(menu).toBeHidden()
++  story(
++    "opens from a chevron in the bubble with the send time and the actions the message can take",
++    async ({ mount, page }) => {
++      const timeline = await mount("current-prompt-message--pending")
++      const chevron = timeline.locator('[data-slot="user-message-menu"]')
++      const more = timeline.getByRole("button", { name: "More actions", exact: true })
++      const fork = page.getByRole("menuitem", { name: "Fork from here", exact: true })
++      const copy = page.getByRole("menuitem", { name: "Copy message", exact: true })
++      const revert = page.getByRole("menuitem", { name: "Revert to here", exact: true })
++      const remove = page.getByRole("menuitem", { name: "Delete", exact: true })
++
++      // The meta line keeps agent and model; the time lives in the menu.
++      await expect(timeline.locator('[data-slot="user-message-meta"] time')).toHaveCount(0)
++
++      const bubble = timeline.locator('[data-slot="user-message-text"]')
++      await timeline.getByLabel("Delivery state").selectOption("delivered")
++      await page.mouse.move(0, 0)
++      await expect(chevron).toHaveCSS("opacity", "0")
++      await bubble.hover()
++      await expect(chevron).toHaveCSS("opacity", "1")
++      await more.click()
++      const menu = page.getByRole("menu")
++      await expect(menu.locator("time")).toHaveText("Jan 1, 2025, 12:00 AM")
++      await expect(fork).toBeEnabled()
++      await expect(copy).toBeEnabled()
++      await expect(revert).toBeEnabled()
++      // An open menu keeps its chevron in view after the pointer leaves the message.
++      await page.mouse.move(0, 0)
++      await expect(chevron).toHaveCSS("opacity", "1")
++      await page.keyboard.press("Escape")
++      await expect(menu).toBeHidden()
++      // The menu hands focus back without a ring, so the chevron hides once the pointer is away.
++      await expect(more).toBeFocused()
++      await expect(chevron).toHaveCSS("opacity", "0")
++
++      // A pending steer is queued or deleted rather than reverted, and has no history to fork; a message without text has
++      // nothing to copy.
++      await timeline.getByLabel("Delivery state").selectOption("steering")
++      await timeline.getByLabel("Prompt text", { exact: true }).uncheck()
++      // Without a bubble, the chevron sits in the footer and shows while the message is hovered.
++      await timeline.locator('[data-component="user-message"]').hover()
++      await more.click()
++      await expect(page.getByRole("menuitem", { name: "Move to queue", exact: true })).toBeEnabled()
++      await expect(fork).toHaveCount(0)
++      await expect(copy).toHaveAttribute("aria-disabled", "true")
++      await expect(revert).toHaveCount(0)
++      await expect(remove).toBeEnabled()
++      await page.keyboard.press("Escape")
++
++      await timeline.getByLabel("Prompt text", { exact: true }).check()
++      await timeline.getByLabel("Delivery state").selectOption("delivered")
++      await page.evaluate(() => document.fonts.ready.then(() => undefined))
++
++      for (const width of [1000, 390]) {
++        await page.setViewportSize({ width, height: 844 })
++        await bubble.hover()
++        const box = await bubble.boundingBox()
++        const trigger = await more.boundingBox()
++        const lineHeight = await bubble.evaluate((element) => parseFloat(getComputedStyle(element).lineHeight))
++
++        if (!box || !trigger) throw new Error("Message geometry is unavailable")
++        // Pinned to the bubble's top trailing corner, centered on its first line, as far from the side as from the top.
++        expect(Math.abs(box.y + 8 + lineHeight / 2 - trigger.y - trigger.height / 2)).toBeLessThan(1)
++        expect(Math.abs(box.x + box.width - trigger.x - trigger.width - (trigger.y - box.y))).toBeLessThan(1)
++      }
++    },
++  )
+ 
+-    // A pending steer cannot fork, and a message without text has nothing to copy.
+-    await timeline.getByLabel("Delivery state").selectOption("steering")
+-    await timeline.getByLabel("Prompt text", { exact: true }).uncheck()
++  story("opens upward, 4px from the chevron, with its trailing edge on the chevron's", async ({ mount, page }) => {
++    const timeline = await mount("current-session-timeline-rows--prompt-runs")
++    await timeline.getByRole("button", { name: "Send next", exact: true }).click()
++    const message = timeline.locator('[data-component="user-message"]').first()
++    await message.locator('[data-slot="user-message-text"]').hover()
++    const more = message.getByRole("button", { name: "More actions", exact: true })
++    // An open menu hides the rest of the page from the accessibility tree, so measure the trigger first.
++    const trigger = await more.boundingBox()
+     await more.click()
+-    await expect(fork).toHaveAttribute("aria-disabled", "true")
+-    await expect(copy).toHaveAttribute("aria-disabled", "true")
+-    await page.keyboard.press("Escape")
++    const menu = page.locator('[data-component="menu-v2-content"]')
++    await expect(menu).toBeVisible()
++    const box = await menu.boundingBox()
+ 
+-    await timeline.getByLabel("Prompt text", { exact: true }).check()
+-    await timeline.getByLabel("Delivery state").selectOption("delivered")
+-    await page.evaluate(() => document.fonts.ready.then(() => undefined))
+-
+-    for (const width of [1000, 390]) {
+-      await page.setViewportSize({ width, height: 844 })
+-      const bubble = await timeline.locator('[data-slot="user-message-text"]').boundingBox()
+-      const trigger = await more.boundingBox()
+-      const footer = await timeline.locator('[data-slot="user-message-copy-wrapper"]').boundingBox()
+-      const box = await message.boundingBox()
+-
+-      if (!bubble || !trigger || !footer || !box) throw new Error("Message geometry is unavailable")
+-      expect(Math.abs(bubble.x + bubble.width - box.x - box.width)).toBeLessThan(1)
+-      expect(footer.y).toBeGreaterThanOrEqual(bubble.y + bubble.height)
+-      expect(footer.x + footer.width).toBeLessThanOrEqual(bubble.x + bubble.width + 1)
+-      expect(Math.abs(trigger.x + trigger.width - footer.x - footer.width)).toBeLessThan(1)
+-      expect(Math.abs(trigger.y + trigger.height / 2 - footer.y - footer.height / 2)).toBeLessThan(1)
+-    }
++    if (!trigger || !box) throw new Error("Menu geometry is unavailable")
++    expect(Math.abs(trigger.y - box.y - box.height - 4)).toBeLessThan(1)
++    expect(Math.abs(trigger.x + trigger.width - box.x - box.width)).toBeLessThan(1)
+   })
+ })
+ 
+-story("keeps the footer in view while an outside click closes the actions menu", async ({ mount, page }) => {
+-  const timeline = await mount("current-prompt-message--pending")
+-  const footer = timeline.locator('[data-slot="user-message-copy-wrapper"]')
++story(
++  "fades the footer and chevron out once, without flicker, as an outside click closes the menu",
++  async ({ mount, page }) => {
++    // The timeline keeps a run's meta line shown while one of its menus is open, so mount it rather than a bare message.
++    const timeline = await mount("current-session-timeline-rows--prompt-runs")
++    const message = timeline.locator('[data-component="user-message"]').first()
+ 
+-  await timeline.getByLabel("Delivery state").selectOption("delivered")
+-  await timeline.locator('[data-component="user-message"]').hover()
+-  await timeline.getByRole("button", { name: "More actions", exact: true }).click()
+-  await expect(page.getByRole("menu")).toBeVisible()
+-  await page.mouse.move(0, 0)
++    await message.locator('[data-slot="user-message-text"]').hover()
++    await message.getByRole("button", { name: "More actions", exact: true }).click()
++    await expect(page.getByRole("menu")).toBeVisible()
++    await page.mouse.move(0, 0)
+ 
+-  // Kobalte drops the expanded state a task before it returns focus to the trigger, so record every frame from the
+-  // click until a few frames after the menu has gone rather than the settled state.
+-  const frames = await footer.evaluateHandle((element) => {
+-    const opacities: string[] = []
+-    const closed = { frames: 0 }
++    // Kobalte drops the expanded state a task before it returns focus to the trigger, so record every frame from the
++    // click until well after the menu has gone rather than the settled state.
++    const frames = await message.evaluateHandle((element) => {
++      const slots = ["user-message-copy-wrapper", "user-message-menu"]
++      const samples = slots.map((): number[] => [])
++      const closed = { frames: 0 }
+ 
+-    const done = new Promise<string[]>((resolve) => {
+-      const tick = () => {
+-        opacities.push(getComputedStyle(element).opacity)
++      const done = new Promise<number[][]>((resolve) => {
++        const tick = () => {
++          slots.forEach((slot, index) => {
++            const target = element.querySelector(`[data-slot="${slot}"]`)
++            samples[index]!.push(target ? parseFloat(getComputedStyle(target).opacity) : 0)
++          })
+ 
+-        if (!document.querySelector('[role="menu"]')) closed.frames += 1
++          if (!document.querySelector('[role="menu"]')) closed.frames += 1
+ 
+-        if (closed.frames < 5) return requestAnimationFrame(tick)
++          if (closed.frames < 30) return requestAnimationFrame(tick)
+ 
+-        resolve(opacities)
+-      }
++          resolve(samples)
++        }
+ 
+-      requestAnimationFrame(tick)
++        requestAnimationFrame(tick)
++      })
++
++      return { done }
+     })
+ 
+-    return { done }
+-  })
++    await page.mouse.click(0, 0)
++    const samples = await frames.evaluate((sampler) => sampler.done)
+ 
+-  await page.mouse.click(0, 0)
+-  expect(new Set(await frames.evaluate((sampler) => sampler.done))).toEqual(new Set(["1"]))
+-})
++    // Each starts shown and only ever fades: no frame comes back up after a lower one.
++    samples.forEach((opacities) => {
++      expect(opacities[0]).toBe(1)
++      expect(opacities.every((value, index) => index === 0 || value <= opacities[index - 1]!)).toBe(true)
++    })
++  },
++)
+ 
+-story("keeps pending steer actions usable after a request fails", async ({ mount }) => {
++story("keeps pending steer actions usable after a request fails", async ({ mount, page }) => {
+   const timeline = await mount("current-prompt-message--pending")
+-  const queue = timeline.getByRole("button", { name: "Move to queue", exact: true })
+-  const remove = timeline.getByRole("button", { name: "Delete", exact: true })
++  const more = timeline.getByRole("button", { name: "More actions", exact: true })
++  const queue = page.getByRole("menuitem", { name: "Move to queue", exact: true })
++  const remove = page.getByRole("menuitem", { name: "Delete", exact: true })
+   const failures = timeline.getByLabel("Failed actions")
++  const bubble = timeline.locator('[data-slot="user-message-text"]')
++
++  // The chevron shows only while its bubble is hovered, and a closing menu leaves the pointer over the menu's place.
++  const open = async () => {
++    await bubble.hover()
++    await more.click()
++  }
+ 
+   await timeline.getByLabel("Actions fail").check()
+-  await timeline.locator('[data-component="user-message"]').hover()
++  await open()
+   await queue.click()
+   await expect(failures).toHaveText("1")
++  await open()
+   await expect(queue).toBeEnabled()
+   await expect(remove).toBeEnabled()
+   await remove.click()
+   await expect(failures).toHaveText("2")
++  await open()
+   await expect(remove).toBeEnabled()
+ })
+ 
++story("shows a run's meta line while the pointer is anywhere in the run, gaps included", async ({ mount, page }) => {
++  const timeline = await mount("current-session-timeline-rows--prompt-runs")
++  const send = timeline.getByRole("button", { name: "Send next", exact: true })
++  await send.click()
++  await send.click()
++  const bubbles = timeline.locator('[data-slot="user-message-text"]')
++  await expect(bubbles).toHaveCount(3)
++
++  const footer = timeline
++    .locator('[data-component="user-message"]')
++    .last()
++    .locator('[data-slot="user-message-copy-wrapper"]')
++
++  await page.mouse.move(0, 0)
++  await expect(footer).toHaveCSS("opacity", "0")
++  await bubbles.first().hover()
++  await expect(footer).toHaveCSS("opacity", "1")
++
++  // The 4px gap between two bubbles belongs to the run, so crossing it keeps the line.
++  const above = await bubbles.nth(0).boundingBox()
++  const below = await bubbles.nth(1).boundingBox()
++
++  if (!above || !below) throw new Error("Run geometry is unavailable")
++  await page.mouse.move(below.x + below.width / 2, (above.y + above.height + below.y) / 2)
++  await expect(footer).toHaveCSS("opacity", "1")
++  await page.mouse.move(0, 0)
++  await expect(footer).toHaveCSS("opacity", "0")
++})
++
++story("names the newest prompt's revert Undo and earlier ones Revert to here", async ({ mount, page }) => {
++  const timeline = await mount("current-session-timeline-rows--prompt-runs")
++  await timeline.getByRole("button", { name: "Send next", exact: true }).click()
++  const messages = timeline.locator('[data-component="user-message"]')
++  await expect(messages).toHaveCount(2)
++
++  for (const [index, label] of [
++    [1, "Undo"],
++    [0, "Revert to here"],
++  ] as const) {
++    await messages.nth(index).locator('[data-slot="user-message-text"]').hover()
++    await messages.nth(index).getByRole("button", { name: "More actions", exact: true }).click()
++    await expect(page.getByRole("menuitem", { name: label, exact: true })).toBeVisible()
++    await expect(page.getByRole("menuitem", { name: index ? "Revert to here" : "Undo", exact: true })).toHaveCount(0)
++    await page.keyboard.press("Escape")
++  }
++})
++
+ story("drops a pending footer at once on delivery with and without hover", async ({ mount, page }) => {
+   const timeline = await mount("current-prompt-message--pending")
+   const message = timeline.locator('[data-component="user-message"]')
+@@ -185,8 +289,8 @@ story("drops a pending footer at once on delivery with and without hover", async
+   await page.mouse.move(0, 0)
+   await expect(footer).toHaveCSS("height", "20px")
+   await expect(footer).toHaveCSS("margin-top", "8px")
+-  // A steer names only the model it changes, so change it to measure the gap after the labels.
+-  await timeline.getByLabel("Changes model", { exact: true }).check()
++  const bubble = timeline.locator('[data-slot="user-message-text"]')
++  const labels = timeline.locator('[data-slot="user-message-meta-label"]')
+ 
+   for (const hover of [true, false]) {
+     await timeline.getByLabel("Delivery state").selectOption("steering")
+@@ -196,14 +300,15 @@ story("drops a pending footer at once on delivery with and without hover", async
+ 
+     if (!before) throw new Error("Pending footer geometry is unavailable")
+ 
+-    if (hover) await message.hover()
++    if (hover) await bubble.hover()
+ 
+     if (!hover) await page.mouse.move(0, 0)
+-    const label = await timeline.locator('[data-slot="user-message-meta-item"]').last().boundingBox()
+-    const actions = await timeline.locator('[data-slot="user-message-actions"]').boundingBox()
++    // Pending closes the line, and the agent and model before it show only on hover.
++    await expect(labels).toHaveCSS("opacity", hover ? "1" : "0")
++    const line = await footer.boundingBox()
+ 
+-    if (!label || !actions) throw new Error("Pending footer geometry is unavailable")
+-    expect(actions.x - label.x - label.width).toBeLessThanOrEqual(9)
++    if (!line) throw new Error("Pending footer geometry is unavailable")
++    expect(Math.abs(before.x + before.width - line.x - line.width)).toBeLessThan(1)
+     await timeline.getByLabel("Delivery state").selectOption("delivered")
+ 
+     // The first frame after delivery already shows the delivered footer: nothing shrinks or fades out.
+@@ -252,7 +357,7 @@ story("marks pending metadata without badging delivered, starting, or queued pro
+     if (!pending) await expect(indicator).toBeHidden()
+ 
+     // A prompt still sending has no server row, so it offers no action until the server has it.
+-    await expect(timeline.locator('[data-slot="user-message-actions"]')).toHaveCount(status === "sending" ? 0 : 1)
++    await expect(timeline.locator('[data-slot="user-message-menu"]')).toHaveCount(status === "sending" ? 0 : 1)
+ 
+     const colors = await timeline.evaluate((element, pending) => {
+       const probe = document.createElement("span")
+@@ -269,7 +374,7 @@ story("marks pending metadata without badging delivered, starting, or queued pro
+     await expect(text).toHaveCSS("background-color", colors.background)
+   }
+ 
+-  await timeline.locator('[data-component="user-message"]').hover()
++  await text.hover()
+   await expect(timeline.locator('[data-slot="user-message-meta-item"]')).toHaveText([
+     "Build",
+     "Claude Sonnet 4",
+@@ -279,12 +384,16 @@ story("marks pending metadata without badging delivered, starting, or queued pro
+   await expect(separator).toHaveText("\u00B7")
+   await expect(timeline.locator('[data-slot="user-message-meta-label"]')).toHaveCSS("gap", "4px")
+ 
+-  // A steer with the previous prompt's agent and model joins the running turn unchanged, so it names neither.
++  // A steer reads agent · model · Pending. Pending stays in view; the agent and model show on hover, as on any message.
+   await timeline.getByLabel("Delivery state").selectOption("steering")
+-  await expect(timeline.locator('[data-slot="user-message-meta"]')).toHaveText(/^Pending$/, { useInnerText: true })
+-  await expect(timeline.locator('[data-slot="user-message-meta-item"]')).toHaveCount(0)
+-  await timeline.getByLabel("Changes model", { exact: true }).check()
+-  await expect(timeline.locator('[data-slot="user-message-meta-item"]')).toHaveText(["Claude Sonnet 4", "Balanced"])
++  await expect(timeline.locator('[data-slot="user-message-meta"]')).toHaveText(
++    /^Build\s*·\s*Claude Sonnet 4\s*Balanced\s*·\s*Pending$/,
++    { useInnerText: true },
++  )
++  await expect(timeline.locator('[data-slot="user-message-meta-label"]')).toHaveCSS("opacity", "1")
++  await page.mouse.move(0, 0)
++  await expect(timeline.locator('[data-slot="user-message-meta-label"]')).toHaveCSS("opacity", "0")
++  await expect(indicator).toBeVisible()
+   await timeline.getByLabel("Voice message", { exact: true }).check()
+   const voice = timeline.getByRole("img", { name: "Voice", exact: true })
+   await expect(voice).toBeVisible()
+@@ -299,7 +408,7 @@ story("marks pending metadata without badging delivered, starting, or queued pro
+   await expect(voice.locator('[data-slot="icon-svg"]')).toHaveCSS("width", "14px")
+   await expect(voice.locator('[data-slot="icon-svg"]')).toHaveCSS("height", "14px")
+ 
+-  await expect(timeline.locator('[data-slot="user-message-meta"]')).toHaveText(/^Pending/)
++  await expect(timeline.locator('[data-slot="user-message-meta"]')).toHaveText(/Pending$/)
+   await timeline.getByLabel("Grouped prompts", { exact: true }).check()
+   await expect(timeline.locator('[data-run-folded] [data-slot="user-message-copy-wrapper"]')).toBeHidden()
+   await expect(
+@@ -313,7 +422,10 @@ story("marks pending metadata without badging delivered, starting, or queued pro
+   await timeline.getByLabel("Prompt text", { exact: true }).uncheck()
+   await expect(timeline.getByText("notes.json", { exact: true })).toBeVisible()
+   await expect(indicator).toBeVisible()
+-  await timeline.getByRole("button", { name: "Move to queue", exact: true }).click()
++  // A steer without text offers its actions from a chevron in its footer.
++  await timeline.locator('[data-component="user-message"]').hover()
++  await timeline.getByRole("button", { name: "More actions", exact: true }).click()
++  await page.getByRole("menuitem", { name: "Move to queue", exact: true }).click()
+   await expect(indicator).toBeHidden()
+ })
+ 
+diff --git a/packages/session-ui/component-tests/session-timeline-mobile.spec.ts b/packages/session-ui/component-tests/session-timeline-mobile.spec.ts
+index 231849aa13f8..2953d367c8f6 100644
+--- a/packages/session-ui/component-tests/session-timeline-mobile.spec.ts
++++ b/packages/session-ui/component-tests/session-timeline-mobile.spec.ts
+@@ -8,7 +8,7 @@ story.describe("touch timeline", () => {
+     expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true)
+ 
+     for (const action of [
+-      { slot: "user-message-copy-wrapper", name: "More actions" },
++      { slot: "user-message-menu", name: "More actions" },
+       { slot: "text-part-copy-wrapper", name: "Copy response" },
+     ]) {
+       const actions = timeline.locator(`[data-slot="${action.slot}"]`)
+@@ -29,6 +29,46 @@ story.describe("touch timeline", () => {
+     await expect(responseMeta.locator('[data-slot="text-part-meta-speed"]')).toBeHidden()
+   })
+ 
++  story("keeps the always-shown chevron clear of the prompt's text", async ({ mount }) => {
++    const timeline = await mount("current-prompt-message--pending")
++    await timeline.getByLabel("Delivery state").selectOption("delivered")
++    const bubble = timeline.locator('[data-slot="user-message-text"]')
++    await expect(bubble.getByRole("button", { name: "More actions", exact: true })).toBeVisible()
++
++    // Every rendered line box of the prompt, against the chevron's box: none may overlap.
++    const overlaps = await bubble.evaluate((element) => {
++      const menu = element.querySelector('[data-slot="user-message-menu"]')
++      const chevron = menu?.querySelector("button")?.getBoundingClientRect()
++
++      if (!menu || !chevron) throw new Error("The chevron is not rendered")
++
++      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
++        acceptNode: (node) => (menu.contains(node) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
++      })
++
++      const lines: DOMRect[] = []
++
++      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
++        const range = document.createRange()
++        range.selectNodeContents(node)
++        lines.push(...range.getClientRects())
++      }
++
++      if (lines.length === 0) throw new Error("The prompt has no text")
++
++      return lines.filter(
++        (line) =>
++          line.width > 0 &&
++          line.left < chevron.right &&
++          line.right > chevron.left &&
++          line.top < chevron.bottom &&
++          line.bottom > chevron.top,
++      ).length
++    })
++
++    expect(overlaps).toBe(0)
++  })
++
+   story("keeps shell copy visible without hover", async ({ mount }) => {
+     const timeline = await mount("current-session-terminal-work--expanded-shell")
+     const copy = timeline.locator('[data-slot="bash-copy"]')
+@@ -63,7 +103,7 @@ story("desktop message actions still appear on hover and keyboard focus", async
+   expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(true)
+ 
+   for (const action of [
+-    { slot: "user-message-copy-wrapper", name: "More actions" },
++    { slot: "user-message-menu", name: "More actions" },
+     { slot: "text-part-copy-wrapper", name: "Copy response" },
+   ]) {
+     const actions = timeline.locator(`[data-slot="${action.slot}"]`)
+diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
+index e120641612c6..09825d29d9dc 100644
+--- a/packages/session-ui/src/components/message-part.css
++++ b/packages/session-ui/src/components/message-part.css
+@@ -277,7 +277,7 @@
+     gap: 8px;
+     width: 100%;
+ 
+-    /* Hover actions show and hide at once, without a fade. */
++    /* The meta line shows and hides at once, together with the chevron. */
+     @media (hover: hover) {
+       opacity: 0;
+       pointer-events: none;
+@@ -362,14 +362,6 @@
+     }
+   }
+ 
+-  [data-slot="user-message-actions"] {
+-    --user-message-transition-gap: 6px;
+-    display: inline-flex;
+-    flex: none;
+-    align-items: center;
+-    gap: 6px;
+-  }
+-
+   [data-slot="user-message-transition"] {
+     display: inline-grid;
+     grid-template-columns: 0fr;
+@@ -416,27 +408,79 @@
+     }
+   }
+ 
+-  &:hover [data-slot="user-message-copy-wrapper"],
+-  &:focus-within [data-slot="user-message-copy-wrapper"],
++  /* A closed menu hands focus back without a ring, so only keyboard focus keeps the meta line shown. */
++  &:has([data-slot="user-message-body"]:hover) [data-slot="user-message-copy-wrapper"],
++  &:not(:has([data-slot="user-message-body"])):hover [data-slot="user-message-copy-wrapper"],
++  /* A footer holding its own buttons, as the /btw panel's does, stays reachable anywhere over the message. */
++  &:has([data-slot="user-message-copy-wrapper"] button):hover [data-slot="user-message-copy-wrapper"],
++  &:has(:focus-visible) [data-slot="user-message-copy-wrapper"],
+   [data-slot="user-message-copy-wrapper"]:has([data-expanded], [data-closing]),
+-  &:hover [data-slot="user-message-meta-tail"],
+-  &:focus-within [data-slot="user-message-meta-tail"] {
++  &:has([data-slot="user-message-body"]:hover) [data-slot="user-message-meta-tail"],
++  &:has([data-slot="user-message-copy-wrapper"] button):hover [data-slot="user-message-meta-tail"],
++  &:has(:focus-visible) [data-slot="user-message-meta-tail"] {
+     opacity: 1;
+     pointer-events: auto;
+   }
+ 
+-  /* A pending steer keeps its Pending label and actions in view. */
++  /* A run's last message carries the whole run's agent and model, so hovering anywhere in the run shows it. */
++  &[data-run-hovered] [data-slot="user-message-copy-wrapper"] {
++    opacity: 1;
++    pointer-events: auto;
++  }
++
++  /* A pending steer keeps its Pending label in view. */
+   &[data-pending] [data-slot="user-message-copy-wrapper"] {
+     opacity: 1;
+     pointer-events: auto;
+   }
+ 
++  /* Its agent and model show on hover, like any other message's meta line. */
++  @media (hover: hover) {
++    &[data-pending] {
++      [data-slot="user-message-meta-label"],
++      [data-slot="user-message-pending-separator"] {
++        opacity: 0;
++      }
++    }
++
++    &[data-pending]:has([data-slot="user-message-body"]:hover),
++    &[data-pending]:not(:has([data-slot="user-message-body"])):hover,
++    &[data-pending]:has(:focus-visible),
++    &[data-pending][data-run-hovered] {
++      [data-slot="user-message-meta-label"],
++      [data-slot="user-message-pending-separator"] {
++        opacity: 1;
++      }
++    }
++  }
++
+   [data-slot="user-message-copy-wrapper"] > * {
+     opacity: var(--user-run-meta, 1);
+   }
+ 
+-  /* The last message of a run carries the meta line; the others fold theirs away and offer their actions beside
+-     the bubble. */
++  /* The bubbles of a run and the gaps between them are one hover zone: each body reaches across the 4px gap to its
++     neighbor, so the pointer never falls between them. */
++  [data-slot="user-message-body"] {
++    position: relative;
++  }
++
++  &[data-run-above] [data-slot="user-message-body"]::before,
++  &[data-run-folded] [data-slot="user-message-body"]::after {
++    content: "";
++    position: absolute;
++    inset-inline: 0;
++    height: 4px;
++  }
++
++  &[data-run-above] [data-slot="user-message-body"]::before {
++    bottom: 100%;
++  }
++
++  &[data-run-folded] [data-slot="user-message-body"]::after {
++    top: 100%;
++  }
++
++  /* The last message of a run carries the meta line; the others fold theirs away. */
+   &[data-run-folded] {
+     [data-slot="user-message-body"] {
+       position: relative;
+@@ -452,13 +496,27 @@
+     visibility: hidden;
+   }
+ 
+-  [data-slot="user-message-run-actions"] {
++  /* Every bubble offers its actions from a chevron pinned to its top trailing corner, centered on the first line.
++     The bubble color fades in behind it so text under the corner never competes with the control. */
++  [data-slot="user-message-text"] {
++    --user-message-bubble: var(--v2-background-bg-layer-02);
++    position: relative;
++  }
++
++  /* Inset from the trailing edge by the same distance as from the top. */
++  [data-slot="user-message-menu"] {
++    --user-message-menu-inset: calc(8px + (1lh - 20px) / 2);
+     position: absolute;
+-    /* Centered on the bubble's last line. */
+-    bottom: calc(8px + (1lh - 20px) / 2);
+-    inset-inline-end: calc(100% + 4px);
++    top: var(--user-message-menu-inset);
++    inset-inline-end: var(--user-message-menu-inset);
+     display: flex;
+-    align-items: center;
++    padding-inline-start: 16px;
++    background: linear-gradient(to left, var(--user-message-bubble) calc(100% - 16px), transparent);
++    border-radius: 4px;
++
++    &:dir(rtl) {
++      background: linear-gradient(to right, var(--user-message-bubble) calc(100% - 16px), transparent);
++    }
+ 
+     @media (hover: hover) {
+       opacity: 0;
+@@ -466,9 +524,35 @@
+     }
+   }
+ 
+-  &:hover [data-slot="user-message-run-actions"],
+-  &:focus-within [data-slot="user-message-run-actions"],
+-  [data-slot="user-message-run-actions"]:has([data-expanded], [data-closing]) {
++  /* Without hover the chevron always shows, so the first line keeps room for it instead of fading text under it. The
++     float also widens a short bubble, so a one-word prompt stays readable. 20px spans the 20px button, less the 12px
++     text padding it overlaps, plus a 4px gap at the 8px inset. */
++  @media not (hover: hover) {
++    [data-slot="user-message-text"]:has(> [data-slot="user-message-menu"])::before {
++      content: "";
++      float: inline-end;
++      width: 20px;
++      height: 1lh;
++    }
++
++    [data-slot="user-message-text"] > [data-slot="user-message-menu"] {
++      padding: 0;
++      background: none;
++    }
++  }
++
++  [data-slot="user-message-copy-wrapper"] [data-slot="user-message-menu"] {
++    position: static;
++    padding: 0;
++    background: none;
++  }
++
++  /* Only the bubble itself shows its chevron; a message without one shows it in its footer on hover. A closed menu hands
++     focus back without a ring, so only keyboard focus keeps the chevron shown. */
++  [data-slot="user-message-text"]:hover [data-slot="user-message-menu"],
++  &:not(:has([data-slot="user-message-text"])):hover [data-slot="user-message-menu"],
++  &:has(:focus-visible) [data-slot="user-message-menu"],
++  [data-slot="user-message-menu"]:has([data-expanded], [data-closing]) {
+     opacity: 1;
+     pointer-events: auto;
+   }
+@@ -1885,6 +1969,7 @@
+ /* Only delivery animates. A steer can render once before its admission marks it pending, and must not fade from the
+    delivered color. */
+ :root body [data-component="user-message"][data-pending] [data-slot="user-message-text"] {
++  --user-message-bubble: var(--v2-background-bg-layer-01);
+   background: var(--v2-background-bg-layer-01);
+   color: var(--v2-text-text-muted);
+   transition: none;
+diff --git a/packages/session-ui/src/message/current-message.tsx b/packages/session-ui/src/message/current-message.tsx
+index ce8bbf2b91c9..dc0197d186d4 100644
+--- a/packages/session-ui/src/message/current-message.tsx
++++ b/packages/session-ui/src/message/current-message.tsx
+@@ -27,10 +27,13 @@ export function SessionUserMessage(props: {
+   voice?: boolean
+   historicalAgent: string
+   historicalModel: SessionMessageAssistant["model"]
+-  /** The agent and model the previous prompt chose; a waiting steer names only what it changes. */
+-  previousSelection?: { agent: string; model: SessionMessageAssistant["model"] }
+   actions?: SessionUserActions
+   run?: UserRun
++  /** The newest delivered prompt, whose revert undoes the last turn. */
++  latest?: boolean
++  runSnaps?: () => boolean
++  runHovered?: boolean
++  onMenuOpenChange?: (open: boolean) => void
+   fold?: boolean
+   expanded?: boolean
+   onExpandedChange?: (expanded: boolean) => void
+@@ -45,9 +48,12 @@ export function SessionUserMessage(props: {
+       voice={props.voice}
+       agent={props.historicalAgent}
+       model={props.historicalModel}
+-      previousSelection={props.previousSelection}
+       actions={props.actions}
+       run={props.run}
++      latest={props.latest}
++      runSnaps={props.runSnaps}
++      runHovered={props.runHovered}
++      onMenuOpenChange={props.onMenuOpenChange}
+       fold={props.fold}
+       expanded={props.expanded}
+       onExpandedChange={props.onExpandedChange}
+diff --git a/packages/session-ui/src/message/message-content.tsx b/packages/session-ui/src/message/message-content.tsx
+index 7fec66e42c09..43dd7c6e248c 100644
+--- a/packages/session-ui/src/message/message-content.tsx
++++ b/packages/session-ui/src/message/message-content.tsx
+@@ -105,10 +105,6 @@ function modelItems(data: ReturnType<typeof useData>, model: SessionMessageAssis
+   return [{ label: name }, { label: model.variant[0]?.toUpperCase() + model.variant.slice(1), variant: true }]
+ }
+ 
+-function sameModel(a: SessionMessageAssistant["model"], b: SessionMessageAssistant["model"]) {
+-  return a.providerID === b.providerID && a.id === b.id && (a.variant ?? "default") === (b.variant ?? "default")
+-}
+-
+ function MetaItems(props: { items: MetaItem[]; slot: "user-message" | "text-part" }) {
+   return (
+     <For each={props.items}>
+@@ -134,7 +130,7 @@ function MetaItems(props: { items: MetaItem[]; slot: "user-message" | "text-part
+ 
+ function MessageActionButton(
+   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
+-    icon: "check" | "copy" | "reset" | "fork" | "arrow-down-to-line" | "outline-trash"
++    icon: "check" | "copy"
+     label: JSX.Element
+     size?: "small" | "normal"
+   },
+@@ -260,13 +256,19 @@ export function CurrentUserMessageDisplay(props: {
+   text: string
+   agent: string
+   model: SessionMessageAssistant["model"]
+-  /** The agent and model the previous prompt chose; a waiting steer names only what it changes. */
+-  previousSelection?: { agent: string; model: SessionMessageAssistant["model"] }
+   actions?: SessionUserActions
+   comments?: SessionUserComment[]
+   references?: SessionUserAttachmentReference[]
+   voice?: boolean
+   run?: UserRun
++  /** The newest delivered prompt, whose revert undoes the last turn. */
++  latest?: boolean
++  /** Whether run changes snap now, while a message arrives, rather than spring. Omitted, folding always snaps. */
++  runSnaps?: () => boolean
++  /** The pointer is somewhere in this message's run, so its last bubble shows the run's meta line. */
++  runHovered?: boolean
++  /** An open menu keeps its run's meta line in view while the pointer is on the menu. */
++  onMenuOpenChange?: (open: boolean) => void
+   /** Folds a long message to its first lines with a Read more toggle. Omitted, the message always shows in full. */
+   fold?: boolean
+   /** Whether a folded message is open. The timeline owns it so it survives row recycling. */
+@@ -298,12 +300,6 @@ export function CurrentUserMessageDisplay(props: {
+   const agents = createMemo(() => props.message.agents ?? [])
+   const comments = createMemo(() => props.comments ?? [])
+ 
+-  const sent = createMemo(() =>
+-    new Intl.DateTimeFormat(i18n.locale(), { dateStyle: "medium", timeStyle: "short" }).format(
+-      props.message.time.created,
+-    ),
+-  )
+-
+   // Mobile shows the current agent and model in the composer and switch notices, so repeating them per message is noise.
+   const mobile = createMediaQuery("(max-width: 767px)")
+ 
+@@ -313,27 +309,35 @@ export function CurrentUserMessageDisplay(props: {
+     return agent ? [{ label: agent }] : []
+   })
+ 
+-  // A waiting steer joins the running turn, so its agent and model only say something when it changes them.
+-  const changedLabels = createMemo<MetaItem[]>(() => {
+-    const previous = props.previousSelection
++  // The menu names the day relatively: Today and Yesterday, then the date this year, then the date with its year.
++  const sent = createMemo(() => {
++    const created = new Date(props.message.time.created)
++    const now = new Date()
++    const midnight = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
++    const days = Math.round((midnight(now) - midnight(created)) / 86_400_000)
++    const time = new Intl.DateTimeFormat(i18n.locale(), { timeStyle: "short" }).format(created)
+ 
+-    if (!previous) return [...agentItems(), ...modelItems(data, props.model)]
++    if (days === 0 || days === 1) {
++      const day = new Intl.RelativeTimeFormat(i18n.locale(), { numeric: "auto" }).format(-days, "day")
+ 
+-    return [
+-      ...(previous.agent === props.agent ? [] : agentItems()),
+-      ...(sameModel(previous.model, props.model) ? [] : modelItems(data, props.model)),
+-    ]
+-  })
+-
+-  const metaLabels = createMemo(() => {
+-    if (mobile()) return []
++      return `${day[0]?.toLocaleUpperCase(i18n.locale())}${day.slice(1)}, ${time}`
++    }
+ 
+-    if (waiting()) return changedLabels()
++    if (created.getFullYear() === now.getFullYear())
++      return new Intl.DateTimeFormat(i18n.locale(), {
++        month: "short",
++        day: "numeric",
++        hour: "numeric",
++        minute: "2-digit",
++      }).format(created)
+ 
+-    return [...agentItems(), ...modelItems(data, props.model)]
++    return new Intl.DateTimeFormat(i18n.locale(), { dateStyle: "medium", timeStyle: "short" }).format(created)
+   })
+ 
+-  // In a run, only the last message keeps the meta line; the others offer their actions beside the bubble.
++  // A waiting steer reads agent · model · Pending; mobile shows the agent and model in the composer instead.
++  const metaLabels = createMemo(() => (mobile() ? [] : [...agentItems(), ...modelItems(data, props.model)]))
++
++  // In a run, only the last message keeps the meta line; every bubble offers its actions from its own chevron.
+   // Bubble corners tighten where two bubbles meet, as in the iOS app's grouped corners.
+   const folded = createMemo(() => !!props.run?.below && !!props.text)
+ 
+@@ -360,8 +364,9 @@ export function CurrentUserMessageDisplay(props: {
+       el.style.setProperty("--user-run-bottom", `${value.bottom}`)
+       el.toggleAttribute("data-run-meta-hidden", value.meta === 0)
+     },
+-    // Folding a meta line away is instant; the next message's line takes its place as that message grows in.
+-    { ...userRunSpring, snap: folded },
++    // Folding a meta line away is instant while the next message grows in to take its place; otherwise it springs in step
++    // with the line that replaces it.
++    { ...userRunSpring, snap: () => folded() && (props.runSnaps?.() ?? true) },
+   )
+ 
+   // Delivery drops the Pending footer at once rather than fading it like the hover reveal.
+@@ -417,85 +422,77 @@ export function CurrentUserMessageDisplay(props: {
+ 
+   onCleanup(() => dispatch({ type: "disposed" }))
+ 
+-  const renderActions = () => (
++  const renderMenu = () => (
+     <Show when={!sending()}>
+-      <span data-slot="user-message-actions">
+-        <Show when={props.actions?.pending}>
+-          <UserMessageTransition active={pending()}>
+-            <MessageActionButton
+-              icon="arrow-down-to-line"
+-              size="small"
+-              label={i18n.t("ui.message.moveToQueue")}
+-              disabled={actionView().disabled.queue}
+-              onMouseDown={(event) => event.preventDefault()}
+-              onClick={(event) => {
+-                event.stopPropagation()
+-                request("queue")
+-              }}
+-              aria-label={i18n.t("ui.message.moveToQueue")}
+-            />
+-            <MessageActionButton
+-              icon="outline-trash"
+-              size="small"
+-              label={i18n.t("ui.message.deletePending")}
+-              disabled={actionView().disabled.remove}
+-              onMouseDown={(event) => event.preventDefault()}
+-              onClick={(event) => {
+-                event.stopPropagation()
+-                request("remove")
+-              }}
+-              aria-label={i18n.t("ui.message.deletePending")}
+-            />
+-          </UserMessageTransition>
+-        </Show>
+-        <Show when={props.actions?.revert}>
+-          <UserMessageTransition active={!pending()}>
+-            <MessageActionButton
+-              icon="reset"
+-              size="small"
+-              label={i18n.t("ui.message.revertMessage")}
+-              disabled={actionView().disabled.revert}
+-              onMouseDown={(event) => event.preventDefault()}
+-              onClick={(event) => {
+-                event.stopPropagation()
+-                request("revert")
+-              }}
+-              aria-label={i18n.t("ui.message.revertMessage")}
+-            />
+-          </UserMessageTransition>
+-        </Show>
+-        <Menu gutter={4} placement="bottom-end">
+-          <Tooltip appearance="compact" value={i18n.t("ui.message.moreActions")} placement="top" gutter={4}>
+-            <Menu.Trigger
+-              as={IconButton}
+-              icon={<Icon name="outline-dots" size="small" />}
+-              size="small"
+-              variant="ghost-muted"
+-              onMouseDown={(event: MouseEvent) => event.preventDefault()}
+-              onClick={(event: MouseEvent) => event.stopPropagation()}
+-              aria-label={i18n.t("ui.message.moreActions")}
+-            />
+-          </Tooltip>
++      <span data-slot="user-message-menu">
++        <Menu gutter={4} placement="top-end" onOpenChange={(open) => props.onMenuOpenChange?.(open)}>
++          {/* The chevron explains itself, so it carries only an accessible name, no tooltip. */}
++          <Menu.Trigger
++            as={IconButton}
++            icon={<Icon name="chevron-down" size="small" />}
++            size="small"
++            variant="ghost-muted"
++            onMouseDown={(event: MouseEvent) => event.preventDefault()}
++            onClick={(event: MouseEvent) => event.stopPropagation()}
++            aria-label={i18n.t("ui.message.moreActions")}
++          />
+           <Menu.Portal>
+             <Menu.Content>
+               <Menu.Group>
+                 <Menu.GroupLabel>
+-                  <time dateTime={new Date(props.message.time.created).toISOString()}>{sent()}</time>
++                  <Show when={!waiting()} fallback={i18n.t("ui.message.pending")}>
++                    <time dateTime={new Date(props.message.time.created).toISOString()}>{sent()}</time>
++                  </Show>
+                 </Menu.GroupLabel>
+               </Menu.Group>
+               <Menu.Separator />
+-              <Menu.Item disabled={actionView().disabled.fork} onSelect={() => request("fork")}>
+-                {i18n.t("ui.message.forkMessage")}
+-              </Menu.Item>
++              <Show when={pending() && props.actions?.pending}>
++                <Menu.Item disabled={actionView().disabled.queue} onSelect={() => request("queue")}>
++                  <Icon name="bullet-list" size="small" />
++                  {i18n.t("ui.message.moveToQueue")}
++                </Menu.Item>
++              </Show>
+               <Menu.Item disabled={!props.text} onSelect={() => void writeClipboard(props.text)}>
++                <Icon name="outline-copy" size="small" />
+                 {i18n.t("ui.message.copyMessage")}
+               </Menu.Item>
+               {/* Like the iOS app, a Voice message also offers the full prompt the session received. */}
+               <Show when={props.voice}>
+                 <Menu.Item onSelect={() => void writeClipboard(props.message.text)}>
++                  <Icon name="outline-copy" size="small" />
+                   {i18n.t("ui.message.copyFullMessage")}
+                 </Menu.Item>
+               </Show>
++              {/* A pending steer has no history to fork from yet. */}
++              <Show when={!pending()}>
++                <Menu.Item disabled={actionView().disabled.fork} onSelect={() => request("fork")}>
++                  <Icon name="fork" size="small" />
++                  {i18n.t("ui.message.forkMessage")}
++                </Menu.Item>
++              </Show>
++              {/* A pending steer is withdrawn rather than reverted; a sent message reverts only where the host allows it. */}
++              <Show
++                when={pending() && props.actions?.pending}
++                fallback={
++                  <Show when={props.actions?.revert}>
++                    <Menu.Separator />
++                    <Menu.Item disabled={actionView().disabled.revert} onSelect={() => request("revert")}>
++                      <Icon name={props.latest ? "outline-undo" : "reset"} size="small" />
++                      {props.latest ? i18n.t("ui.message.undoMessage") : i18n.t("ui.message.revertMessage")}
++                    </Menu.Item>
++                  </Show>
++                }
++              >
++                <Menu.Separator />
++                <Menu.Item
++                  data-variant="critical"
++                  disabled={actionView().disabled.remove}
++                  onSelect={() => request("remove")}
++                >
++                  <Icon name="outline-trash" size="small" />
++                  {i18n.t("ui.message.deletePending")}
++                </Menu.Item>
++              </Show>
+             </Menu.Content>
+           </Menu.Portal>
+         </Menu>
+@@ -654,6 +651,8 @@ export function CurrentUserMessageDisplay(props: {
+       data-component="user-message"
+       data-pending={waiting() ? "true" : undefined}
+       data-run-folded={folded() ? "" : undefined}
++      data-run-above={meetsAbove() ? "" : undefined}
++      data-run-hovered={props.runHovered ? "" : undefined}
+       data-run-meta-hidden={restingPose.meta === 0 ? "" : undefined}
+       style={{
+         "--user-run-meta": `${restingPose.meta}`,
+@@ -696,10 +695,8 @@ export function CurrentUserMessageDisplay(props: {
+             <Show when={comments().length > 0}>
+               <UserMessageComments comments={comments()} bounded />
+             </Show>
++            {renderMenu()}
+           </div>
+-          <Show when={folded()}>
+-            <div data-slot="user-message-run-actions">{renderActions()}</div>
+-          </Show>
+         </div>
+       </Show>
+       {/* Like the TUI, a pending steer of only attachments still offers its actions. */}
+@@ -707,22 +704,23 @@ export function CurrentUserMessageDisplay(props: {
+         <div data-slot="user-message-copy-wrapper">
+           <span data-slot="user-message-meta-wrap">
+             <span data-slot="user-message-meta">
++              <Show when={metaLabels().length > 0}>
++                <span data-slot="user-message-meta-label">
++                  <MetaItems items={metaLabels()} slot="user-message" />
++                </span>
++              </Show>
++              {/* Pending closes the line and stays in view; the agent and model before it show on hover. */}
+               <UserMessageTransition active={waiting()}>
+-                <span data-slot="user-message-pending">{i18n.t("ui.message.pending")}</span>
+                 <Show when={metaLabels().length > 0}>
+-                  <span data-slot="user-message-meta-separator" aria-hidden="true">
++                  <span data-slot="user-message-pending-separator" aria-hidden="true">
+                     {"\u00B7"}
+                   </span>
+                 </Show>
++                <span data-slot="user-message-pending">{i18n.t("ui.message.pending")}</span>
+               </UserMessageTransition>
+-              <Show when={metaLabels().length > 0}>
+-                <span data-slot="user-message-meta-label">
+-                  <MetaItems items={metaLabels()} slot="user-message" />
+-                </span>
+-              </Show>
+             </span>
+           </span>
+-          {renderActions()}
++          <Show when={!props.text}>{renderMenu()}</Show>
+         </div>
+       </Show>
+     </div>
+diff --git a/packages/session-ui/src/message/prompt-message.stories.tsx b/packages/session-ui/src/message/prompt-message.stories.tsx
+index ae66b0007d4a..645342f535ad 100644
+--- a/packages/session-ui/src/message/prompt-message.stories.tsx
++++ b/packages/session-ui/src/message/prompt-message.stories.tsx
+@@ -21,7 +21,6 @@ export const Pending = {
+       voice: boolean
+       text: boolean
+       grouped: boolean
+-      changed: boolean
+       fails: boolean
+       failures: number
+     }>({
+@@ -29,7 +28,6 @@ export const Pending = {
+       voice: false,
+       text: true,
+       grouped: false,
+-      changed: false,
+       fails: false,
+       failures: 0,
+     })
+@@ -41,12 +39,6 @@ export const Pending = {
+       throw new Error("Request failed")
+     }
+ 
+-    // The prompt before this one; a waiting steer names only the agent and model it changes.
+-    const previousSelection = () => ({
+-      agent: "build",
+-      model: state.changed ? { ...STORY_MODEL, variant: "precise" } : STORY_MODEL,
+-    })
+-
+     const message = createMemo<SessionMessageUser>(() => ({
+       id: "msg_pending_prompt_story",
+       type: "user",
+@@ -117,14 +109,6 @@ export const Pending = {
+             />{" "}
+             Grouped prompts
+           </label>
+-          <label>
+-            <input
+-              type="checkbox"
+-              checked={state.changed}
+-              onChange={(event) => setState("changed", event.currentTarget.checked)}
+-            />{" "}
+-            Changes model
+-          </label>
+           <label>
+             <input
+               type="checkbox"
+@@ -143,7 +127,6 @@ export const Pending = {
+               text="Keep the earlier prompt in the same run."
+               agent="build"
+               model={STORY_MODEL}
+-              previousSelection={previousSelection()}
+               actions={actions}
+               run={{ above: false, below: true }}
+             />
+@@ -154,7 +137,6 @@ export const Pending = {
+             text={message().text}
+             agent="build"
+             model={STORY_MODEL}
+-            previousSelection={previousSelection()}
+             voice={state.voice}
+             actions={actions}
+             run={{ above: state.grouped && state.text, below: false }}
+diff --git a/packages/session-ui/src/storybook/current-session-story.tsx b/packages/session-ui/src/storybook/current-session-story.tsx
+index 8396be1cb833..c415960b6847 100644
+--- a/packages/session-ui/src/storybook/current-session-story.tsx
++++ b/packages/session-ui/src/storybook/current-session-story.tsx
+@@ -30,7 +30,15 @@ export function CurrentSessionProviders(props: {
+         ],
+         provider: {
+           all: new Map<string, { models: Record<string, { name: string }> }>([
+-            ["anthropic", { models: { "claude-sonnet-4": { name: "Claude Sonnet 4" } } }],
++            [
++              "anthropic",
++              {
++                models: {
++                  "claude-sonnet-4": { name: "Claude Sonnet 4" },
++                  "claude-opus-5-5": { name: "Claude Opus 5.5" },
++                },
++              },
++            ],
+             [
+               "company-gateway",
+               {
+@@ -100,7 +108,7 @@ export function CurrentSessionTimelineStory(props: {
+       setActivity(`Opened ${file.name ?? file.mime}`)
+     },
+     revert: (input) => {
+-      setActivity(`Rewound to ${input.messageID}`)
++      setActivity(`Reverted to ${input.messageID}`)
+     },
+     fork: (input) => {
+       setActivity(`Forked from ${input.messageID}`)
+diff --git a/packages/session-ui/src/timeline/projection.test.ts b/packages/session-ui/src/timeline/projection.test.ts
+index 5bae029692ea..35a6b78b3c97 100644
+--- a/packages/session-ui/src/timeline/projection.test.ts
++++ b/packages/session-ui/src/timeline/projection.test.ts
+@@ -304,58 +304,6 @@ describe("createTimelineProjection", () => {
+     expect(result.rowByKey.get("user-message:user-1")).toBe(result.rows[2])
+   })
+ 
+-  test("indexes the agent and model each prompt's predecessor chose, ignoring later switches in its turn", () => {
+-    const first = { id: "first", providerID: "provider" } satisfies ModelRef
+-    const second = { id: "second", providerID: "provider", variant: "high" } satisfies ModelRef
+-
+-    const messages = [
+-      { id: "user-1", type: "user", text: "first", time: { created: 1 } },
+-      {
+-        id: "assistant-1",
+-        type: "assistant",
+-        agent: "build",
+-        model: first,
+-        content: [{ type: "text", text: "answer" }],
+-        time: { created: 2, completed: 3 },
+-      },
+-      // A steer's selection reconfigures the running turn before the steer is delivered.
+-      { id: "model", type: "model-switched", model: second, time: { created: 4 } },
+-      {
+-        id: "assistant-2",
+-        type: "assistant",
+-        agent: "build",
+-        model: second,
+-        content: [{ type: "text", text: "more" }],
+-        time: { created: 5, completed: 6 },
+-      },
+-      {
+-        id: "user-2",
+-        type: "user",
+-        text: "steer",
+-        metadata: { agent: "build", model: { modelID: "second", providerID: "provider", variant: "high" } },
+-        time: { created: 7 },
+-      },
+-      {
+-        id: "user-3",
+-        type: "user",
+-        text: "another steer",
+-        metadata: { agent: "plan", model: { modelID: "second", providerID: "provider", variant: "high" } },
+-        time: { created: 8 },
+-      },
+-    ] satisfies SessionMessageInfo[]
+-
+-    const result = createTimelineProjection({
+-      sessionMessages: messages,
+-      status: { type: "busy" },
+-      reasoningMode: "full",
+-    })
+-
+-    expect(result.previousSelectionByID.has("user-1")).toBe(false)
+-    // Without metadata, the first prompt chose what its first reply ran with, not the switch a later steer made.
+-    expect(result.previousSelectionByID.get("user-2")).toEqual({ agent: "build", model: first })
+-    expect(result.previousSelectionByID.get("user-3")).toEqual({ agent: "build", model: second })
+-  })
+-
+   test("reuses a stable projected row array", () => {
+     const messages = [
+       { id: "user-1", type: "user", text: "first", time: { created: 1 } },
+diff --git a/packages/session-ui/src/timeline/projection.ts b/packages/session-ui/src/timeline/projection.ts
+index 74b0ea04323a..396ec3bf3082 100644
+--- a/packages/session-ui/src/timeline/projection.ts
++++ b/packages/session-ui/src/timeline/projection.ts
+@@ -136,7 +136,6 @@ export function createTimelineProjection(input: TimelineProjectionInput) {
+     rows,
+     sessionMessageByID,
+     userContextByID: indexUserContext(input.sessionMessages),
+-    previousSelectionByID: indexPreviousSelection(input.sessionMessages),
+   }
+ }
+ 
+@@ -157,7 +156,6 @@ export function createReactiveTimelineProjection(input: {
+   )
+ 
+   const userContextByID = createMemo(() => indexUserContext(input.sessionMessages()))
+-  const previousSelectionByID = createMemo(() => indexPreviousSelection(input.sessionMessages()))
+   const assistantMessagesByParent = createMemo(() => indexAssistantMessages(input.sessionMessages()))
+ 
+   // Row structure depends on the empty/non-empty boundary, not each text delta.
+@@ -258,7 +256,6 @@ export function createReactiveTimelineProjection(input: {
+     rows,
+     sessionMessageByID,
+     userContextByID,
+-    previousSelectionByID,
+   }
+ }
+ 
+@@ -906,45 +903,6 @@ function indexUserContext(messages: SessionMessageInfo[]) {
+   return result
+ }
+ 
+-/**
+- * The agent and model the previous user message chose, for each user message after the first. A message whose
+- * metadata names neither chose what its first reply ran with; later replies, which a steer's switch reconfigures,
+- * do not count, so a waiting steer can tell whether it changes the agent or model of the turn it joins.
+- */
+-function indexPreviousSelection(messages: SessionMessageInfo[]) {
+-  const result = new Map<string, UserSelection>()
+-  let agent = ""
+-  let model: ModelRef = { id: "", providerID: "" }
+-  let previous: { chosen: Partial<UserSelection>; current: UserSelection } | undefined
+-
+-  messages.forEach((message) => {
+-    if (message.type === "agent-switched") agent = message.agent
+-
+-    if (message.type === "model-switched") model = message.model
+-
+-    if (message.type === "assistant") {
+-      agent = message.agent
+-      model = message.model
+-
+-      if (previous) {
+-        previous.chosen.agent ??= message.agent
+-        previous.chosen.model ??= message.model
+-      }
+-    }
+-
+-    if (message.type !== "user") return
+-
+-    if (previous)
+-      result.set(message.id, {
+-        agent: previous.chosen.agent ?? previous.current.agent,
+-        model: previous.chosen.model ?? previous.current.model,
+-      })
+-    previous = { chosen: localSelection(message), current: { agent, model } }
+-  })
+-
+-  return result
+-}
+-
+ function indexAssistantMessages(messages: SessionMessageInfo[]) {
+   const result = new Map<string, SessionMessageAssistant[]>()
+   let userID: string | undefined
+diff --git a/packages/session-ui/src/timeline/session-timeline-row.tsx b/packages/session-ui/src/timeline/session-timeline-row.tsx
+index 480ef71a9239..3c2c2ba90b52 100644
+--- a/packages/session-ui/src/timeline/session-timeline-row.tsx
++++ b/packages/session-ui/src/timeline/session-timeline-row.tsx
+@@ -15,6 +15,7 @@ import {
+   createComputed,
+   createEffect,
+   createMemo,
++  createSignal,
+   onCleanup,
+   untrack,
+   type Accessor,
+@@ -65,6 +66,7 @@ import {
+   DISPOSED_STEER_ARRIVAL_EVENT,
+   INITIAL_STEER_ARRIVAL_STATE,
+   shouldGrowUserMessage,
++  shouldSnapUserRun,
+   transitionSteerArrival,
+ } from "./steer-arrival-machine"
+ 
+@@ -184,6 +186,7 @@ export function createSessionTimelineRowRenderer(input: {
+ 
+   const noRows: readonly TimelineRow.TimelineRow[] = []
+   const arrivalSync = { type: "sync" as const, sessionID: "", rows: noRows, busy: false }
++  const arrivalGrown = { type: "grown" as const, messageID: "" }
+ 
+   const syncArrivals = () => {
+     const sessionID = input.sessionID()
+@@ -215,6 +218,70 @@ export function createSessionTimelineRowRenderer(input: {
+       return true
+     })
+ 
++  const grown = (messageID: string) => {
++    arrivalGrown.messageID = messageID
++    arrivals = transitionSteerArrival(arrivals, arrivalGrown)
++  }
++
++  // A run's gaps and meta lines snap while a steer arrives, because the arriving row grows in. Any other change, such
++  // as a steer delivered into the run above, springs every gap and meta line together, so the bubbles below hold still.
++  // Springs read this on every frame, so it holds for exactly as long as the grow runs.
++  const runSnaps = () =>
++    untrack(() => {
++      syncArrivals()
++
++      return shouldSnapUserRun(arrivals)
++    })
++
++  // The newest delivered prompt; reverting it undoes the last turn, so its menu calls the action Undo.
++  const latestSent = createMemo(
++    () =>
++      [...input.projection.messageByID().values()].findLast(
++        (message) => message.type === "user" && input.actions?.pending?.status(message.id) === undefined,
++      )?.id,
++  )
++
++  // Hovering a run's bubbles, or the gaps between them, shows the meta line its last bubble carries. Each bubble's
++  // body bridges the gaps to its neighbors, so moving between bubbles never hides the line, and an open menu keeps it
++  // while the pointer is on the menu.
++  const [hoveredMessage, setHoveredMessage] = createSignal<string>()
++  const [menuMessage, setMenuMessage] = createSignal<string>()
++
++  const runEnds = createMemo(() => {
++    const ends = new Map<string, string>()
++    const group: string[] = []
++    input.projection.rows().forEach((row) => {
++      if (!Predicate.isTagged(row, "UserMessage")) return
++      group.push(row.userMessageID)
++
++      if (runs().get(row.userMessageID)?.below) return
++      group.splice(0).forEach((id) => ends.set(id, row.userMessageID))
++    })
++
++    return ends
++  })
++
++  const runHovered = (messageID: string) => {
++    const ends = runEnds()
++
++    return [hoveredMessage(), menuMessage()].some((id) => !!id && ends.get(id) === messageID)
++  }
++
++  const bubble = (target: EventTarget | null) =>
++    target instanceof Element ? target.closest('[data-slot="user-message-body"]') : null
++
++  const hoverZone = (messageID: string) => ({
++    onPointerOver: (event: PointerEvent) => {
++      if (bubble(event.target)) setHoveredMessage(messageID)
++    },
++    onPointerOut: (event: PointerEvent) => {
++      const next = bubble(event.relatedTarget)
++
++      if (next && event.currentTarget instanceof Element && event.currentTarget.contains(next)) return
++      setHoveredMessage((current) => (current === messageID ? undefined : current))
++    },
++  })
++
+   const run = (messageID: string) =>
+     createMemo(() => runs().get(messageID), undefined, {
+       equals: (a, b) => a?.above === b?.above && a?.below === b?.below,
+@@ -620,7 +687,7 @@ export function createSessionTimelineRowRenderer(input: {
+   const Frame = (props: { row: FramedTimelineRow; grow?: boolean; children: JSX.Element }) => (
+     <div
+       ref={(el) => {
+-        if (props.grow) growIn(el)
++        if (props.grow) growIn(el, () => grown(props.row.userMessageID))
+       }}
+       id={Predicate.isTagged(props.row, "UserMessage") ? input.anchor?.(props.row.userMessageID) : undefined}
+       data-message-id={props.row.userMessageID}
+@@ -966,7 +1033,7 @@ export function createSessionTimelineRowRenderer(input: {
+     )
+   }
+ 
+-  // A run's messages sit as close as the iOS app's (4 px); the gap springs open as a message leaves.
++  // A run's messages sit as close as the iOS app's (4 px); the gap springs as a message joins or leaves.
+   function TurnGap(props: { messageID: string }) {
+     let element: HTMLDivElement | undefined
+     const joined = run(props.messageID)
+@@ -977,7 +1044,7 @@ export function createSessionTimelineRowRenderer(input: {
+         el.style.height = `${value.height}px`
+       },
+       // Closing up as a message joins is instant; the joining message grows in instead.
+-      { ...userRunSpring, snap: () => !!joined()?.above },
++      { ...userRunSpring, snap: () => !!joined()?.above && runSnaps() },
+     )
+ 
+     return (
+@@ -1012,7 +1079,6 @@ export function createSessionTimelineRowRenderer(input: {
+       })
+ 
+       const context = createMemo(() => input.projection.userContextByID().get(current().userMessageID))
+-      const previous = createMemo(() => input.projection.previousSelectionByID().get(current().userMessageID))
+       const joined = run(current().userMessageID)
+       const grow = arriving(current().userMessageID)
+ 
+@@ -1023,7 +1089,11 @@ export function createSessionTimelineRowRenderer(input: {
+               const presentation = () => input.presentation(message())
+ 
+               return (
+-                <div data-slot="session-turn-message-container" class={`w-full ${padding()}`}>
++                <div
++                  data-slot="session-turn-message-container"
++                  class={`w-full ${padding()}`}
++                  {...hoverZone(message().id)}
++                >
+                   <div data-slot="session-turn-message-content" aria-live="off">
+                     <SessionUserMessage
+                       sessionID={input.sessionID()}
+@@ -1034,9 +1104,16 @@ export function createSessionTimelineRowRenderer(input: {
+                       voice={presentation()?.voice}
+                       historicalAgent={context()?.agent ?? ""}
+                       historicalModel={context()?.model ?? { id: "", providerID: "" }}
+-                      previousSelection={previous()}
+                       actions={input.actions}
+                       run={joined()}
++                      latest={latestSent() === message().id}
++                      runSnaps={runSnaps}
++                      runHovered={runHovered(message().id)}
++                      onMenuOpenChange={(open) =>
++                        setMenuMessage((current) =>
++                          open ? message().id : current === message().id ? undefined : current,
++                        )
++                      }
+                       fold={input.foldUserMessages?.()}
+                       expanded={input.disclosure.value(`user-expanded:${message().id}`)}
+                       onExpandedChange={(open) => input.disclosure.set(`user-expanded:${message().id}`, open)}
+@@ -1383,38 +1460,88 @@ function outcomeNoticeKey(state: string | undefined) {
+   return "ui.sessionTimeline.notice.finished"
+ }
+ 
+-/** Grows a row from nothing to its natural height, clipping its content on the way. Rows below follow its edge. */
+-function growIn(el: HTMLElement) {
+-  if (prefersReducedMotion()) return
+-  const spring = Spring.fromDuration(0, { duration: 0.2, bounce: 0 })
+-  const content = el.firstElementChild
++/**
++ * Grows a row from nothing to its natural height while its bubble fades in; rows below follow its edge. A pending
++ * steer's meta line stays in view: a steer that starts a pending run shows its line once the row has settled, and one
++ * that joins a pending run carries the run's line down along the growing edge while the bubble fades into the space.
++ */
++function growIn(el: HTMLElement, onDone: () => void) {
++  if (prefersReducedMotion()) return onDone()
++  const height = Spring.fromDuration(0, { duration: 0.2, bounce: 0 })
++  const opacity = Spring.fromDuration(0, { duration: 0.3, bounce: 0 }).set(1)
++  const content = el.firstElementChild instanceof HTMLElement ? el.firstElementChild : undefined
++  // The row's children mount after its ref runs, so the whole row starts hidden and hands its fade to the bubble on the
++  // first frame.
++  let faded = content ? [content] : []
++  let meta: HTMLElement | undefined
++  let carried = false
+   let natural = 0
++  let line = 0
+   el.style.height = "0px"
+-  el.style.overflow = "clip"
+   el.toggleAttribute("data-timeline-grow", true)
++  faded.forEach((element) => (element.style.opacity = "0"))
+ 
+   const remove = frameLoop.addMeasured(
+     () => {
+-      natural = content instanceof HTMLElement ? content.offsetHeight : 0
++      if (content && !meta) {
++        meta = content.querySelector<HTMLElement>('[data-slot="user-message-copy-wrapper"]') ?? undefined
++
++        const bubbles = [
++          ...content.querySelectorAll<HTMLElement>(
++            '[data-slot="user-message-attachments"], [data-slot="user-message-body"]',
++          ),
++        ]
++
++        if (meta && bubbles.length > 0) {
++          carried = !!content.querySelector('[data-component="user-message"][data-pending][data-run-above]')
++
++          if (!carried) meta.style.visibility = "hidden"
++          content.style.opacity = ""
++          faded = bubbles
++        }
++      }
++
++      natural = content ? content.offsetHeight : 0
++      line = meta ? meta.offsetHeight + parseFloat(getComputedStyle(meta).marginTop) : 0
+     },
+     (dt) => {
+       if (!el.isConnected) return true
+-      spring.set(natural)
+-      const height = spring.step(dt)
+ 
+-      if (!spring.resting) {
+-        el.style.height = `${height}px`
++      height.set(natural)
++      const value = height.step(dt)
++      const progress = natural > 0 ? value / natural : 1
++      const shown = Math.min(1, Math.max(0, opacity.step(dt)))
++
++      // A carried line passes over the bubble's place, so the bubble shows only as the line clears it.
++      faded.forEach((element) => (element.style.opacity = `${carried ? shown * progress : shown}`))
++
++      // The line starts exactly where the run's line just was, just above this row, and settles below the bubble.
++      if (meta && carried) meta.style.transform = `translateY(${-(natural - line + 8) * (1 - progress)}px)`
++
++      if (!height.resting || !opacity.resting) {
++        el.style.height = height.resting ? "" : `${value}px`
+ 
+         return true
+       }
+ 
+       el.style.height = ""
+-      el.style.overflow = ""
++      faded.forEach((element) => (element.style.opacity = ""))
++
++      if (meta) {
++        meta.style.visibility = ""
++        meta.style.transform = ""
++      }
++
+       el.toggleAttribute("data-timeline-grow", false)
++      onDone()
+ 
+       return false
+     },
+   )
+ 
+-  onCleanup(remove)
++  // A row that unmounts mid-grow, as the virtualizer recycles it, ends its grow too; a second report is a no-op.
++  onCleanup(() => {
++    remove()
++    onDone()
++  })
+ }
+diff --git a/packages/session-ui/src/timeline/steer-arrival-machine.test.ts b/packages/session-ui/src/timeline/steer-arrival-machine.test.ts
+index 5a812ac80785..4011e0b08e09 100644
+--- a/packages/session-ui/src/timeline/steer-arrival-machine.test.ts
++++ b/packages/session-ui/src/timeline/steer-arrival-machine.test.ts
+@@ -4,6 +4,7 @@ import {
+   DISPOSED_STEER_ARRIVAL_STATE,
+   INITIAL_STEER_ARRIVAL_STATE,
+   shouldGrowUserMessage,
++  shouldSnapUserRun,
+   transitionSteerArrival,
+   type SteerArrivalState,
+ } from "./steer-arrival-machine"
+@@ -24,6 +25,9 @@ const sync = (state: SteerArrivalState, rows: TimelineRow.TimelineRow[], busy =
+ const rendered = (state: SteerArrivalState, messageID: string) =>
+   transitionSteerArrival(state, { type: "rendered", messageID })
+ 
++const grown = (state: SteerArrivalState, messageID: string) =>
++  transitionSteerArrival(state, { type: "grown", messageID })
++
+ const page = [user("m50"), assistant("m50", "a50")]
+ 
+ describe("transitionSteerArrival", () => {
+@@ -86,6 +90,37 @@ describe("transitionSteerArrival", () => {
+     expect(sync(steered, [...page, user("m51")])).toBe(steered)
+   })
+ 
++  test("snaps a run from a steer's landing until its row has grown in, however long that takes", () => {
++    const loaded = sync(INITIAL_STEER_ARRIVAL_STATE, page)
++    const steered = sync(loaded, [...page, user("m51")])
++
++    expect(shouldSnapUserRun(loaded)).toBe(false)
++    expect(shouldSnapUserRun(steered)).toBe(true)
++
++    // Before, a 100ms window decided this, so a long frame or a slow device let the arriving row's run spring.
++    const growing = [1, 2, 3].reduce(
++      (state) => sync(state, [...page, user("m51"), assistant("m51", "a51")]),
++      rendered(steered, "m51"),
++    )
++
++    expect(shouldSnapUserRun(growing)).toBe(true)
++
++    const done = grown(growing, "m51")
++
++    expect(shouldSnapUserRun(done)).toBe(false)
++    expect(grown(done, "m51")).toBe(done)
++    expect(grown(loaded, "m51")).toBe(loaded)
++  })
++
++  test("keeps a growing row snapping after the session goes idle, and drops it on another session", () => {
++    const growing = rendered(sync(sync(INITIAL_STEER_ARRIVAL_STATE, page), [...page, user("m51")]), "m51")
++    const idle = sync(growing, [...page, user("m51"), assistant("m51", "a51")], false)
++
++    expect(shouldSnapUserRun(idle)).toBe(true)
++    expect(shouldSnapUserRun(sync(growing, [user("m1")], true, "ses_2"))).toBe(false)
++    expect(shouldSnapUserRun(DISPOSED_STEER_ARRIVAL_STATE)).toBe(false)
++  })
++
+   test("starts over on another session and stops after disposal", () => {
+     const steered = sync(sync(INITIAL_STEER_ARRIVAL_STATE, page), [...page, user("m51")])
+     const other = sync(steered, [user("m1"), user("m51")], true, "ses_2")
+diff --git a/packages/session-ui/src/timeline/steer-arrival-machine.ts b/packages/session-ui/src/timeline/steer-arrival-machine.ts
+index 8b23d753f734..b885e4764712 100644
+--- a/packages/session-ui/src/timeline/steer-arrival-machine.ts
++++ b/packages/session-ui/src/timeline/steer-arrival-machine.ts
+@@ -5,7 +5,8 @@ import type { TimelineRow } from "./timeline-row"
+  * Which user messages grow in as they render. `seen` holds the message IDs of the session's rows so far: user messages,
+  * shells and assistant messages. A user message counts as a steer only when it lands below a seen row while the session
+  * works, so the first page and history loaded above it appear as they are. `arriving` holds steers whose rows have not
+- * rendered yet; rendering one, or the session going idle, removes it.
++ * rendered yet; rendering one, or the session going idle, removes it. `growing` holds steers whose rows are growing in;
++ * the grow finishing, or the row unmounting, removes it.
+  */
+ export type SteerArrivalState =
+   | {
+@@ -13,6 +14,7 @@ export type SteerArrivalState =
+       readonly sessionID: string
+       readonly seen: ReadonlySet<string>
+       readonly arriving: ReadonlySet<string>
++      readonly growing: ReadonlySet<string>
+     }
+   | { readonly status: "disposed" }
+ 
+@@ -24,6 +26,7 @@ export type SteerArrivalEvent =
+       readonly busy: boolean
+     }
+   | { readonly type: "rendered"; readonly messageID: string }
++  | { readonly type: "grown"; readonly messageID: string }
+   | { readonly type: "disposed" }
+ 
+ const EMPTY: ReadonlySet<string> = new Set()
+@@ -33,6 +36,7 @@ export const INITIAL_STEER_ARRIVAL_STATE: SteerArrivalState = Object.freeze({
+   sessionID: "",
+   seen: EMPTY,
+   arriving: EMPTY,
++  growing: EMPTY,
+ })
+ 
+ export const DISPOSED_STEER_ARRIVAL_STATE: SteerArrivalState = Object.freeze({ status: "disposed" })
+@@ -50,7 +54,15 @@ export function transitionSteerArrival(state: SteerArrivalState, event: SteerArr
+     const arriving = new Set(state.arriving)
+     arriving.delete(event.messageID)
+ 
+-    return { ...state, arriving }
++    return { ...state, arriving, growing: new Set([...state.growing, event.messageID]) }
++  }
++
++  if (event.type === "grown") {
++    if (!state.growing.has(event.messageID)) return state
++    const growing = new Set(state.growing)
++    growing.delete(event.messageID)
++
++    return { ...state, growing }
+   }
+ 
+   const rows = event.rows
+@@ -61,6 +73,7 @@ export function transitionSteerArrival(state: SteerArrivalState, event: SteerArr
+       sessionID: event.sessionID,
+       seen: new Set(rows.flatMap((row) => rowAnchor(row) ?? [])),
+       arriving: EMPTY,
++      growing: EMPTY,
+     }
+ 
+   const unseen = rows.some((row) => {
+@@ -91,6 +104,7 @@ export function transitionSteerArrival(state: SteerArrivalState, event: SteerArr
+     sessionID: state.sessionID,
+     seen: unseen ? new Set([...state.seen, ...rows.flatMap((row) => rowAnchor(row) ?? [])]) : state.seen,
+     arriving: !event.busy ? EMPTY : steers.length > 0 ? new Set([...state.arriving, ...steers]) : state.arriving,
++    growing: state.growing,
+   }
+ }
+ 
+@@ -98,6 +112,14 @@ export function shouldGrowUserMessage(state: SteerArrivalState, messageID: strin
+   return state.status === "tracking" && state.arriving.has(messageID)
+ }
+ 
++/**
++ * Whether a run's gaps and meta lines snap rather than spring: while a steer is landing or growing in, the growing row
++ * moves the run, so springing as well would make the bubbles jump.
++ */
++export function shouldSnapUserRun(state: SteerArrivalState) {
++  return state.status === "tracking" && (state.arriving.size > 0 || state.growing.size > 0)
++}
++
+ // Each row stands for the message that produced it; message IDs are unique across user, shell and assistant messages.
+ function rowAnchor(row: TimelineRow.TimelineRow) {
+   if (Predicate.isTagged(row, "UserMessage")) return row.userMessageID
+diff --git a/packages/session-ui/src/timeline/timeline-row.stories.tsx b/packages/session-ui/src/timeline/timeline-row.stories.tsx
+index b73493e266de..dd5c0f3791d7 100644
+--- a/packages/session-ui/src/timeline/timeline-row.stories.tsx
++++ b/packages/session-ui/src/timeline/timeline-row.stories.tsx
+@@ -942,6 +942,90 @@ const conversationScenarios = {
+   media: MediaAttachmentRetry,
+ }
+ 
++/**
++ * A stack of three prompts arriving, a prompt sent with another model that stands alone, then two steers waiting behind
++ * the running turn. Send next adds the next prompt; Deliver next delivers the oldest steer.
++ */
++export const PromptRuns = {
++  render: () => {
++    const start = Date.now() - 10 * 60_000
++
++    const prompt = (id: string, text: string, minute: number, variant?: string) => ({
++      id,
++      type: "user" as const,
++      text,
++      time: { created: start + minute * 60_000 },
++      metadata: {
++        agent: "build",
++        model: { providerID: "anthropic", id: "claude-opus-5-5", variant: variant ?? "high" },
++      },
++    })
++
++    const prompts = [
++      prompt("msg_end_0", "You don't need to update the tests yet", 0),
++      prompt("msg_end_1", "just play this back against the old fixture first", 1),
++      prompt("msg_end_2", "So that we can see what actually changed", 2),
++      prompt("msg_end_3", "Now try it with max effort", 5, "max"),
++      prompt("msg_end_4", "Also check the retry path", 7, "max"),
++      prompt("msg_end_5", "And rebase on beta first", 8, "max"),
++    ]
++
++    const steers = ["msg_end_4", "msg_end_5"]
++
++    const [state, setState] = createStore<{ count: number; delivered: string[]; removed: string[] }>({
++      count: 1,
++      delivered: [],
++      removed: [],
++    })
++
++    const session = createMemo(
++      (): SessionDocument => ({
++        sessionID: CURRENT_SESSION_ID,
++        messages: prompts.slice(0, state.count).filter((message) => !state.removed.includes(message.id)),
++        status: { type: "busy" },
++        diffs: [],
++      }),
++    )
++
++    const take = async (input: { messageID: string }) => setState("removed", (ids) => [...ids, input.messageID])
++
++    const actions = {
++      revert: () => {},
++      fork: () => {},
++      pending: {
++        status: (messageID: string) =>
++          steers.includes(messageID) && !state.delivered.includes(messageID) ? ("steering" as const) : undefined,
++        queue: take,
++        remove: take,
++      },
++    }
++
++    const deliverNext = () => {
++      const next = steers.find((id) => !state.delivered.includes(id) && !state.removed.includes(id))
++
++      if (next) setState("delivered", (ids) => [...ids, next])
++    }
++
++    return (
++      <section class="mx-auto flex w-full max-w-[760px] flex-col gap-4 p-6 pb-0">
++        <div class="flex gap-2">
++          <button type="button" onClick={() => setState("count", (value) => Math.min(value + 1, prompts.length))}>
++            Send next
++          </button>
++          <button type="button" onClick={deliverNext}>
++            Deliver next
++          </button>
++        </div>
++        {/* Room above, as in a real session, so menus open upward. */}
++        <div class="h-56" />
++        <CurrentSessionProviders document={session()}>
++          <SessionTimeline document={session()} actions={actions} />
++        </CurrentSessionProviders>
++      </section>
++    )
++  },
++}
++
+ export const Conversation = {
+   args: { scenario: "notices", mode: "compact", reasoning: "heading", tool: false, text: "" },
+   argTypes: {
+diff --git a/packages/ui/src/i18n/en.ts b/packages/ui/src/i18n/en.ts
+index 63cfc59fb722..19335dd03ca9 100644
+--- a/packages/ui/src/i18n/en.ts
++++ b/packages/ui/src/i18n/en.ts
+@@ -284,7 +284,8 @@ const source = {
+   "ui.message.copyMessage": "Copy message",
+   "ui.message.copyFullMessage": "Copy full message",
+   "ui.message.forkMessage": "Fork from here",
+-  "ui.message.revertMessage": "Rewind to here",
++  "ui.message.revertMessage": "Revert to here",
++  "ui.message.undoMessage": "Undo",
+   "ui.message.moreActions": "More actions",
+   "ui.message.moveToQueue": "Move to queue",
+   "ui.message.pending": "Pending",

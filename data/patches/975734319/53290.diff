@@ -1,0 +1,755 @@
+diff --git a/packages/app/component-tests/extension-host.fixture.tsx b/packages/app/component-tests/extension-host.fixture.tsx
+index 4922952f6df5..54cf343ce604 100644
+--- a/packages/app/component-tests/extension-host.fixture.tsx
++++ b/packages/app/component-tests/extension-host.fixture.tsx
+@@ -188,8 +188,8 @@ export function mountExtensionHost() {
+     disable: () => setDisabled(new Set(["fixture"])),
+     enable: () => setDisabled(new Set<string>()),
+     status: () => hosts[0]?.state.status.fixture,
+-    /** Contributions the host holds for a point; readable after the host unmounts. */
+-    entries: (point: string) => hosts[0]?.state.entries[point]?.length ?? 0,
++    /** Contributions the host holds for a registry; readable after the host unmounts. */
++    entries: (registry: string) => hosts[0]?.state.entries[registry]?.length ?? 0,
+   }
+ }
+ 
+@@ -309,7 +309,7 @@ export function mountExtensions(input: {
+     ready: () => hosts[0]?.ready() ?? false,
+     status: (id: string) => hosts[0]?.state.status[id],
+     failure: (id: string) => hosts[0]?.state.failures[id],
+-    entries: (point: string) => hosts[0]?.state.entries[point]?.length ?? 0,
++    entries: (registry: string) => hosts[0]?.state.entries[registry]?.length ?? 0,
+   }
+ }
+ 
+diff --git a/packages/app/component-tests/extension-host.spec.ts b/packages/app/component-tests/extension-host.spec.ts
+index c867482b16d0..741b04bbd4b4 100644
+--- a/packages/app/component-tests/extension-host.spec.ts
++++ b/packages/app/component-tests/extension-host.spec.ts
+@@ -51,26 +51,26 @@ story("async work from synchronous setup cannot register after the host unmounts
+     const resume = Promise.withResolvers<void>()
+     const done = Promise.withResolvers<void>()
+     const cleaned: string[] = []
+-    const point = { kind: "point" as const, id: "fixture-point" }
++    const registry = { kind: "registry" as const, id: "fixture-registry" }
+     const resumed = { aborted: false }
+     host.load((ctx: Context) => {
+-      ctx.add(point, "before")
++      ctx.add(registry, "before")
+       onCleanup(() => void cleaned.push("owner"))
+       started.resolve()
+       void resume.promise.then(() => {
+         // A promise callback has no owner; the signal says the work outlived the instance.
+         resumed.aborted = ctx.signal.aborted
+-        ctx.add(point, "after")
++        ctx.add(registry, "after")
+         done.resolve()
+       })
+     })
+     await started.promise
+-    const before = host.entries(point.id)
++    const before = host.entries(registry.id)
+     host.unmount()
+     resume.resolve()
+     await done.promise
+ 
+-    return { before, after: host.entries(point.id), cleaned, aborted: resumed.aborted }
++    return { before, after: host.entries(registry.id), cleaned, aborted: resumed.aborted }
+   }, fixture)
+ 
+   expect(result).toEqual({ before: 1, after: 0, cleaned: ["owner"], aborted: true })
+@@ -484,7 +484,7 @@ story(
+   async ({ page }) => {
+     const result = await page.evaluate(async (fixture) => {
+       const { mountExtensions, until, createKeyed, createSignal, getOwner, runWithOwner } = await import(fixture)
+-      const point = { kind: "point" as const, id: "fixture-scoped" }
++      const registry = { kind: "registry" as const, id: "fixture-scoped" }
+       const scope: Scope = { end: () => {} }
+ 
+       const host = mountExtensions({
+@@ -498,7 +498,7 @@ story(
+                 scope.ctx = ctx
+                 createKeyed(on, () => {
+                   scope.owner = getOwner()
+-                  ctx.add(point, "during")
++                  ctx.add(registry, "during")
+                 })
+               },
+             }),
+@@ -507,12 +507,12 @@ story(
+       })
+ 
+       await until(() => host.status("fixture") === "active")
+-      const during = host.entries(point.id)
++      const during = host.entries(registry.id)
+       scope.end()
+-      const ended = host.entries(point.id)
++      const ended = host.entries(registry.id)
+       // A captured owner of a generation that ended, as async work resuming late would hold.
+-      runWithOwner(scope.owner, () => scope.ctx?.add(point, "late"))
+-      const late = host.entries(point.id)
++      runWithOwner(scope.owner, () => scope.ctx?.add(registry, "late"))
++      const late = host.entries(registry.id)
+       host.unmount()
+ 
+       return { during, ended, late }
+@@ -809,7 +809,7 @@ invalidSetups.forEach((kind) => {
+         const { mountExtensions, until } = await import(input.fixture)
+         const resume = Promise.withResolvers<void>()
+         const done = Promise.withResolvers<void>()
+-        const point = { kind: "point" as const, id: "invalid-setup" }
++        const registry = { kind: "registry" as const, id: "invalid-setup" }
+         const observed = { aborted: false }
+ 
+         const host = mountExtensions({
+@@ -818,7 +818,7 @@ invalidSetups.forEach((kind) => {
+               id: "invalid",
+               renderer: async () => ({
+                 default: (ctx: Context) => {
+-                  ctx.add(point, "before")
++                  ctx.add(registry, "before")
+ 
+                   if (input.kind === "thenable")
+                     return {
+@@ -829,7 +829,7 @@ invalidSetups.forEach((kind) => {
+ 
+                   return resume.promise.then(() => {
+                     observed.aborted = ctx.signal.aborted
+-                    ctx.add(point, "after")
++                    ctx.add(registry, "after")
+                     done.resolve()
+                   })
+                 },
+@@ -843,13 +843,13 @@ invalidSetups.forEach((kind) => {
+         const failed = {
+           status: host.status("invalid"),
+           error: host.failure("invalid")?.error.includes("Window setup must be synchronous"),
+-          entries: host.entries(point.id),
++          entries: host.entries(registry.id),
+         }
+ 
+         resume.resolve()
+ 
+         if (input.kind === "promise") await done.promise
+-        const after = { entries: host.entries(point.id), aborted: observed.aborted }
++        const after = { entries: host.entries(registry.id), aborted: observed.aborted }
+         host.unmount()
+ 
+         return { failed, after }
+diff --git a/packages/app/src/runtime/extension/host.tsx b/packages/app/src/runtime/extension/host.tsx
+index 169e2312c437..8ed1853130dd 100644
+--- a/packages/app/src/runtime/extension/host.tsx
++++ b/packages/app/src/runtime/extension/host.tsx
+@@ -39,7 +39,7 @@ import {
+   type Links,
+   type Messages,
+   type Persisted,
+-  type Point,
++  type Registry,
+   type Ipc,
+   type IpcClient,
+   type IpcRef,
+@@ -51,7 +51,7 @@ import {
+ import { useLanguage } from "@/runtime/i18n/language"
+ import { createSessionStore, whenLoaded } from "./stores"
+ 
+-type Entry = { key: string; point: string; extension: string; value: Accessor<unknown> }
++type Entry = { key: string; registry: string; extension: string; value: Accessor<unknown> }
+ 
+ export type Item<T> = { readonly key: string; readonly extension: string; readonly value: T }
+ 
+@@ -154,7 +154,7 @@ function createHost(input: HostInput) {
+   const provided = new Map<string, { live: Live<unknown> & { readonly status: "active" } }>()
+   const generations = new Map<string, number>()
+ 
+-  // Entries are indexed by point and contracts versioned by token, so a change wakes only its own readers.
++  // Entries are indexed by registry and contracts versioned by token, so a change wakes only its own readers.
+   const [state, setState] = createStore<HostState>({ entries: {}, contracts: {}, status: {}, failures: {} })
+ 
+   const instances = new Map<string, Instance>()
+@@ -287,14 +287,15 @@ function createHost(input: HostInput) {
+     return memo
+   }
+ 
+-  const items = <T,>(point: Point<T>) => {
+-    const memo = memos.get(point.id) ?? createItems(point.id)
++  const items = <T,>(registry: Registry<T>) => {
++    const memo = memos.get(registry.id) ?? createItems(registry.id)
+ 
+-    // SAFETY: only `add` stores entries, under the id of the typed point it was given, so this point's items are T.
++    // SAFETY: only `add` stores entries, under the id of the typed registry it was given, so this registry's items
++    // are T.
+     return memo() as readonly Item<T>[]
+   }
+ 
+-  const list = <T,>(point: Point<T>) => items(point).map((item) => item.value)
++  const list = <T,>(registry: Registry<T>) => items(registry).map((item) => item.value)
+ 
+   const links: Links = {
+     open(link) {
+@@ -614,12 +615,12 @@ function createHost(input: HostInput) {
+     const context = {
+       id: extension,
+       signal: controller.signal,
+-      add<T>(point: Point<T>, item: T | (() => T | undefined)) {
++      add<T>(registry: Registry<T>, item: T | (() => T | undefined)) {
+         if (late()) return () => {}
+ 
+         // Promise callbacks may have no owner; fall back to the extension root.
+         const read =
+-          // SAFETY: a function item is the SDK's reactive form; points take no function values.
++          // SAFETY: a function item is the SDK's reactive form; registries take no function values.
+           // oxlint-disable-next-line anti-slop/no-runtime-typeof -- see SAFETY above
+           typeof item === "function"
+             ? runWithOwner(getOwner() ?? root, () => createMemo(item as () => T | undefined))
+@@ -627,13 +628,13 @@ function createHost(input: HostInput) {
+ 
+         const key = `${extension}/${++sequence.value}`
+ 
+-        setState("entries", point.id, (entries = []) => [
++        setState("entries", registry.id, (entries = []) => [
+           ...entries,
+-          { key, point: point.id, extension, value: read ?? (() => undefined) },
++          { key, registry: registry.id, extension, value: read ?? (() => undefined) },
+         ])
+ 
+         return register(() =>
+-          setState("entries", point.id, (entries = []) => entries.filter((entry) => entry.key !== key)),
++          setState("entries", registry.id, (entries = []) => entries.filter((entry) => entry.key !== key)),
+         )
+       },
+       list,
+@@ -748,10 +749,10 @@ function createHost(input: HostInput) {
+         batch(() => {
+           Array.from(cleanups).reverse().forEach(release)
+           cleanups.clear()
+-          Object.entries(state.entries).forEach(([point, entries]) => {
++          Object.entries(state.entries).forEach(([registry, entries]) => {
+             if (!entries?.some((entry) => entry.extension === extension)) return
+ 
+-            setState("entries", point, (list = []) => list.filter((entry) => entry.extension !== extension))
++            setState("entries", registry, (list = []) => list.filter((entry) => entry.extension !== extension))
+           })
+         })
+         // A throwing onCleanup in the extension's root must not stop the host disposing the rest.
+diff --git a/packages/app/test-browser/extension-migrations.test.ts b/packages/app/test-browser/extension-migrations.test.ts
+index ac37c69c39a7..eed9d5763c6e 100644
+--- a/packages/app/test-browser/extension-migrations.test.ts
++++ b/packages/app/test-browser/extension-migrations.test.ts
+@@ -149,8 +149,8 @@ function contextPanels() {
+ 
+   const fake = {
+     t: (key: string) => key,
+-    add: (point: { readonly id: string }, item: () => Panel) => {
+-      if (point.id === Panel.id) panels.push({ extension: context.id, value: item() })
++    add: (registry: { readonly id: string }, item: () => Panel) => {
++      if (registry.id === Panel.id) panels.push({ extension: context.id, value: item() })
+ 
+       return () => undefined
+     },
+@@ -158,7 +158,7 @@ function contextPanels() {
+ 
+   createRoot((dispose) => {
+     // SAFETY: this setup reads only `t` and `add`, and contributes its Panel in the reactive form, a function returning
+-    // it, which `add` calls for the Panel point only.
++    // it, which `add` calls for the Panel registry only.
+     // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- see SAFETY above
+     contextSetup(fake as unknown as Parameters<typeof contextSetup>[0])
+     dispose()
+diff --git a/packages/desktop/src/main/extension/host.ts b/packages/desktop/src/main/extension/host.ts
+index bb976f7a1ac7..8317dfde688b 100644
+--- a/packages/desktop/src/main/extension/host.ts
++++ b/packages/desktop/src/main/extension/host.ts
+@@ -22,7 +22,7 @@ import {
+   type Messages,
+   type OS,
+   type Params,
+-  type Point,
++  type Registry,
+   type ServerEndpoint,
+   type ServerEndpoints,
+   type Windows,
+@@ -88,10 +88,10 @@ type HostApis = {
+   -readonly [K in Exclude<keyof MainContext, keyof BaseContext | "scope" | "provide">]?: MainContext[K]
+ }
+ 
+-/** A contribution as `add` stores it, with its point's item type erased; `list` restores it. */
++/** A contribution as `add` stores it, with its registry's item type erased; `list` restores it. */
+ type Item = Parameters<MainContext["add"]>[1]
+ 
+-type Entry = { readonly point: string; readonly extension: string; readonly value: Item }
++type Entry = { readonly registry: string; readonly extension: string; readonly value: Item }
+ 
+ type Translation = { readonly catalog?: Catalog; messages: Messages }
+ 
+@@ -176,7 +176,7 @@ export function createHost(input: {
+ 
+   const menubarItems = () => {
+     const items = [...entries.values()].flatMap((entry) => {
+-      if (entry.point !== MenubarItem.id) return []
++      if (entry.registry !== MenubarItem.id) return []
+       const item = read(entry)
+ 
+       return isMenubarItem(item) ? [{ id: `${entry.extension}.${item.id}`, extension: entry.extension, item }] : []
+@@ -337,25 +337,26 @@ export function createHost(input: {
+     // The instance's HostApis, each created on first read.
+     const created: HostApis = {}
+ 
+-    function add<T>(point: Point<T>, item: T | (() => T | undefined)): Cleanup {
++    function add<T>(registry: Registry<T>, item: T | (() => T | undefined)): Cleanup {
+       if (signal.aborted) return () => {}
+ 
+       const key = `${id}/${++status.sequence}`
+-      entries.set(key, { point: point.id, extension: id, value: item })
++      entries.set(key, { registry: registry.id, extension: id, value: item })
+ 
+-      if (point.id === MenubarItem.id) scheduleMenubar()
++      if (registry.id === MenubarItem.id) scheduleMenubar()
+ 
+       return contribute(() => {
+-        if (entries.delete(key) && point.id === MenubarItem.id) scheduleMenubar()
++        if (entries.delete(key) && registry.id === MenubarItem.id) scheduleMenubar()
+       })
+     }
+ 
+-    function list<T>(point: Point<T>): readonly T[] {
++    function list<T>(registry: Registry<T>): readonly T[] {
+       return [...entries.values()].flatMap((entry) => {
+-        if (entry.point !== point.id) return []
++        if (entry.registry !== registry.id) return []
+         const value = read(entry)
+ 
+-        // SAFETY: only `add` stores entries, under the id of the typed point it was given, so this point's items are T.
++        // SAFETY: only `add` stores entries, under the id of the typed registry it was given, so this registry's items
++        // are T.
+         return value === undefined ? [] : [value as T]
+       })
+     }
+diff --git a/packages/gui-extensions/AGENTS.md b/packages/gui-extensions/AGENTS.md
+index d5a61b8e2e41..7e9d902ece1e 100644
+--- a/packages/gui-extensions/AGENTS.md
++++ b/packages/gui-extensions/AGENTS.md
+@@ -11,13 +11,13 @@ Built-in features of the desktop and web app, each behind the SDK in `src/sdk/`.
+ - Use `requires` only where the extension is meaningless without the contract. Graceful degradation is `uses`. `Extension.compose` rejects duplicate extension ids, and duplicate or missing providers.
+ - A contract that returns components binds each with `bindExtension` in the provider's setup, so `useExtension` inside reads the provider's context, not the consumer's. Do not wrap data methods such as `Changes.diffs`.
+ - SDK icon fields take an `IconName` from `@opencode/ui/icons/catalog`, the dependency-free icon catalog.
+-- The APIs the host always provides are context properties (`ctx.layout`, `ctx.sessions`, `ctx.storage`, `ctx.desktop`, …; in main `ctx.storage`, `ctx.windows`, `ctx.serverEndpoints`, …). `useExtension<typeof definition>()` returns the same context in components. Points and contracts stay tokens: `ctx.add(Point, item)`, `ctx.provide(Contract, impl)`; main provides Ipcs with `ctx.provide(Ipc, impl)`.
++- The APIs the host always provides are context properties (`ctx.layout`, `ctx.sessions`, `ctx.storage`, `ctx.desktop`, …; in main `ctx.storage`, `ctx.windows`, `ctx.serverEndpoints`, …). `useExtension<typeof definition>()` returns the same context in components. Registries and contracts stay tokens: `ctx.add(Registry, item)`, `ctx.provide(Contract, impl)`; main provides Ipcs with `ctx.provide(Ipc, impl)`.
+ - Never import `@opencode/app`, `@opencode/desktop`, or `@/` paths. Import CSS with `?inline` and contribute it through `ctx.add(Style, css)`. No module-level state: keep state inside `setup`. `bun run lint` enforces these rules.
+ - `bun run lint:changed` must pass before you finish: every file you add or edit has no oxlint problem at all, including the warn-level anti-slop rules (`unknown` parameters and returns, unchecked type assertions, widened types, unsafe dictionaries, missing spacing). Touching a file means leaving the whole file clean, older warnings included. Fix the code; suppress only with a `SAFETY:` comment that states a real checked invariant.
+ 
+ ## SDK docs
+ 
+-- Every exported declaration in `src/sdk/`, every interface member, every field of an object type (options, results, union members) and every parameter has TSDoc. Say what it is, when to use it, its default, and what happens on failure. Document each value of a union. Primitives, token kinds, points and context properties carry an `@example`.
++- Every exported declaration in `src/sdk/`, every interface member, every field of an object type (options, results, union members) and every parameter has TSDoc. Say what it is, when to use it, its default, and what happens on failure. Document each value of a union. Primitives, token kinds, registries and context properties carry an `@example`.
+ - `bun run lint` runs `script/sdk-docs.ts`, which fails on a missing doc comment or `@param`, a `@param` that names no parameter, a `ctx.<member>` in the guide or this file that no context declares, and a guide code block marked `<!-- source: path -->` (a whole file) or `<!-- source: path#name -->` (the declaration, object property or call named `name`, with the comments directly above it) that differs from that shipping source.
+ - When you change the SDK, change its TSDoc and the guide in the same change. When the check names a guide block your change made stale, copy the new source into the guide; do not reword the source to fit the guide.
+ 
+diff --git a/packages/gui-extensions/README.md b/packages/gui-extensions/README.md
+index 6118b023ff42..e01e4e64eb34 100644
+--- a/packages/gui-extensions/README.md
++++ b/packages/gui-extensions/README.md
+@@ -13,7 +13,7 @@ flowchart LR
+   end
+   subgraph window["Each window (desktop or web)"]
+     wh["window host<br/>packages/app/src/runtime/extension"] --> we["renderer.tsx entries"]
+-    we -- "ctx.add(Point, item)" --> wh
++    we -- "ctx.add(Registry, item)" --> wh
+     we -- "Contract (in process)" --> other["other extensions"]
+   end
+   me -- "Ipc: methods, state, events<br/>(schemas over the bridge)" --> we
+@@ -24,7 +24,7 @@ flowchart LR
+ ```text
+ src/pairing/
+ ├── index.ts          Extension.define: id, provides, uses, requires, stores, i18n
+-├── contract.ts       tokens other code may import: Ipc, Contract, Point
++├── contract.ts       tokens other code may import: Ipc, Contract, Registry
+ ├── renderer.tsx      window entry, default export Setup<typeof definition>
+ ├── main.ts           main entry, default export MainSetup<typeof definition> (desktop only)
+ ├── page.tsx          heavy UI, loaded with lazy()
+@@ -54,20 +54,20 @@ Unit tests of logic that carries a contract sit beside the code as `*.test.ts`,
+ 
+ Setup receives one context. Components read the same object with `useExtension<typeof definition>()`.
+ 
+-| Member                | Window                                                                                      | Main                                   |
+-| --------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------- |
+-| Host APIs             | `ctx.layout`, `ctx.sessions`, `ctx.storage`, `ctx.desktop`, … (see the [catalog](#catalog)) | `ctx.storage`, `ctx.windows`, …        |
+-| Optional dependencies | `ctx.uses.name`: `Accessor<Live<T>>`, `provides` included                                   |                                        |
+-| Hard dependencies     | `ctx.requires.name`: `T`                                                                    |                                        |
+-| Declared stores       | `ctx.stores.name`: `Persisted`, or `(session) => Persisted`                                 | `ctx.stores.name`: `Persisted`, loaded |
+-| Contribute to a point | `ctx.add(Point, item)`                                                                      | `ctx.add(MenubarItem, item)`           |
+-| Provide a dependency  | `ctx.provide(Contract, impl)`                                                               | `ctx.provide(Ipc, impl)`               |
+-| Lifetime              | Solid's `onCleanup` and `ctx.signal`                                                        | `ctx.scope` (`signal`, `addFinalizer`) |
+-| Copy                  | `ctx.t(key, params)`, `ctx.plural(key, count)`                                              | the same                               |
++| Member                   | Window                                                                                      | Main                                   |
++| ------------------------ | ------------------------------------------------------------------------------------------- | -------------------------------------- |
++| Host APIs                | `ctx.layout`, `ctx.sessions`, `ctx.storage`, `ctx.desktop`, … (see the [catalog](#catalog)) | `ctx.storage`, `ctx.windows`, …        |
++| Optional dependencies    | `ctx.uses.name`: `Accessor<Live<T>>`, `provides` included                                   |                                        |
++| Hard dependencies        | `ctx.requires.name`: `T`                                                                    |                                        |
++| Declared stores          | `ctx.stores.name`: `Persisted`, or `(session) => Persisted`                                 | `ctx.stores.name`: `Persisted`, loaded |
++| Contribute to a registry | `ctx.add(Registry, item)`                                                                   | `ctx.add(MenubarItem, item)`           |
++| Provide a dependency     | `ctx.provide(Contract, impl)`                                                               | `ctx.provide(Ipc, impl)`               |
++| Lifetime                 | Solid's `onCleanup` and `ctx.signal`                                                        | `ctx.scope` (`signal`, `addFinalizer`) |
++| Copy                     | `ctx.t(key, params)`, `ctx.plural(key, count)`                                              | the same                               |
+ 
+ - Host APIs are getters: an API you never read costs nothing.
+ - No host API throws before the app interface mounts: reads return their documented defaults (`ctx.layout.ready()` is false), and writes such as `ctx.layout.open` wait, then apply in call order. A dialog `ctx.dialogs.open` opens meanwhile shows after the interface's first render.
+-- Points and contracts are tokens: `ctx.add(Command, …)`, `ctx.provide(FileTree, …)`.
++- Registries and contracts are tokens: `ctx.add(Command, …)`, `ctx.provide(FileTree, …)`.
+ - Reading a token you did not declare is a compile error. A key that names one token in `provides` and another in `uses` is one too.
+ - Bind each contract component with `bindExtension` during the provider's setup so `useExtension` reads the provider's context, not the consumer's. Props retain their getters. Leave data methods such as `Changes.diffs()` unwrapped.
+ 
+@@ -163,7 +163,7 @@ ctx.add(Command, {
+ | ------------------------------------------------ | ----------------------------------------------------------------------------------- |
+ | `Extension.define(definition)`                   | The manifest, typed so `Setup<typeof definition>` sees the declarations             |
+ | `Extension.compose(...definitions)`              | A process's list; rejects repeated extension ids and missing or duplicate providers |
+-| `Point.define<T>(id)`                            | A place your extension renders and others contribute to                             |
++| `Registry.define<T>(id)`                         | A list your extension owns and others contribute to                                 |
+ | `Contract.define<T, Id>(id)`                     | An in-process API one extension provides to others                                  |
+ | `Ipc.define(spec)` / `Ipc.ref<typeof T>(id)`     | The main ↔ window contract, or a reference to it that loads no schemas             |
+ | `Store.global` / `Store.session` / `Store.main`  | Declared window state the host loads before you read it, and main state             |
+@@ -203,20 +203,20 @@ Each line links to the file whose TSDoc covers every field.
+ 
+ SDK icon fields use `IconName` from `@opencode/ui/icons/catalog`, a dependency-free module with no Solid or CSS imports. The UI renderer reads that same catalog: there is no copied name list or dependency on a UI component's props, and no artwork in the general-purpose util package.
+ 
+-### Points
+-
+-| Point                               | Process | What an item is                                                                             |
+-| ----------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
+-| [`Command`](src/sdk/points.ts)      | window  | A palette command with an optional keybind and slash command                                |
+-| [`MenuItem`](src/sdk/points.ts)     | window  | An item of a host menu: the side panel + menu, Add server, a server row                     |
+-| [`Panel`](src/sdk/points.ts)        | window  | Tabs in the session's side region, or the dock                                              |
+-| [`SettingsPage`](src/sdk/points.ts) | window  | A settings page, a section on a host page, or rows in a host section                        |
+-| [`Server`](src/sdk/points.ts)       | window  | A source of servers, such as SSH hosts                                                      |
+-| [`LinkHandler`](src/sdk/points.ts)  | window  | Opens local links, such as file paths in messages                                           |
+-| [`TitlebarItem`](src/sdk/points.ts) | window  | A titlebar pill, or the dev channel badge as a toggle                                       |
+-| [`Slot`](src/sdk/points.ts)         | window  | Content for `window.bottom`, `session.header`, `session.panel.end`, `session.panel.sidebar` |
+-| [`Style`](src/sdk/points.ts)        | window  | CSS imported with `?inline`                                                                 |
+-| [`MenubarItem`](src/sdk/main.ts)    | main    | An item of the native app menu                                                              |
++### Registries
++
++| Registry                                | Process | What an item is                                                                             |
++| --------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
++| [`Command`](src/sdk/registries.ts)      | window  | A palette command with an optional keybind and slash command                                |
++| [`MenuItem`](src/sdk/registries.ts)     | window  | An item of a host menu: the side panel + menu, Add server, a server row                     |
++| [`Panel`](src/sdk/registries.ts)        | window  | Tabs in the session's side region, or the dock                                              |
++| [`SettingsPage`](src/sdk/registries.ts) | window  | A settings page, a section on a host page, or rows in a host section                        |
++| [`Server`](src/sdk/registries.ts)       | window  | A source of servers, such as SSH hosts                                                      |
++| [`LinkHandler`](src/sdk/registries.ts)  | window  | Opens local links, such as file paths in messages                                           |
++| [`TitlebarItem`](src/sdk/registries.ts) | window  | A titlebar pill, or the dev channel badge as a toggle                                       |
++| [`Slot`](src/sdk/registries.ts)         | window  | Content for `window.bottom`, `session.header`, `session.panel.end`, `session.panel.sidebar` |
++| [`Style`](src/sdk/registries.ts)        | window  | CSS imported with `?inline`                                                                 |
++| [`MenubarItem`](src/sdk/main.ts)        | main    | An item of the native app menu                                                              |
+ 
+ ### Host APIs
+ 
+@@ -425,7 +425,7 @@ legacy: ["summary"],
+ | Gate                       | Where                                                                                                            | Catches                                                                                                                                     |
+ | -------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+ | Composition compile checks | [`sdk/compose.typecheck.ts`](src/sdk/compose.typecheck.ts), [`builtins.typecheck.ts`](src/builtins.typecheck.ts) | Duplicate extension ids, missing or duplicate providers, wrong-process stores, readonly drafts, panel and slot inputs, no-input Ipc options |
+-| Point compile checks       | [`sdk/points.typecheck.ts`](src/sdk/points.typecheck.ts)                                                         | A `MenuItem` field its menu ignores                                                                                                         |
++| Registry compile checks    | [`sdk/registries.typecheck.ts`](src/sdk/registries.typecheck.ts)                                                 | A `MenuItem` field its menu ignores                                                                                                         |
+ | Graph matrix               | `packages/app/component-tests/extension-graph.spec.ts`                                                           | A `requires` cycle; a consumer that fails when one optional provider is disabled                                                            |
+ | Keeper suites              | `packages/app/e2e/regression/`                                                                                   | What the user sees, per product area                                                                                                        |
+ | Unit tests                 | `*.test.ts` beside the code                                                                                      | Pure logic with a contract: paths, migrations, protocols                                                                                    |
+@@ -655,7 +655,7 @@ Your own extension takes the same steps:
+ 
+ 1. **Pick the id.** It prefixes your commands, panel keys, stored keys and Ipc ids. A later rename needs the migrations under [Stored state](#stored-state).
+ 2. **Define it.** Create `src/<id>/index.ts` with `Extension.define({ id, i18n: { en } })`, and `src/<id>/i18n/en.ts` with your copy.
+-3. **Declare the tokens.** Put any token another extension or your main entry needs in `contract.ts`: a `Contract`, a `Point` or an `Ipc`. Your own tokens go in `provides`. What others provide goes in `uses`, or in `requires` only if the extension is meaningless without it.
++3. **Declare the tokens.** Put any token another extension or your main entry needs in `contract.ts`: a `Contract`, a `Registry` or an `Ipc`. Your own tokens go in `provides`. What others provide goes in `uses`, or in `requires` only if the extension is meaningless without it.
+ 4. **Write the window entry.** In `renderer.tsx`, a `Setup<typeof definition>` contributes with `ctx.add`, branches each action on `ctx.uses.<name>()`, runs side work in `createKeyed`, and keeps heavy UI behind `lazy()` with an `onIdle` preload.
+ 5. **Write the main entry, if you need Node or Electron.** In `main.ts`, a `MainSetup<typeof definition>` provides your Ipc with `ctx.provide` and tears down with `ctx.scope.addFinalizer`.
+ 6. **Declare your state.** Use `Store.global`, `Store.session` or `Store.main`, with a `from` for every older home of the value.
+diff --git a/packages/gui-extensions/src/sdk/core.ts b/packages/gui-extensions/src/sdk/core.ts
+index 5e9e301b6c0c..ac78f9c31507 100644
+--- a/packages/gui-extensions/src/sdk/core.ts
++++ b/packages/gui-extensions/src/sdk/core.ts
+@@ -153,19 +153,19 @@ declare const brand: unique symbol
+ declare const problem: unique symbol
+ 
+ /**
+- * A token kind: a named place that accepts contributions. The extension or host that owns the point decides how to
+- * render its items; others `ctx.add` to it. Define one with `Point.define`.
++ * A token kind: a typed list that accepts contributions. The extension or host that owns the registry decides how to
++ * use its items; others `ctx.add` to it. Define one with `Registry.define`.
+  *
+  * @example
+  * ```ts
+- * export const Badge = Point.define<{ readonly label: string }>("details.badge")
++ * export const Badge = Registry.define<{ readonly label: string }>("details.badge")
+  * ctx.add(Badge, { label: "New" })
+  * ```
+  */
+-export interface Point<T> {
++export interface Registry<T> {
+   /** The token kind. */
+-  readonly kind: "point"
+-  /** The point's id; contributions are grouped by it. */
++  readonly kind: "registry"
++  /** The registry's id; contributions are grouped by it. */
+   readonly id: string
+   /** Carries the item type `T` at compile time only; never set. */
+   readonly [brand]?: T
+@@ -477,10 +477,10 @@ export interface BaseContext {
+    */
+   readonly id: string
+   /**
+-   * Contributes an item to a point. The host withdraws it with the current owner (a `createKeyed` run or a component),
+-   * else with the extension; made after that owner or the extension ended, it is withdrawn at once.
++   * Contributes an item to a registry. The host withdraws it with the current owner (a `createKeyed` run or a
++   * component), else with the extension; made after that owner or the extension ended, it is withdrawn at once.
+    *
+-   * @param point - Where the item goes, such as `Command` or `TitlebarItem`.
++   * @param registry - Where the item goes, such as `Command` or `TitlebarItem`.
+    * @param item - The item, or a function returning it. A function is reactive in the window (main reads it on every
+    *   `list`); return undefined to withdraw the item until the function returns one again.
+    * @returns Withdraws the item early.
+@@ -491,19 +491,19 @@ export interface BaseContext {
+    * ctx.add(TitlebarItem, () => (shown() ? pill : undefined))
+    * ```
+    */
+-  add<T>(point: Point<T>, item: T | (() => T | undefined)): Cleanup
++  add<T>(registry: Registry<T>, item: T | (() => T | undefined)): Cleanup
+   /**
+-   * The items every extension contributed to a point, in contribution order. Reactive in the window. Use it for a
+-   * point your extension owns and renders.
++   * The items every extension contributed to a registry, in contribution order. Reactive in the window. Use it for a
++   * registry your extension owns.
+    *
+-   * @param point - The point to read.
++   * @param registry - The registry to read.
+    *
+    * @example
+    * ```ts
+    * const badges = () => ctx.list(Badge)
+    * ```
+    */
+-  list<T>(point: Point<T>): readonly T[]
++  list<T>(registry: Registry<T>): readonly T[]
+   /**
+    * Translates a key from the extension's catalog in the current locale, then from the app's shared keys
+    * (`common.*`). Reactive in the window. Main returns the key itself when no catalog has it.
+@@ -916,20 +916,20 @@ export const Extension = {
+ }
+ 
+ /**
+- * Defines points.
++ * Defines registries.
+  *
+  * @example
+  * ```ts
+- * export const Badge = Point.define<{ readonly label: string }>("details.badge")
++ * export const Badge = Registry.define<{ readonly label: string }>("details.badge")
+  * ```
+  */
+-export const Point = {
++export const Registry = {
+   /**
+-   * Creates a point token.
++   * Creates a registry token.
+    *
+-   * @param id - The point's id; start it with your extension's id.
++   * @param id - The registry's id; start it with your extension's id.
+    */
+-  define: <T>(id: string): Point<T> => ({ kind: "point", id }),
++  define: <T>(id: string): Registry<T> => ({ kind: "registry", id }),
+ }
+ 
+ /**
+diff --git a/packages/gui-extensions/src/sdk/host-apis.ts b/packages/gui-extensions/src/sdk/host-apis.ts
+index 272363faf4b5..b5372cd9817e 100644
+--- a/packages/gui-extensions/src/sdk/host-apis.ts
++++ b/packages/gui-extensions/src/sdk/host-apis.ts
+@@ -4,7 +4,7 @@ import type { Schema } from "effect"
+ import type { JSX } from "solid-js"
+ import type { Store } from "solid-js/store"
+ import type { Cleanup, OS, Persisted, StoreFrom } from "./core"
+-import type { IconName, Link } from "./points"
++import type { IconName, Link } from "./registries"
+ 
+ /**
+  * A server the app lists. One ref per id that follows the live connection: read `client`, `data` and `url` from it
+diff --git a/packages/gui-extensions/src/sdk/index.ts b/packages/gui-extensions/src/sdk/index.ts
+index 78cba9988547..481fac4f886d 100644
+--- a/packages/gui-extensions/src/sdk/index.ts
++++ b/packages/gui-extensions/src/sdk/index.ts
+@@ -1,6 +1,6 @@
+ export * from "./core"
+ 
+-export * from "./points"
++export * from "./registries"
+ 
+ export * from "./host-apis"
+ 
+diff --git a/packages/gui-extensions/src/sdk/main.ts b/packages/gui-extensions/src/sdk/main.ts
+index f3c4e6579801..544fe0bcb5cf 100644
+--- a/packages/gui-extensions/src/sdk/main.ts
++++ b/packages/gui-extensions/src/sdk/main.ts
+@@ -1,7 +1,7 @@
+ import type { BrowserWindow, NativeImage, WebContentsView } from "electron"
+ import type { Schema } from "effect"
+ import {
+-  Point,
++  Registry,
+   type BaseContext,
+   type Build,
+   type Cleanup,
+@@ -393,8 +393,8 @@ export interface MenubarItem {
+ }
+ 
+ /**
+- * A point: an item of the native app menu, contributed from a main entry. Windows without a native menubar show it in
+- * the in-app menu.
++ * The registry of native app menu items, contributed from main entries. Windows without a native menubar show them
++ * in the in-app menu.
+  *
+  * @example
+  * ```ts
+@@ -408,4 +408,4 @@ export interface MenubarItem {
+  * })
+  * ```
+  */
+-export const MenubarItem = Point.define<MenubarItem>("menubar-item")
++export const MenubarItem = Registry.define<MenubarItem>("menubar-item")
+diff --git a/packages/gui-extensions/src/sdk/points.ts b/packages/gui-extensions/src/sdk/registries.ts
+similarity index 95%
+rename from packages/gui-extensions/src/sdk/points.ts
+rename to packages/gui-extensions/src/sdk/registries.ts
+index ccbc27653cd4..15ba19429b02 100644
+--- a/packages/gui-extensions/src/sdk/points.ts
++++ b/packages/gui-extensions/src/sdk/registries.ts
+@@ -1,6 +1,6 @@
+ import type { JSX } from "solid-js"
+ import type { IconName } from "@opencode/ui/icons/catalog"
+-import { Point } from "./core"
++import { Registry } from "./core"
+ import type { SessionRef, MountedSession, SessionScreen } from "./host-apis"
+ 
+ /** The name of a shared icon; derived from the dependency-free UI artwork catalog, not a component's props. */
+@@ -593,7 +593,7 @@ export type Slot = {
+ }[keyof SlotMap]
+ 
+ /**
+- * A point: a command in the palette, with an optional keybind and slash command.
++ * The registry of palette commands, each with an optional keybind and slash command.
+  *
+  * @example
+  * ```ts
+@@ -607,20 +607,20 @@ export type Slot = {
+  * })
+  * ```
+  */
+-export const Command = Point.define<Command>("command")
++export const Command = Registry.define<Command>("command")
+ 
+ /**
+- * A point: an item of a host menu.
++ * The registry of host menu items.
+  *
+  * @example
+  * ```ts
+  * ctx.add(MenuItem, { menu: "session.panel", id: "open", title: ctx.t("open"), icon: "folder", run: () => open() })
+  * ```
+  */
+-export const MenuItem = Point.define<MenuItem>("menu-item")
++export const MenuItem = Registry.define<MenuItem>("menu-item")
+ 
+ /**
+- * A point: tabs in the session's side region, or the dock.
++ * The registry of panels: tabs in the session's side region, or the dock.
+  *
+  * @example
+  * ```ts
+@@ -632,60 +632,60 @@ export const MenuItem = Point.define<MenuItem>("menu-item")
+  * })
+  * ```
+  */
+-export const Panel = Point.define<Panel>("panel")
++export const Panel = Registry.define<Panel>("panel")
+ 
+ /**
+- * A point: a settings page, a section on a host page, or rows in a host section.
++ * The registry of settings pages, sections on host pages, and rows in host sections.
+  *
+  * @example
+  * ```ts
+  * ctx.add(SettingsPage, { id: "updates", page: "general", title: ctx.t("title"), render: () => <Section /> })
+  * ```
+  */
+-export const SettingsPage = Point.define<SettingsPage>("settings-page")
++export const SettingsPage = Registry.define<SettingsPage>("settings-page")
+ 
+ /**
+- * A point: a source of servers the app lists.
++ * The registry of server sources the app lists.
+  *
+  * @example
+  * ```ts
+  * ctx.add(Server, () => ({ ready: loaded(), entries: hosts().map(toEntry) }))
+  * ```
+  */
+-export const Server = Point.define<Server>("server")
++export const Server = Registry.define<Server>("server")
+ 
+ /**
+- * A point: opens local links, such as file paths in messages.
++ * The registry of handlers that open local links, such as file paths in messages.
+  *
+  * @example
+  * ```ts
+  * ctx.add(LinkHandler, { match: (link) => link.href.endsWith(".md"), open: (link) => preview(link) })
+  * ```
+  */
+-export const LinkHandler = Point.define<LinkHandler>("link-handler")
++export const LinkHandler = Registry.define<LinkHandler>("link-handler")
+ 
+ /**
+- * A point: a titlebar pill, or the dev channel badge as a toggle.
++ * The registry of titlebar pills, and of the toggle the dev channel badge runs.
+  *
+  * @example
+  * ```ts
+  * ctx.add(TitlebarItem, () => (ready() ? { id: "update", label: ctx.t("restart"), run: install } : undefined))
+  * ```
+  */
+-export const TitlebarItem = Point.define<TitlebarItem>("titlebar-item")
++export const TitlebarItem = Registry.define<TitlebarItem>("titlebar-item")
+ 
+ /**
+- * A point: content for one of the host's slots (`SlotMap`).
++ * The registry of content for the host's slots (`SlotMap`).
+  *
+  * @example
+  * ```ts
+  * ctx.add(Slot, { at: "session.header", render: (input) => <Usage session={input.session} /> })
+  * ```
+  */
+-export const Slot = Point.define<Slot>("slot")
++export const Slot = Registry.define<Slot>("slot")
+ 
+ /**
+- * A point: CSS the host adds to the document while the item is contributed. Import the file with `?inline`.
++ * The registry of CSS the host adds to the document while each item is contributed. Import the file with `?inline`.
+  *
+  * @example
+  * ```ts
+@@ -693,4 +693,4 @@ export const Slot = Point.define<Slot>("slot")
+  * ctx.add(Style, css)
+  * ```
+  */
+-export const Style = Point.define<string>("style")
++export const Style = Registry.define<string>("style")
+diff --git a/packages/gui-extensions/src/sdk/points.typecheck.ts b/packages/gui-extensions/src/sdk/registries.typecheck.ts
+similarity index 93%
+rename from packages/gui-extensions/src/sdk/points.typecheck.ts
+rename to packages/gui-extensions/src/sdk/registries.typecheck.ts
+index b52870717b85..95b7f9b0371a 100644
+--- a/packages/gui-extensions/src/sdk/points.typecheck.ts
++++ b/packages/gui-extensions/src/sdk/registries.typecheck.ts
+@@ -1,4 +1,4 @@
+-// Type-level contract of the points, checked by `bun typecheck`. Nothing imports this file. Each `@ts-expect-error`
++// Type-level contract of the registries, checked by `bun typecheck`. Nothing imports this file. Each `@ts-expect-error`
+ // fails the typecheck if its line stops being an error.
+ import { Extension, MenuItem, TitlebarItem, type Setup } from "./index"
+ 

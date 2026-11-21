@@ -1,0 +1,149 @@
+diff --git a/docs/reference/configuration.md b/docs/reference/configuration.md
+index b9874e017b5..b4dfe3b9c77 100644
+--- a/docs/reference/configuration.md
++++ b/docs/reference/configuration.md
+@@ -749,6 +749,12 @@ their corresponding top-level category object in your `settings.json` file.
+   - **Default:** `undefined`
+   - **Requires restart:** Yes
+ 
++- **`tools.trusted`** (array):
++  - **Description:** Tool names that bypass the confirmation dialog. Use this
++    for trusted workflows (for example ["save_memory"]).
++  - **Default:** `undefined`
++  - **Requires restart:** Yes
++
+ - **`tools.exclude`** (array):
+   - **Description:** Tool names to exclude from discovery.
+   - **Default:** `undefined`
+diff --git a/packages/cli/src/config/config.test.ts b/packages/cli/src/config/config.test.ts
+index 809b31cd827..08b287f5e79 100644
+--- a/packages/cli/src/config/config.test.ts
++++ b/packages/cli/src/config/config.test.ts
+@@ -3201,10 +3201,10 @@ describe('Policy Engine Integration in loadCliConfig', () => {
+     vi.restoreAllMocks();
+   });
+ 
+-  it('should pass merged allowed tools from CLI and settings to createPolicyEngineConfig', async () => {
++  it('should pass merged allowed tools from CLI, tools.allowed, and tools.trusted to createPolicyEngineConfig', async () => {
+     process.argv = ['node', 'script.js', '--allowed-tools', 'cli-tool'];
+     const settings = createTestMergedSettings({
+-      tools: { allowed: ['settings-tool'] },
++      tools: { allowed: ['settings-tool'], trusted: ['save_memory'] },
+     });
+     const argv = await parseArguments(createTestMergedSettings());
+ 
+@@ -3213,7 +3213,7 @@ describe('Policy Engine Integration in loadCliConfig', () => {
+     expect(ServerConfig.createPolicyEngineConfig).toHaveBeenCalledWith(
+       expect.objectContaining({
+         tools: expect.objectContaining({
+-          allowed: expect.arrayContaining(['cli-tool']),
++          allowed: expect.arrayContaining(['cli-tool', 'save_memory']),
+         }),
+       }),
+       expect.anything(),
+diff --git a/packages/cli/src/config/config.ts b/packages/cli/src/config/config.ts
+index 38ab62ac225..0c2696714ab 100755
+--- a/packages/cli/src/config/config.ts
++++ b/packages/cli/src/config/config.ts
+@@ -632,7 +632,12 @@ export async function loadCliConfig(
+     (!isHeadlessMode({ prompt: argv.prompt, query: argv.query }) &&
+       !argv.isCommand);
+ 
+-  const allowedTools = argv.allowedTools || settings.tools?.allowed || [];
++  const deprecatedAllowedTools =
++    argv.allowedTools || settings.tools?.allowed || [];
++  const trustedTools = settings.tools?.trusted || [];
++  const allowedTools = [
++    ...new Set([...deprecatedAllowedTools, ...trustedTools]),
++  ];
+   const allowedToolsSet = new Set(allowedTools);
+ 
+   // In non-interactive mode, exclude tools that require a prompt.
+diff --git a/packages/cli/src/config/settingsSchema.ts b/packages/cli/src/config/settingsSchema.ts
+index cbe2df5f301..7918b2cb3ef 100644
+--- a/packages/cli/src/config/settingsSchema.ts
++++ b/packages/cli/src/config/settingsSchema.ts
+@@ -1217,6 +1217,19 @@ const SETTINGS_SCHEMA = {
+         showInDialog: false,
+         items: { type: 'string' },
+       },
++      trusted: {
++        type: 'array',
++        label: 'Trusted Tools',
++        category: 'Tools',
++        requiresRestart: true,
++        default: undefined as string[] | undefined,
++        description: oneLine`
++          Tool names that bypass the confirmation dialog.
++          Use this for trusted workflows (for example ["save_memory"]).
++        `,
++        showInDialog: false,
++        items: { type: 'string' },
++      },
+       exclude: {
+         type: 'array',
+         label: 'Exclude Tools',
+diff --git a/packages/core/src/services/FolderTrustDiscoveryService.test.ts b/packages/core/src/services/FolderTrustDiscoveryService.test.ts
+index b6d7d7734a8..7b56e1ac31b 100644
+--- a/packages/core/src/services/FolderTrustDiscoveryService.test.ts
++++ b/packages/core/src/services/FolderTrustDiscoveryService.test.ts
+@@ -76,7 +76,7 @@ describe('FolderTrustDiscoveryService', () => {
+ 
+     const settings = {
+       tools: {
+-        allowed: ['git'],
++        trusted: ['save_memory'],
+         sandbox: false,
+       },
+       experimental: {
+@@ -96,7 +96,7 @@ describe('FolderTrustDiscoveryService', () => {
+     const results = await FolderTrustDiscoveryService.discover(tempDir);
+ 
+     expect(results.securityWarnings).toContain(
+-      'This project auto-approves certain tools (tools.allowed).',
++      'This project auto-approves certain tools (tools.allowed/tools.trusted).',
+     );
+     expect(results.securityWarnings).toContain(
+       'This project enables autonomous agents (enableAgents).',
+diff --git a/packages/core/src/services/FolderTrustDiscoveryService.ts b/packages/core/src/services/FolderTrustDiscoveryService.ts
+index e81273af220..469e456f284 100644
+--- a/packages/core/src/services/FolderTrustDiscoveryService.ts
++++ b/packages/core/src/services/FolderTrustDiscoveryService.ts
+@@ -169,11 +169,15 @@ export class FolderTrustDiscoveryService {
+         : undefined;
+ 
+     const allowedTools = tools?.['allowed'];
++    const trustedTools = tools?.['trusted'];
+ 
+     const checks = [
+       {
+-        condition: Array.isArray(allowedTools) && allowedTools.length > 0,
+-        message: 'This project auto-approves certain tools (tools.allowed).',
++        condition:
++          (Array.isArray(allowedTools) && allowedTools.length > 0) ||
++          (Array.isArray(trustedTools) && trustedTools.length > 0),
++        message:
++          'This project auto-approves certain tools (tools.allowed/tools.trusted).',
+       },
+       {
+         condition: experimental?.['enableAgents'] === true,
+diff --git a/schemas/settings.schema.json b/schemas/settings.schema.json
+index 7ef861d8822..9677fde61cb 100644
+--- a/schemas/settings.schema.json
++++ b/schemas/settings.schema.json
+@@ -1267,6 +1267,15 @@
+             "type": "string"
+           }
+         },
++        "trusted": {
++          "title": "Trusted Tools",
++          "description": "Tool names that bypass the confirmation dialog. Use this for trusted workflows (for example [\"save_memory\"]).",
++          "markdownDescription": "Tool names that bypass the confirmation dialog. Use this for trusted workflows (for example [\"save_memory\"]).\n\n- Category: `Tools`\n- Requires restart: `yes`",
++          "type": "array",
++          "items": {
++            "type": "string"
++          }
++        },
+         "exclude": {
+           "title": "Exclude Tools",
+           "description": "Tool names to exclude from discovery.",

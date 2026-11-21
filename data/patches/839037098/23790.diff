@@ -1,0 +1,596 @@
+diff --git a/.changeset/cold-buses-dance.md b/.changeset/cold-buses-dance.md
+new file mode 100644
+index 000000000000..5be405a31c4c
+--- /dev/null
++++ b/.changeset/cold-buses-dance.md
+@@ -0,0 +1,17 @@
++---
++'@mastra/server': minor
++---
++
++Deprecated thread grouping on the advanced trace-query endpoint. Grouped requests remain supported until the next major release; use the thread-query endpoint for new integrations.
++
++**Before:**
++
++```ts
++await mastraClient.queryTraces({ timeRange, group: { by: ['threadId'] } });
++```
++
++**After:**
++
++```ts
++await mastraClient.queryTraceThreads({ traces: { timeRange } });
++```
+diff --git a/.changeset/moody-oranges-cry.md b/.changeset/moody-oranges-cry.md
+new file mode 100644
+index 000000000000..fd3564632983
+--- /dev/null
++++ b/.changeset/moody-oranges-cry.md
+@@ -0,0 +1,21 @@
++---
++'@mastra/core': minor
++---
++
++Deprecated the `group` option on the trace-query request contract. Grouping remains functional until the next major release; use the `queryThreads` thread-query contract for new code (exposed as `queryTraceThreads()` in `@mastra/client-js`).
++
++**Before:**
++
++```ts
++import type { TraceQueryRequest } from '@mastra/core/storage';
++
++const request: TraceQueryRequest = { timeRange, group: { by: ['threadId'] } };
++```
++
++**After:**
++
++```ts
++import type { QueryThreadsInput } from '@mastra/core/storage';
++
++const input: QueryThreadsInput = { traces: { timeRange } };
++```
+diff --git a/.changeset/smart-webs-wonder.md b/.changeset/smart-webs-wonder.md
+new file mode 100644
+index 000000000000..dc18a60c3fc6
+--- /dev/null
++++ b/.changeset/smart-webs-wonder.md
+@@ -0,0 +1,17 @@
++---
++'@mastra/client-js': minor
++---
++
++Deprecated grouped results from `queryTraces()`. Existing grouped queries continue to work until the next major release; use `queryTraceThreads()` for new code.
++
++**Before:**
++
++```ts
++await mastraClient.queryTraces({ timeRange, group: { by: ['threadId'] } });
++```
++
++**After:**
++
++```ts
++await mastraClient.queryTraceThreads({ traces: { timeRange } });
++```
+diff --git a/client-sdks/client-js/src/client.ts b/client-sdks/client-js/src/client.ts
+index 015875d32f11..0c6d3595fba3 100644
+--- a/client-sdks/client-js/src/client.ts
++++ b/client-sdks/client-js/src/client.ts
+@@ -33,6 +33,7 @@ import type {
+   ListScoresBySpanParams,
+   QueryTraceThreadsInput,
+   QueryTraceThreadsResult,
++  QueryTracesGroupedInput,
+   QueryTracesInput,
+   QueryTracesDeltaInput,
+   QueryTracesKeysetInput,
+@@ -45,7 +46,8 @@ import type {
+   ListTracesArgs,
+   ListTracesResponse,
+   ListTracesLightResponse,
+-  TraceQueryRequest,
++  TraceQueryGroupResponse,
++  TraceQueryKeysetTraceResponse,
+   TraceQueryResponse,
+   GetTraceQueryFieldsArgs,
+   GetTraceQueryFieldsResponse,
+@@ -1119,10 +1121,14 @@ export class MastraClient extends BaseResource {
+     return this.observability.listTraces(params);
+   }
+ 
+-  /** Queries completed logical traces using recursive trace and related-record predicates. */
++  /**
++   * Queries completed logical traces using recursive trace and related-record predicates.
++   * Grouped results remain supported but are deprecated. Use `queryTraceThreads()` to retrieve thread identities.
++   */
++  queryTraces(params: QueryTracesGroupedInput): Promise<TraceQueryGroupResponse>;
+   queryTraces(params: QueryTracesDeltaInput): Promise<Extract<TraceQueryResponse, { delta: unknown }>>;
+   queryTraces(params: QueryTracesPaginatedInput): Promise<Extract<TraceQueryResponse, { pagination: unknown }>>;
+-  queryTraces(params: QueryTracesKeysetInput): Promise<Extract<TraceQueryResponse, { page: unknown }>>;
++  queryTraces(params: QueryTracesKeysetInput): Promise<TraceQueryKeysetTraceResponse>;
+   queryTraces(params: QueryTracesInput): Promise<TraceQueryResponse>;
+   queryTraces(params: QueryTracesInput): Promise<TraceQueryResponse> {
+     return this.observability.queryTraces(params);
+diff --git a/client-sdks/client-js/src/index.ts b/client-sdks/client-js/src/index.ts
+index 79cd29962eaf..e357938b8fb8 100644
+--- a/client-sdks/client-js/src/index.ts
++++ b/client-sdks/client-js/src/index.ts
+@@ -49,9 +49,13 @@ export type {
+   GetTraceQueryValuesArgs,
+   GetTraceQueryValuesResponse,
+   TraceQueryCanonicalFieldDescriptor,
++  TraceQueryGroupResponse,
++  TraceQueryKeysetTraceResponse,
+   TraceQueryObservedFieldDescriptor,
+   TraceQueryOperator,
+   TraceQueryPredicateScope,
++  TraceQueryResponse,
++  TraceQueryTraceResponse,
+   TraceQueryValueKind,
+ } from './resources/observability-route-types';
+ export type {
+diff --git a/client-sdks/client-js/src/resources/observability-route-types.ts b/client-sdks/client-js/src/resources/observability-route-types.ts
+index 7c50ab6b8805..fb6f8cb3e5f2 100644
+--- a/client-sdks/client-js/src/resources/observability-route-types.ts
++++ b/client-sdks/client-js/src/resources/observability-route-types.ts
+@@ -20,7 +20,10 @@ export type ListTracesArgs = ListArgs<Query<'GET /observability/traces'>>;
+ export type ListTracesResponse = Response<'GET /observability/traces'>;
+ export type ListTracesLightResponse = Response<'GET /observability/traces/light'>;
+ export type TraceQueryRequest = Body<'POST /observability/traces/query'>;
+-export type TraceQueryResponse = Extract<Response<'POST /observability/traces/query'>, { traces: unknown[] }>;
++export type TraceQueryResponse = Response<'POST /observability/traces/query'>;
++export type TraceQueryTraceResponse = Extract<TraceQueryResponse, { traces: unknown[] }>;
++export type TraceQueryKeysetTraceResponse = Extract<TraceQueryTraceResponse, { page: { next: string | null } }>;
++export type TraceQueryGroupResponse = Extract<TraceQueryResponse, { groups: unknown[] }>;
+ export type GetTraceQueryFieldsArgs = Body<'POST /observability/traces/query/fields'>;
+ export type GetTraceQueryFieldsResponse = Extract<
+   Response<'POST /observability/traces/query/fields'>,
+diff --git a/client-sdks/client-js/src/resources/observability.test.ts b/client-sdks/client-js/src/resources/observability.test.ts
+index 4ccc8daa2801..4eabe9c11b96 100644
+--- a/client-sdks/client-js/src/resources/observability.test.ts
++++ b/client-sdks/client-js/src/resources/observability.test.ts
+@@ -7,7 +7,7 @@ import type {
+ } from '@mastra/core/storage';
+ import { describe, expect, expectTypeOf, beforeEach, it, vi } from 'vitest';
+ import { MastraClient } from '../client';
+-import type { QueryTraceThreadsResult } from './observability';
++import type { QueryTraceThreadsResult, QueryTracesGroupedInput, QueryTracesInput } from './observability';
+ 
+ // Mock fetch globally
+ global.fetch = vi.fn();
+@@ -486,6 +486,40 @@ describe('Observability Methods', () => {
+   });
+ 
+   describe('queryTraces()', () => {
++    it('should reject mixed pagination modes at the type boundary', () => {
++      expectTypeOf<{
++        timeRange: { from: string; to: string };
++        page: { limit: number };
++        pagination: { page: number; perPage: number };
++      }>().not.toMatchTypeOf<QueryTracesInput>();
++      expectTypeOf<{
++        timeRange: { from: string; to: string };
++        group: { by: ['threadId'] };
++        pagination: { page: number; perPage: number };
++      }>().not.toMatchTypeOf<QueryTracesInput>();
++    });
++
++    it('should continue to post deprecated grouped queries with group result types', async () => {
++      mockSuccessfulResponse();
++      const request: QueryTracesGroupedInput = {
++        timeRange: { from: '2026-08-01T00:00:00Z', to: '2026-09-01T00:00:00Z' },
++        group: { by: ['threadId'] },
++        page: { limit: 25 },
++      };
++
++      const result = await client.queryTraces(request);
++
++      expectTypeOf(result).toEqualTypeOf<TraceQueryGroupResponse>();
++      expect(global.fetch).toHaveBeenCalledWith(
++        `${clientOptions.baseUrl}/api/observability/traces/query`,
++        expect.objectContaining({
++          method: 'POST',
++          headers: expect.objectContaining({ ...clientOptions.headers, 'content-type': 'application/json' }),
++          body: JSON.stringify(request),
++        }),
++      );
++    });
++
+     it('posts delta cursor and limit unchanged and exposes delta metadata directly', async () => {
+       mockSuccessfulResponse({ traces: [], delta: { limit: 5, hasMore: false }, deltaCursor: 'next' });
+       const request = {
+diff --git a/client-sdks/client-js/src/resources/observability.ts b/client-sdks/client-js/src/resources/observability.ts
+index 766d6b450fdc..dab14414ec26 100644
+--- a/client-sdks/client-js/src/resources/observability.ts
++++ b/client-sdks/client-js/src/resources/observability.ts
+@@ -12,6 +12,9 @@ import type {
+   ListTracesLightResponse,
+   TraceQueryRequest,
+   TraceQueryResponse,
++  TraceQueryTraceResponse,
++  TraceQueryKeysetTraceResponse,
++  TraceQueryGroupResponse,
+   GetTraceQueryFieldsArgs,
+   GetTraceQueryFieldsResponse,
+   GetTraceQueryValuesArgs,
+@@ -131,10 +134,10 @@ type QueryTracesBaseInput = Omit<
+   'group' | 'where' | 'page' | 'pagination' | 'mode' | 'after' | 'limit'
+ > & {
+   where?: TraceQueryPredicate;
+-  group?: never;
+ };
+ 
+ export type QueryTracesKeysetInput = QueryTracesBaseInput & {
++  group?: never;
+   page?: TraceQueryRequest['page'];
+   pagination?: never;
+   mode?: never;
+@@ -143,6 +146,7 @@ export type QueryTracesKeysetInput = QueryTracesBaseInput & {
+ };
+ 
+ export type QueryTracesPaginatedInput = QueryTracesBaseInput & {
++  group?: never;
+   page?: never;
+   pagination: NonNullable<TraceQueryRequest['pagination']>;
+   mode?: never;
+@@ -151,6 +155,7 @@ export type QueryTracesPaginatedInput = QueryTracesBaseInput & {
+ };
+ 
+ export type QueryTracesDeltaInput = Omit<QueryTracesBaseInput, 'orderBy'> & {
++  group?: never;
+   mode: 'delta';
+   after?: string;
+   limit?: number;
+@@ -158,7 +163,22 @@ export type QueryTracesDeltaInput = Omit<QueryTracesBaseInput, 'orderBy'> & {
+   pagination?: never;
+   orderBy?: never;
+ };
+-export type QueryTracesInput = QueryTracesKeysetInput | QueryTracesPaginatedInput | QueryTracesDeltaInput;
++
++export type QueryTracesGroupedInput = QueryTracesBaseInput & {
++  /**
++   * @deprecated Use `queryTraceThreads()` instead. Grouped trace queries remain supported until the next major release.
++   */
++  group: NonNullable<TraceQueryRequest['group']>;
++  page?: TraceQueryRequest['page'];
++  pagination?: never;
++  mode?: never;
++  after?: never;
++  limit?: never;
++  orderBy?: never;
++};
++
++export type QueryTracesUngroupedInput = QueryTracesKeysetInput | QueryTracesPaginatedInput | QueryTracesDeltaInput;
++export type QueryTracesInput = QueryTracesUngroupedInput | QueryTracesGroupedInput;
+ export type QueryTraceThreadsInput = QueryThreadsInput;
+ export type QueryTraceThreadsResult = QueryThreadsResult;
+ 
+@@ -276,12 +296,15 @@ export class Observability extends BaseResource {
+   /**
+    * Queries completed logical traces using recursive trace and related-record predicates.
+    *
++   * Grouped results remain supported but are deprecated. Use `queryTraceThreads()` to retrieve thread identities.
++   *
+    * @param params - Advanced trace query, including its required time range
+    * @returns Matching lightweight traces
+    */
++  queryTraces(params: QueryTracesGroupedInput): Promise<TraceQueryGroupResponse>;
+   queryTraces(params: QueryTracesDeltaInput): Promise<Extract<TraceQueryResponse, { delta: unknown }>>;
+   queryTraces(params: QueryTracesPaginatedInput): Promise<Extract<TraceQueryResponse, { pagination: unknown }>>;
+-  queryTraces(params: QueryTracesKeysetInput): Promise<Extract<TraceQueryResponse, { page: unknown }>>;
++  queryTraces(params: QueryTracesKeysetInput): Promise<TraceQueryKeysetTraceResponse>;
+   queryTraces(params: QueryTracesInput): Promise<TraceQueryResponse>;
+   queryTraces(params: QueryTracesInput): Promise<TraceQueryResponse> {
+     return this.request('/observability/traces/query', { method: 'POST', body: params });
+diff --git a/docs/src/content/en/reference/observability/tracing/trace-query.mdx b/docs/src/content/en/reference/observability/tracing/trace-query.mdx
+index 5f5b99d70d92..f9bceb602ae4 100644
+--- a/docs/src/content/en/reference/observability/tracing/trace-query.mdx
++++ b/docs/src/content/en/reference/observability/tracing/trace-query.mdx
+@@ -12,6 +12,12 @@ Use `queryTraces()` or `POST /api/observability/traces/query` to find completed
+ 
+ Both endpoints use the same authentication as other observability routes and require the `observability:read` permission. The configured observability store must support the requested trace-query or thread-query operation.
+ 
++:::warning[Thread grouping is deprecated]
++
++The `group` option remains supported until the next major release. Use [`queryTraceThreads()`](/reference/client-js/observability) to retrieve matching thread identities in new code.
++
++:::
++
+ ## Query traces with the client SDK
+ 
+ Pass the query to `queryTraces()`:
+@@ -244,7 +250,8 @@ Both routes require `observability:read` and use the configured observability st
+ | - | - | - |
+ | `timeRange` | Yes | Trace start-time boundary. `from` is inclusive and `to` is exclusive. Both values must be ISO timestamps, `from` must be earlier than `to`, and the range can't exceed 31 days. |
+ | `where` | No | Recursive trace predicate. Supports scalar conditions and `spans`, `scores`, and `feedback` `some` or `none` clauses. |
+-| `orderBy` | No | One item ordering results by `startedAt` or `endedAt`, in `asc` or `desc` order. Defaults to `startedAt desc`. Not accepted in delta mode. |
++| `group` | No | **Deprecated.** Set to `{ by: ['threadId'] }` to return distinct non-null thread IDs. Use `queryTraceThreads()` for new code. |
++| `orderBy` | No | One item ordering ungrouped results by `startedAt` or `endedAt`, in `asc` or `desc` order. Defaults to `startedAt desc`. Not accepted with `group` or in delta mode. |
+ | `page` | No | `{ limit, after }`. `limit` defaults to 100 and has a maximum of 1000. Pass the opaque `page.next` value as `after`. |
+ | `pagination` | No | Numbered pages: `{ page, perPage }`. Defaults to page 0 and 10 results. `perPage` has a maximum of 100. |
+ | `mode` | No | Set to `'delta'` to poll using a delta cursor instead of `page` or `pagination`. |
+@@ -520,6 +527,28 @@ An ungrouped query returns only lightweight completed traces:
+ }
+ ```
+ 
++A grouped trace query still returns distinct non-null thread IDs in ascending order. Grouping remains supported until the next major release:
++
++```typescript
++const timeRange = {
++  from: '2026-08-01T00:00:00.000Z',
++  to: '2026-08-08T00:00:00.000Z',
++}
++
++// Deprecated
++const legacyResult = await mastraClient.queryTraces({
++  timeRange,
++  group: { by: ['threadId'] },
++})
++// { groups: [{ threadId: 'thread-123' }], page: { next: null } }
++
++// Replacement
++const result = await mastraClient.queryTraceThreads({
++  traces: { timeRange },
++})
++// { threads: [{ threadId: 'thread-123' }], page: { next: null } }
++```
++
+ A thread query returns distinct non-null thread IDs in ordinal ascending order:
+ 
+ ```json
+diff --git a/packages/core/src/storage/domains/observability/trace-query.ts b/packages/core/src/storage/domains/observability/trace-query.ts
+index 71c0df68c103..699db28f1a28 100644
+--- a/packages/core/src/storage/domains/observability/trace-query.ts
++++ b/packages/core/src/storage/domains/observability/trace-query.ts
+@@ -266,6 +266,9 @@ const traceQueryRequestObjectSchema = z
+   .object({
+     timeRange: traceQueryTimeRangeSchema,
+     where: traceQueryPredicateSchema.optional(),
++    /**
++     * @deprecated Use `queryThreads()` instead. Grouped trace queries remain supported until the next major release.
++     */
+     group: z
+       .object({ by: z.tuple([z.literal('threadId')]) })
+       .strict()
+@@ -380,6 +383,9 @@ export const traceQueryPaginatedTraceResponseSchema = z
+ export const traceQueryDeltaTraceResponseSchema = z
+   .object({ traces: z.array(traceQueryTraceSchema), delta: deltaInfoSchema, deltaCursor: deltaCursorSchema })
+   .strict();
++/**
++ * @deprecated Use `queryThreadsResultSchema` instead. Grouped trace queries remain supported until the next major release.
++ */
+ export const traceQueryGroupResponseSchema = z
+   .object({
+     groups: z.array(z.object({ threadId: z.string() }).strict()),
+@@ -435,12 +441,21 @@ export type NormalizedQueryThreadsInput = z.output<typeof queryThreadsInputObjec
+ export type ThreadIdentity = z.infer<typeof threadIdentitySchema>;
+ export type QueryThreadsResult = z.infer<typeof queryThreadsResultSchema>;
+ 
+-export type TraceQueryRequest = z.input<typeof traceQueryRequestObjectSchema>;
++type TraceQueryRequestInput = z.input<typeof traceQueryRequestObjectSchema>;
++export type TraceQueryRequest = Omit<TraceQueryRequestInput, 'group'> & {
++  /**
++   * @deprecated Use `queryThreads()` instead. Grouped trace queries remain supported until the next major release.
++   */
++  group?: TraceQueryRequestInput['group'];
++};
+ export type NormalizedTraceQueryRequest = z.output<typeof traceQueryRequestObjectSchema>;
+ export type TraceQueryTrace = z.infer<typeof traceQueryTraceSchema>;
+ export type TraceQueryTraceResponse = z.infer<typeof traceQueryTraceResponseSchema>;
+ export type TraceQueryPaginatedTraceResponse = z.infer<typeof traceQueryPaginatedTraceResponseSchema>;
+ export type TraceQueryDeltaTraceResponse = z.infer<typeof traceQueryDeltaTraceResponseSchema>;
++/**
++ * @deprecated Use `QueryThreadsResult` instead. Grouped trace queries remain supported until the next major release.
++ */
+ export type TraceQueryGroupResponse = z.infer<typeof traceQueryGroupResponseSchema>;
+ export type TraceQueryResponse = z.infer<typeof traceQueryResponseSchema>;
+ 
+@@ -639,6 +654,9 @@ export type TrustedTraceQueryTracesPlan =
+   | TrustedTraceQueryPaginatedTracesPlan
+   | TrustedTraceQueryDeltaTracesPlan;
+ 
++/**
++ * @deprecated Use `TrustedThreadQueryPlan` instead. Grouped trace queries remain supported until the next major release.
++ */
+ export type TrustedTraceQueryGroupsPlan = TrustedTraceQueryBasePlan &
+   TrustedTraceQueryKeysetPlan & {
+     result: 'groups';
+diff --git a/packages/playground-ui/src/domains/traces/hooks/__tests__/fixtures/trace-query.ts b/packages/playground-ui/src/domains/traces/hooks/__tests__/fixtures/trace-query.ts
+index f3041eddddf0..1deb600bb586 100644
+--- a/packages/playground-ui/src/domains/traces/hooks/__tests__/fixtures/trace-query.ts
++++ b/packages/playground-ui/src/domains/traces/hooks/__tests__/fixtures/trace-query.ts
+@@ -1,8 +1,6 @@
+-import type { MastraClient } from '@mastra/client-js';
++import type { TraceQueryKeysetTraceResponse } from '@mastra/client-js';
+ 
+-type TraceQueryResponse = Awaited<ReturnType<MastraClient['queryTraces']>>;
+-
+-export const firstTraceQueryPage: TraceQueryResponse = {
++export const firstTraceQueryPage: TraceQueryKeysetTraceResponse = {
+   traces: [
+     {
+       traceId: 'trace-a',
+@@ -26,7 +24,7 @@ export const firstTraceQueryPage: TraceQueryResponse = {
+   page: { next: 'cursor-a' },
+ };
+ 
+-export const lastTraceQueryPage: TraceQueryResponse = {
++export const lastTraceQueryPage: TraceQueryKeysetTraceResponse = {
+   traces: firstTraceQueryPage.traces.map(trace => ({ ...trace, traceId: 'trace-b', rootSpanId: 'span-b' })),
+   page: { next: null },
+ };
+diff --git a/packages/playground-ui/src/domains/traces/hooks/__tests__/use-trace-query.msw.test.tsx b/packages/playground-ui/src/domains/traces/hooks/__tests__/use-trace-query.msw.test.tsx
+index 0241fe58c15a..9ca950a017a4 100644
+--- a/packages/playground-ui/src/domains/traces/hooks/__tests__/use-trace-query.msw.test.tsx
++++ b/packages/playground-ui/src/domains/traces/hooks/__tests__/use-trace-query.msw.test.tsx
+@@ -154,7 +154,7 @@ describe('useTraceQuery', () => {
+   describe('when pages contain duplicate trace IDs', () => {
+     it('returns each trace only once', async () => {
+       let requests = 0;
+-      const overlappingPage: Awaited<ReturnType<MastraClient['queryTraces']>> = {
++      const overlappingPage: typeof firstTraceQueryPage = {
+         ...lastTraceQueryPage,
+         traces: [...firstTraceQueryPage.traces, ...lastTraceQueryPage.traces],
+       };
+diff --git a/packages/playground-ui/src/domains/traces/hooks/use-trace-query.ts b/packages/playground-ui/src/domains/traces/hooks/use-trace-query.ts
+index 0b7c87c1937a..68c7fdfc9716 100644
+--- a/packages/playground-ui/src/domains/traces/hooks/use-trace-query.ts
++++ b/packages/playground-ui/src/domains/traces/hooks/use-trace-query.ts
+@@ -1,5 +1,5 @@
+ import { MastraClient } from '@mastra/client-js';
+-import type { QueryTracesKeysetInput } from '@mastra/client-js';
++import type { QueryTracesKeysetInput, TraceQueryKeysetTraceResponse } from '@mastra/client-js';
+ import { useMastraClient } from '@mastra/react';
+ import { keepPreviousData, skipToken, useInfiniteQuery } from '@tanstack/react-query';
+ import { useEffect } from 'react';
+@@ -7,9 +7,7 @@ import { useInView } from '@/hooks/use-in-view';
+ 
+ export const TRACE_QUERY_PER_PAGE = 25;
+ 
+-type TraceQueryResponse = Awaited<ReturnType<MastraClient['queryTraces']>>;
+-type TraceQueryCursorResponse = Extract<TraceQueryResponse, { page: { next: string | null } }>;
+-type TraceQueryTrace = TraceQueryResponse['traces'][number];
++type TraceQueryTrace = TraceQueryKeysetTraceResponse['traces'][number];
+ 
+ export type TraceQueryArgs = Omit<QueryTracesKeysetInput, 'page' | 'pagination'>;
+ 
+@@ -36,11 +34,11 @@ export interface UseTraceQueryReturn {
+   setEndOfListElement: (node: HTMLDivElement | null) => void;
+ }
+ 
+-export function getTraceQueryNextPageParam(lastPage: TraceQueryCursorResponse | undefined): string | undefined {
++export function getTraceQueryNextPageParam(lastPage: TraceQueryKeysetTraceResponse | undefined): string | undefined {
+   return lastPage?.page.next ?? undefined;
+ }
+ 
+-export function selectTraceQueryTraces(data: { pages: TraceQueryCursorResponse[] }): TraceQueryTrace[] {
++export function selectTraceQueryTraces(data: { pages: TraceQueryKeysetTraceResponse[] }): TraceQueryTrace[] {
+   const seen = new Set<string>();
+   return data.pages.flatMap(page =>
+     page.traces.filter(trace => {
+@@ -62,7 +60,7 @@ export function useTraceQuery({
+   const client = useMastraClient();
+   const { inView, setRef: setEndOfListElement } = useInView();
+   const result = useInfiniteQuery<
+-    TraceQueryCursorResponse,
++    TraceQueryKeysetTraceResponse,
+     Error,
+     TraceQueryTrace[],
+     readonly unknown[],
+@@ -74,7 +72,7 @@ export function useTraceQuery({
+           // Capability failures must reach the fallback without the SDK retrying 501 responses.
+           const queryClient = new MastraClient({ ...client.options, retries: 0 });
+           const response = await queryClient.queryTraces({ ...query, page: { limit, after: pageParam ?? null } });
+-          if ('page' in response) return response;
++          if ('traces' in response && 'page' in response) return response;
+           throw new Error('Expected a cursor-paginated trace query response');
+         }
+       : skipToken,
+diff --git a/packages/playground/src/domains/traces/components/__tests__/fixtures/thread-traces.ts b/packages/playground/src/domains/traces/components/__tests__/fixtures/thread-traces.ts
+index f397d65eecb0..5f501c82a5d7 100644
+--- a/packages/playground/src/domains/traces/components/__tests__/fixtures/thread-traces.ts
++++ b/packages/playground/src/domains/traces/components/__tests__/fixtures/thread-traces.ts
+@@ -1,4 +1,4 @@
+-import type { MastraClient } from '@mastra/client-js';
++import type { MastraClient, TraceQueryKeysetTraceResponse } from '@mastra/client-js';
+ import { SpanType } from '@mastra/core/observability';
+ import { TraceStatus } from '@mastra/core/storage';
+ 
+@@ -7,7 +7,7 @@ type ListTracesResponse = Awaited<ReturnType<MastraClient['listTraces']>>;
+ type GetTraceResponse = Awaited<ReturnType<MastraClient['getTrace']>>;
+ type GetSpanResponse = Awaited<ReturnType<MastraClient['getSpan']>>;
+ 
+-export function queryPageFromList(list: ListTracesLightResponse): Awaited<ReturnType<MastraClient['queryTraces']>> {
++export function queryPageFromList(list: ListTracesLightResponse): TraceQueryKeysetTraceResponse {
+   return {
+     traces: [...list.spans]
+       .sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime())
+diff --git a/packages/playground/src/pages/traces/__tests__/fixtures/trace-query.ts b/packages/playground/src/pages/traces/__tests__/fixtures/trace-query.ts
+index f4c311eadc1e..459dd45b0a84 100644
+--- a/packages/playground/src/pages/traces/__tests__/fixtures/trace-query.ts
++++ b/packages/playground/src/pages/traces/__tests__/fixtures/trace-query.ts
+@@ -1,4 +1,8 @@
+-import type { GetTraceQueryFieldsResponse, GetTraceQueryValuesResponse, MastraClient } from '@mastra/client-js';
++import type {
++  GetTraceQueryFieldsResponse,
++  GetTraceQueryValuesResponse,
++  TraceQueryKeysetTraceResponse,
++} from '@mastra/client-js';
+ 
+ export const emptyTraceQueryFields: GetTraceQueryFieldsResponse = {
+   canonicalFields: [],
+@@ -58,7 +62,7 @@ export const traceQuerySpanModelValues: GetTraceQueryValuesResponse = {
+   valuesTruncated: false,
+ };
+ 
+-export const traceQueryPage: Awaited<ReturnType<MastraClient['queryTraces']>> = {
++export const traceQueryPage: TraceQueryKeysetTraceResponse = {
+   traces: [
+     {
+       traceId: 'trace-a',
+diff --git a/packages/server/src/server/handlers/observability-shared.ts b/packages/server/src/server/handlers/observability-shared.ts
+index c2d75bb5dd6d..8fbd72c02dd9 100644
+--- a/packages/server/src/server/handlers/observability-shared.ts
++++ b/packages/server/src/server/handlers/observability-shared.ts
+@@ -141,7 +141,8 @@ export const NEW_ROUTE_DEFS = {
+     method: 'POST',
+     path: '/observability/traces/query',
+     summary: 'Query traces',
+-    description: 'Returns completed logical traces or distinct thread groups matching an advanced trace query',
++    description:
++      'Returns completed logical traces or distinct thread groups matching an advanced trace query. Thread grouping remains supported but is deprecated; use queryTraceThreads instead.',
+     requiresPermission: 'observability:read',
+   },
+ 
+diff --git a/stores/_test-utils/src/domains/observability-vnext/trace-query.test.ts b/stores/_test-utils/src/domains/observability-vnext/trace-query.test.ts
+index 19d582041856..739c506c3fe2 100644
+--- a/stores/_test-utils/src/domains/observability-vnext/trace-query.test.ts
++++ b/stores/_test-utils/src/domains/observability-vnext/trace-query.test.ts
+@@ -24,6 +24,15 @@ import {
+ } from './trace-query';
+ 
+ describe('trace-query reference evaluator', () => {
++  it('owns only trace expectations; grouped requests live in thread-query conformance', () => {
++    for (const testCase of TRACE_QUERY_CONFORMANCE_CASES) {
++      expect(testCase.request.group, `${testCase.name} must not use deprecated grouping`).toBeUndefined();
++      for (const entry of testCase.expected) {
++        expect(Object.keys(entry)).toEqual(['traceId']);
++      }
++    }
++  });
++
+   it('hands numbered pages to delta and detects completion without child re-emission', () => {
+     const feature = 'observability-delta-polling';
+     const enabled = coreFeatures.has(feature);
+@@ -72,6 +81,7 @@ describe('trace-query reference evaluator', () => {
+       if (!enabled) coreFeatures.delete(feature);
+     }
+   });
++
+   for (const testCase of TRACE_QUERY_CONFORMANCE_CASES) {
+     it(testCase.name, () => {
+       expect(
+diff --git a/stores/_test-utils/src/domains/observability-vnext/trace-query.ts b/stores/_test-utils/src/domains/observability-vnext/trace-query.ts
+index ce3e23008579..6b7a5337ef00 100644
+--- a/stores/_test-utils/src/domains/observability-vnext/trace-query.ts
++++ b/stores/_test-utils/src/domains/observability-vnext/trace-query.ts
+@@ -1283,7 +1283,7 @@ export const THREAD_QUERY_CONFORMANCE_CASES: ThreadQueryConformanceCase[] = [
+ export interface TraceQueryConformanceCase {
+   name: string;
+   request: TraceQueryRequest;
+-  expected: Array<{ traceId: string } | { threadId: string }>;
++  expected: Array<{ traceId: string }>;
+   requiresStrictFeedbackValueTypes?: boolean;
+ }
+ 
+@@ -2083,11 +2083,6 @@ export const TRACE_QUERY_CONFORMANCE_CASES: TraceQueryConformanceCase[] = [
+     },
+     expected: [{ traceId: 'trace-a' }],
+   },
+-  {
+-    name: 'returns distinct non-null thread groups',
+-    request: { timeRange: fullRange, group: { by: ['threadId'] } },
+-    expected: [{ threadId: 'thread-1' }, { threadId: 'thread-2' }],
+-  },
+ ];
+ 
+ export function evaluateTraceQuery(data: TraceQueryFixtureData, plan: TrustedTraceQueryPlan): TraceQueryResponse {

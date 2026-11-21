@@ -1,0 +1,162 @@
+diff --git a/src/smolagents/agents.py b/src/smolagents/agents.py
+index a8f6e52de0..5f199df153 100644
+--- a/src/smolagents/agents.py
++++ b/src/smolagents/agents.py
+@@ -878,8 +878,23 @@ def __call__(self, task: str, **kwargs):
+             report = result.output
+         else:
+             report = result
++        # A sub-agent that exhausts max_steps without calling final_answer, or that returns nothing
++        # useful, does not raise: run() falls back to a best-effort LLM-generated answer instead. Left
++        # unflagged, that best-effort text is indistinguishable from a genuine, confident final answer once
++        # it reaches the manager, so the manager can't tell task completion from task failure. Surface both
++        # cases explicitly so the manager model can decide whether to trust, retry, or escalate.
++        is_max_steps_error = bool(
++            self.memory.steps and isinstance(getattr(self.memory.steps[-1], "error", None), AgentMaxStepsError)
++        )
++        is_empty_result = report is None or (isinstance(report, str) and not report.strip())
+         answer = populate_template(
+-            self.prompt_templates["managed_agent"]["report"], variables=dict(name=self.name, final_answer=report)
++            self.prompt_templates["managed_agent"]["report"],
++            variables=dict(
++                name=self.name,
++                final_answer=report,
++                is_max_steps_error=is_max_steps_error,
++                is_empty_result=is_empty_result,
++            ),
+         )
+         if self.provide_run_summary:
+             answer += "\n\nFor more detail, find below a summary of this agent's work:\n<summary_of_work>\n"
+diff --git a/src/smolagents/prompts/code_agent.yaml b/src/smolagents/prompts/code_agent.yaml
+index c81073a84a..83675c2cf0 100644
+--- a/src/smolagents/prompts/code_agent.yaml
++++ b/src/smolagents/prompts/code_agent.yaml
+@@ -303,6 +303,13 @@ managed_agent:
+       Put all these in your final_answer tool, everything that you do not pass as an argument to final_answer will be lost.
+       And even if your task resolution is not successful, please return as much context as possible, so that your manager can act upon this feedback.
+   report: |-
++      {%- if is_max_steps_error -%}
++      ⚠️ Agent '{{name}}' did not reach a final answer within its allotted number of steps. The result below is a best-effort partial answer and may be incomplete or incorrect: verify it independently, or consider retrying with more steps or a clearer task.
++
++      {% elif is_empty_result -%}
++      ⚠️ Agent '{{name}}' returned an empty result, which likely means it could not complete the task as requested.
++
++      {% endif -%}
+       Here is the final answer from your managed agent '{{name}}':
+       {{final_answer}}
+ final_answer:
+diff --git a/src/smolagents/prompts/structured_code_agent.yaml b/src/smolagents/prompts/structured_code_agent.yaml
+index c3ad1fe80a..a153449792 100644
+--- a/src/smolagents/prompts/structured_code_agent.yaml
++++ b/src/smolagents/prompts/structured_code_agent.yaml
+@@ -247,6 +247,13 @@ managed_agent:
+     Put all these in your final_answer tool, everything that you do not pass as an argument to final_answer will be lost.
+     And even if your task resolution is not successful, please return as much context as possible, so that your manager can act upon this feedback.
+   report: |-
++    {%- if is_max_steps_error -%}
++    ⚠️ Agent '{{name}}' did not reach a final answer within its allotted number of steps. The result below is a best-effort partial answer and may be incomplete or incorrect: verify it independently, or consider retrying with more steps or a clearer task.
++
++    {% elif is_empty_result -%}
++    ⚠️ Agent '{{name}}' returned an empty result, which likely means it could not complete the task as requested.
++
++    {% endif -%}
+     Here is the final answer from your managed agent '{{name}}':
+     {{final_answer}}
+ final_answer:
+diff --git a/src/smolagents/prompts/toolcalling_agent.yaml b/src/smolagents/prompts/toolcalling_agent.yaml
+index 77708594d1..5d547f745d 100644
+--- a/src/smolagents/prompts/toolcalling_agent.yaml
++++ b/src/smolagents/prompts/toolcalling_agent.yaml
+@@ -232,6 +232,13 @@ managed_agent:
+       Put all these in your final_answer tool, everything that you do not pass as an argument to final_answer will be lost.
+       And even if your task resolution is not successful, please return as much context as possible, so that your manager can act upon this feedback.
+   report: |-
++      {%- if is_max_steps_error -%}
++      ⚠️ Agent '{{name}}' did not reach a final answer within its allotted number of steps. The result below is a best-effort partial answer and may be incomplete or incorrect: verify it independently, or consider retrying with more steps or a clearer task.
++
++      {% elif is_empty_result -%}
++      ⚠️ Agent '{{name}}' returned an empty result, which likely means it could not complete the task as requested.
++
++      {% endif -%}
+       Here is the final answer from your managed agent '{{name}}':
+       {{final_answer}}
+ final_answer:
+diff --git a/tests/test_agents.py b/tests/test_agents.py
+index 65c2682030..5830fe2cc2 100644
+--- a/tests/test_agents.py
++++ b/tests/test_agents.py
+@@ -1643,6 +1643,25 @@ def test_from_dict_invalid_agent_class(self):
+ 
+ 
+ class TestToolCallingAgent:
++    def test_call_as_managed_agent_reports_max_steps_failure(self):
++        """The max-steps failure warning must apply to ToolCallingAgent too, not just CodeAgent."""
++        agent = ToolCallingAgent(tools=[], model=MagicMock())
++        agent.name = "sub_agent"
++        agent.run = MagicMock(return_value="best-effort guess")
++        # Simulate the memory state run() leaves behind when it exhausts max_steps
++        agent.memory.steps.append(
++            ActionStep(
++                step_number=1,
++                timing=Timing(start_time=0.0),
++                error=AgentMaxStepsError("Reached max steps.", agent.logger),
++            )
++        )
++
++        result = agent("Test request")
++
++        assert "did not reach a final answer" in result
++        assert "best-effort guess" in result
++
+     def test_toolcalling_agent_instructions(self):
+         agent = ToolCallingAgent(tools=[], model=MagicMock(), instructions="Test instructions")
+         assert agent.instructions == "Test instructions"
+@@ -2120,6 +2139,48 @@ def test_call_with_provide_run_summary(self, provide_run_summary):
+             )
+         assert result == expected_summary
+ 
++    def test_call_as_managed_agent_reports_max_steps_failure(self):
++        """Regression test: a sub-agent that exhausts max_steps must not report a silent, confident-looking answer."""
++        agent = CodeAgent(
++            tools=[PythonInterpreterTool()],
++            model=FakeCodeModelNoReturn(),  # never calls final_answer, so it always exhausts max_steps
++            max_steps=2,
++        )
++        agent.name = "sub_agent"
++        agent.description = "A sub-agent for testing"
++
++        result = agent("Test request")
++
++        assert type(agent.memory.steps[-1].error) is AgentMaxStepsError
++        assert "did not reach a final answer" in result
++        assert "sub_agent" in result
++        # The (best-effort) answer must still be included, just clearly flagged as unreliable
++        assert "Here is the final answer from your managed agent 'sub_agent':" in result
++
++    def test_call_as_managed_agent_reports_empty_result(self):
++        """Regression test: a sub-agent returning an empty/None result must not look like a normal answer."""
++        agent = CodeAgent(tools=[], model=MagicMock())
++        agent.name = "sub_agent"
++        agent.run = MagicMock(return_value="")
++
++        result = agent("Test request")
++
++        assert "returned an empty result" in result
++        assert "sub_agent" in result
++
++    def test_call_as_managed_agent_success_has_no_failure_warning(self):
++        """A normal, successful call must render exactly as before: no warning text injected."""
++        agent = CodeAgent(tools=[], model=MagicMock())
++        agent.name = "sub_agent"
++        agent.run = MagicMock(return_value="Test output")
++
++        result = agent("Test request")
++
++        assert result == "Here is the final answer from your managed agent 'sub_agent':\nTest output"
++        assert "⚠️" not in result
++        assert "did not reach a final answer" not in result
++        assert "returned an empty result" not in result
++
+     def test_code_agent_image_output(self):
+         from PIL import Image
+ 

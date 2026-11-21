@@ -1,0 +1,272 @@
+diff --git a/crates/goose/src/agents/agent.rs b/crates/goose/src/agents/agent.rs
+index d7662eb6836d..a27899617c0c 100644
+--- a/crates/goose/src/agents/agent.rs
++++ b/crates/goose/src/agents/agent.rs
+@@ -23,6 +23,7 @@ use crate::agents::extension_manager::{get_parameter_names, ExtensionManager};
+ use crate::agents::platform_tools::{
+     PLATFORM_LIST_RESOURCES_TOOL_NAME, PLATFORM_MANAGE_EXTENSIONS_TOOL_NAME,
+     PLATFORM_READ_RESOURCE_TOOL_NAME, PLATFORM_SEARCH_AVAILABLE_EXTENSIONS_TOOL_NAME,
++    PLATFORM_TOOL_SELECTOR_TOOL_NAME,
+ };
+ use crate::agents::prompt_manager::PromptManager;
+ use crate::agents::types::SessionConfig;
+@@ -33,6 +34,9 @@ use mcp_core::{
+ 
+ use super::platform_tools;
+ use super::tool_execution::{ToolFuture, CHAT_MODE_TOOL_SKIPPED_RESPONSE, DECLINED_RESPONSE};
++use crate::agents::tool_selector::{
++    create_tool_selector, ToolSelector, ToolSelectorContext, ToolSelectorStrategy,
++};
+ 
+ /// The main goose Agent
+ pub struct Agent {
+@@ -46,6 +50,7 @@ pub struct Agent {
+     pub(super) tool_result_tx: mpsc::Sender<(String, ToolResult<Vec<Content>>)>,
+     pub(super) tool_result_rx: ToolResultReceiver,
+     pub(super) tool_monitor: Mutex<Option<ToolMonitor>>,
++    pub(super) tool_selector: Mutex<Option<Box<dyn ToolSelector>>>,
+ }
+ 
+ impl Agent {
+@@ -54,6 +59,15 @@ impl Agent {
+         let (confirm_tx, confirm_rx) = mpsc::channel(32);
+         let (tool_tx, tool_rx) = mpsc::channel(32);
+ 
++        // Get tool selector strategy from environment
++        let tool_selector_strategy = std::env::var("GOOSE_TOOL_SELECTOR").ok().and_then(|s| {
++            if s.eq_ignore_ascii_case("vector") {
++                Some(ToolSelectorStrategy::Vector)
++            } else {
++                Some(ToolSelectorStrategy::Default)
++            }
++        });
++
+         Self {
+             provider: Mutex::new(None),
+             extension_manager: Mutex::new(ExtensionManager::new()),
+@@ -65,6 +79,7 @@ impl Agent {
+             tool_result_tx: tool_tx,
+             tool_result_rx: Arc::new(Mutex::new(tool_rx)),
+             tool_monitor: Mutex::new(None),
++            tool_selector: Mutex::new(Some(create_tool_selector(tool_selector_strategy))),
+         }
+     }
+ 
+@@ -134,6 +149,7 @@ impl Agent {
+         &self,
+         tool_call: mcp_core::tool::ToolCall,
+         request_id: String,
++        tool_selector_ctx: ToolSelectorContext,
+     ) -> (String, Result<Vec<Content>, ToolError>) {
+         // Check if this tool call should be allowed based on repetition monitoring
+         if let Some(monitor) = self.tool_monitor.lock().await.as_mut() {
+@@ -179,6 +195,15 @@ impl Agent {
+                 .await
+         } else if tool_call.name == PLATFORM_SEARCH_AVAILABLE_EXTENSIONS_TOOL_NAME {
+             extension_manager.search_available_extensions().await
++        } else if tool_call.name == PLATFORM_TOOL_SELECTOR_TOOL_NAME {
++            let tool_selector = self.tool_selector.lock().await;
++            if let Some(selector) = tool_selector.as_ref() {
++                selector.select_tools(&tool_selector_ctx).await
++            } else {
++                Err(ToolError::ExecutionError(
++                    "Tool selector not initialized".to_string(),
++                ))
++            }
+         } else if self.is_frontend_tool(&tool_call.name).await {
+             // For frontend tools, return an error indicating we need frontend execution
+             Err(ToolError::ExecutionError(
+@@ -304,6 +329,8 @@ impl Agent {
+             // Add platform tools
+             prefixed_tools.push(platform_tools::search_available_extensions_tool());
+             prefixed_tools.push(platform_tools::manage_extensions_tool());
++            // TODO: uncomment when implemented
++            prefixed_tools.push(platform_tools::tool_selector_tool());
+ 
+             // Add resource tools if supported
+             if extension_manager.supports_resources() {
+@@ -358,6 +385,8 @@ impl Agent {
+         let (mut tools, mut toolshim_tools, mut system_prompt) =
+             self.prepare_tools_and_prompt().await?;
+ 
++        let tool_selector_ctx = ToolSelectorContext::new(tools.clone(), messages.clone());
++
+         let goose_mode = config.get_param("GOOSE_MODE").unwrap_or("auto".to_string());
+ 
+         let (tools_with_readonly_annotation, tools_without_annotation) =
+@@ -450,7 +479,7 @@ impl Agent {
+                             // Skip the confirmation for approved tools
+                             for request in &permission_check_result.approved {
+                                 if let Ok(tool_call) = request.tool_call.clone() {
+-                                    let tool_future = self.dispatch_tool_call(tool_call, request.id.clone());
++                                    let tool_future = self.dispatch_tool_call(tool_call, request.id.clone(), tool_selector_ctx.clone());
+                                     tool_futures.push(Box::pin(tool_future));
+                                 }
+                             }
+@@ -472,6 +501,7 @@ impl Agent {
+                                 tool_futures_arc.clone(),
+                                 &mut permission_manager,
+                                 message_tool_response.clone(),
++                                tool_selector_ctx.clone()
+                             );
+ 
+                             // We have a stream of tool_approval_requests to handle
+diff --git a/crates/goose/src/agents/mod.rs b/crates/goose/src/agents/mod.rs
+index ca48dd25f235..d17e3c3ac0ec 100644
+--- a/crates/goose/src/agents/mod.rs
++++ b/crates/goose/src/agents/mod.rs
+@@ -6,6 +6,7 @@ pub mod platform_tools;
+ pub mod prompt_manager;
+ mod reply_parts;
+ mod tool_execution;
++pub mod tool_selector;
+ mod types;
+ 
+ pub use agent::Agent;
+diff --git a/crates/goose/src/agents/platform_tools.rs b/crates/goose/src/agents/platform_tools.rs
+index 3456167cb5da..9892e2f688ae 100644
+--- a/crates/goose/src/agents/platform_tools.rs
++++ b/crates/goose/src/agents/platform_tools.rs
+@@ -7,6 +7,7 @@ pub const PLATFORM_LIST_RESOURCES_TOOL_NAME: &str = "platform__list_resources";
+ pub const PLATFORM_SEARCH_AVAILABLE_EXTENSIONS_TOOL_NAME: &str =
+     "platform__search_available_extensions";
+ pub const PLATFORM_MANAGE_EXTENSIONS_TOOL_NAME: &str = "platform__manage_extensions";
++pub const PLATFORM_TOOL_SELECTOR_TOOL_NAME: &str = "platform__tool_selector";
+ 
+ pub fn read_resource_tool() -> Tool {
+     Tool::new(
+@@ -112,3 +113,26 @@ pub fn manage_extensions_tool() -> Tool {
+         }),
+     )
+ }
++
++pub fn tool_selector_tool() -> Tool {
++    Tool::new(
++        PLATFORM_TOOL_SELECTOR_TOOL_NAME.to_string(),
++        "Selects the tools to use based on the user messages and available tools.
++        Mitigates clouding of context by selecting the most relevant tools based on the user's message.
++        Tool selection strategies are either default or vector-based.
++        Default strategy uses a predefined list of tools.
++        Vector strategy uses a vector database to select the most relevant tools based on the user's message.".to_string(),
++        json!({
++            "type": "object",
++            "required": [],
++            "properties": {},
++        }),
++        Some(ToolAnnotations {
++            title: Some("Select tools".to_string()),
++            read_only_hint: true,
++            destructive_hint: false,
++            idempotent_hint: false,
++            open_world_hint: false,
++        }),
++    )
++}
+diff --git a/crates/goose/src/agents/tool_execution.rs b/crates/goose/src/agents/tool_execution.rs
+index beffae66ac00..fbb1c7f981a4 100644
+--- a/crates/goose/src/agents/tool_execution.rs
++++ b/crates/goose/src/agents/tool_execution.rs
+@@ -7,12 +7,12 @@ use futures::stream::BoxStream;
+ use futures::StreamExt;
+ use tokio::sync::Mutex;
+ 
++use crate::agents::tool_selector::ToolSelectorContext;
+ use crate::config::permission::PermissionLevel;
+ use crate::config::PermissionManager;
+ use crate::message::{Message, ToolRequest};
+ use crate::permission::Permission;
+ use mcp_core::{Content, ToolError};
+-
+ // Type alias for ToolFutures - used in the agent loop to join all futures together
+ pub(crate) type ToolFuture<'a> =
+     Pin<Box<dyn Future<Output = (String, Result<Vec<Content>, ToolError>)> + Send + 'a>>;
+@@ -40,6 +40,7 @@ impl Agent {
+         tool_futures: ToolFuturesVec<'a>,
+         permission_manager: &'a mut PermissionManager,
+         message_tool_response: Arc<Mutex<Message>>,
++        tool_selector_ctx: ToolSelectorContext,
+     ) -> BoxStream<'a, anyhow::Result<Message>> {
+         try_stream! {
+             for request in tool_requests {
+@@ -56,7 +57,7 @@ impl Agent {
+                     while let Some((req_id, confirmation)) = rx.recv().await {
+                         if req_id == request.id {
+                             if confirmation.permission == Permission::AllowOnce || confirmation.permission == Permission::AlwaysAllow {
+-                                let tool_future = self.dispatch_tool_call(tool_call.clone(), request.id.clone());
++                                let tool_future = self.dispatch_tool_call(tool_call.clone(), request.id.clone(), tool_selector_ctx.clone());
+                                 let mut futures = tool_futures.lock().await;
+                                 futures.push(Box::pin(tool_future));
+ 
+diff --git a/crates/goose/src/agents/tool_selector.rs b/crates/goose/src/agents/tool_selector.rs
+new file mode 100644
+index 000000000000..0e157076a533
+--- /dev/null
++++ b/crates/goose/src/agents/tool_selector.rs
+@@ -0,0 +1,67 @@
++use crate::message::Message;
++use async_trait::async_trait;
++use mcp_core::{Content, Tool, ToolError};
++
++pub enum ToolSelectorStrategy {
++    Default,
++    Vector,
++}
++
++#[derive(Debug, Clone)]
++pub struct ToolSelectorContext {
++    pub tools: Vec<Tool>,
++    pub messages: Vec<Message>,
++}
++
++impl ToolSelectorContext {
++    pub fn new(tools: Vec<Tool>, messages: Vec<Message>) -> Self {
++        Self { tools, messages }
++    }
++}
++
++#[async_trait]
++pub trait ToolSelector: Send + Sync {
++    async fn select_tools(&self, ctx: &ToolSelectorContext) -> Result<Vec<Content>, ToolError>;
++}
++
++pub struct DefaultToolSelector;
++
++#[async_trait]
++impl ToolSelector for DefaultToolSelector {
++    async fn select_tools(&self, ctx: &ToolSelectorContext) -> Result<Vec<Content>, ToolError> {
++        Ok(ctx
++            .tools
++            .iter()
++            .map(|tool| Content::text(tool.name.clone()))
++            .collect())
++    }
++}
++
++pub struct VectorToolSelector;
++
++#[async_trait]
++impl ToolSelector for VectorToolSelector {
++    async fn select_tools(&self, ctx: &ToolSelectorContext) -> Result<Vec<Content>, ToolError> {
++        let mut selected_tools = Vec::new();
++        // TODO: placeholder for vector tool selection
++        if let Some(last_message) = ctx.messages.last() {
++            if let Some(content) = last_message.content.first().and_then(|c| c.as_text()) {
++                for tool in &ctx.tools {
++                    if content.contains(&tool.name) {
++                        selected_tools.push(tool.name.clone());
++                    }
++                }
++            }
++        }
++
++        Ok(selected_tools.into_iter().map(Content::text).collect())
++    }
++}
++
++// Helper function to create a boxed tool selector
++pub fn create_tool_selector(strategy: Option<ToolSelectorStrategy>) -> Box<dyn ToolSelector> {
++    match strategy {
++        Some(ToolSelectorStrategy::Vector) => Box::new(VectorToolSelector),
++        _ => Box::new(DefaultToolSelector),
++    }
++}

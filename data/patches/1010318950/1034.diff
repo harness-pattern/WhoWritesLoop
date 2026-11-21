@@ -1,0 +1,36 @@
+diff --git a/src/minisweagent/utils/log.py b/src/minisweagent/utils/log.py
+index d1c7acb7f..fa604e72d 100644
+--- a/src/minisweagent/utils/log.py
++++ b/src/minisweagent/utils/log.py
+@@ -20,7 +20,7 @@ def _setup_root_logger() -> None:
+ 
+ def add_file_handler(path: Path | str, level: int = logging.DEBUG, *, print_path: bool = True) -> None:
+     logger = logging.getLogger("minisweagent")
+-    handler = logging.FileHandler(path)
++    handler = logging.FileHandler(path, encoding="utf-8")
+     handler.setLevel(level)
+     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+     handler.setFormatter(formatter)
+diff --git a/tests/utils/test_log.py b/tests/utils/test_log.py
+new file mode 100644
+index 000000000..bd9ba7799
+--- /dev/null
++++ b/tests/utils/test_log.py
+@@ -0,0 +1,17 @@
++import logging
++
++from minisweagent.utils.log import add_file_handler
++
++
++def test_file_logging_preserves_unicode(tmp_path):
++    path = tmp_path / "agent.log"
++    logger = logging.getLogger("minisweagent")
++    add_file_handler(path, print_path=False)
++    handler = logger.handlers[-1]
++    try:
++        logger.debug("Task output: \u4e2d\u6587 \U0001f680 \u03b1")
++        handler.flush()
++        assert "Task output: \u4e2d\u6587 \U0001f680 \u03b1" in path.read_text(encoding="utf-8")
++    finally:
++        logger.removeHandler(handler)
++        handler.close()

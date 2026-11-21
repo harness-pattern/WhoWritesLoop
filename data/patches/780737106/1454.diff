@@ -1,0 +1,74 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 000000000..0734537f2
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,20 @@
++# Changelog
++
++All notable changes to this project will be documented in this file.
++
++The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
++and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
++
++## [Unreleased]
++
++### Added
++- Future features will be listed here
++
++### Changed
++- Ongoing updates
++
++### Fixed
++- Bug fixes
++
++---
++*[Mukller](https://github.com/Mukller)*
+diff --git a/CODE_OF_CONDUCT.md b/CODE_OF_CONDUCT.md
+new file mode 100644
+index 000000000..fe9ab1f63
+--- /dev/null
++++ b/CODE_OF_CONDUCT.md
+@@ -0,0 +1,30 @@
++# Contributor Covenant Code of Conduct
++
++## Our Pledge
++
++We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone.
++
++## Our Standards
++
++Examples of behavior that contributes to a positive environment:
++- Using welcoming and inclusive language
++- Being respectful of differing viewpoints
++- Gracefully accepting constructive criticism
++- Focusing on what is best for the community
++
++Examples of unacceptable behavior:
++- Harassment of any kind
++- Trolling, insulting or derogatory comments
++- Public or private harassment
++- Publishing others' private information without permission
++
++## Enforcement
++
++Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers.
++
++## Attribution
++
++This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
++
++---
++*[Mukller](https://github.com/Mukller)*
+diff --git a/README.md b/README.md
+index e241ede47..3aa84eb78 100644
+--- a/README.md
++++ b/README.md
+@@ -143,3 +143,7 @@ MIT. Check `LICENSE`.
+ [![Markdown links](https://github.com/SWE-agent/SWE-agent/actions/workflows/check-links-periodic.yaml/badge.svg)](https://github.com/SWE-agent/SWE-agent/actions/workflows/check-links-periodic.yaml)
+ 
+ </div>
++
++---
++
++*[Mukller](https://github.com/Mukller)*

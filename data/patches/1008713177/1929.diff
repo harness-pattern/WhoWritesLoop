@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/lsp/LspServerManager.ts b/packages/core/src/lsp/LspServerManager.ts
+index ce5898062bb..d38b23851c2 100644
+--- a/packages/core/src/lsp/LspServerManager.ts
++++ b/packages/core/src/lsp/LspServerManager.ts
+@@ -523,7 +523,7 @@ export class LspServerManager {
+           codeAction: { dynamicRegistration: true },
+         },
+         workspace: {
+-          workspaceFolders: { supported: true },
++          workspaceFolders: true,
+         },
+       },
+       initializationOptions: config.initializationOptions,

@@ -1,0 +1,168 @@
+diff --git a/services/site/src/component/language-picker.tsx b/services/site/src/component/language-picker.tsx
+index b58fb61e53ea..e3d6f5aabb69 100644
+--- a/services/site/src/component/language-picker.tsx
++++ b/services/site/src/component/language-picker.tsx
+@@ -4,6 +4,7 @@ import { IconChevron } from "~/component/icon"
+ import { openLanguageSheet } from "~/component/language-sheet"
+ import { onCloseMenus } from "~/component/site/menu-open"
+ import { prefersSheet } from "~/component/site/sheet"
++import { keepUnderHeader } from "~/component/site/under-header"
+ import { useI18n } from "~/context/i18n"
+ import { useLanguage } from "~/context/language"
+ import { loadLanguage } from "~/i18n/content"
+@@ -13,9 +14,10 @@ import "./language-picker.css"
+ 
+ /**
+  * The language control. Pointers get a dropdown: a popover anchored to the trigger that flips and
+- * shrinks to stay on screen (CSS anchor positioning, no script). Touch phones get the site's bottom
+- * sheet (language-sheet.tsx). Every row is a link to the page in that language, so both work
+- * without JavaScript and tell search engines about the other languages.
++ * shrinks to stay on screen (CSS anchor positioning) and scrolls under the pinned header
++ * (under-header.ts). Touch phones get the site's bottom sheet (language-sheet.tsx). Every row is a
++ * link to the page in that language, so both work without JavaScript and tell search engines about
++ * the other languages.
+  */
+ export function LanguagePicker(props: { align?: "left" | "right" } = {}) {
+   const language = useLanguage()
+@@ -28,6 +30,7 @@ export function LanguagePicker(props: { align?: "left" | "right" } = {}) {
+   const [open, setOpen] = createSignal(false)
+   const href = (locale: Locale) => `${route(locale, strip(location.pathname))}${location.search}${location.hash}`
+   let menu!: HTMLDivElement
++  let trigger!: HTMLButtonElement
+   onCloseMenus(() => {
+     if (menu.matches(":popover-open")) menu.hidePopover()
+   })
+@@ -36,6 +39,7 @@ export function LanguagePicker(props: { align?: "left" | "right" } = {}) {
+     const toggle = (event: Event) => {
+       if (!(event instanceof ToggleEvent)) return
+       setOpen(event.newState === "open")
++      if (event.newState === "open") keepUnderHeader(menu, trigger)
+       // Opened from the keyboard: focus moves to the current language.
+       if (event.newState === "open" && menu.previousElementSibling?.matches(":focus-visible"))
+         menu.querySelector<HTMLElement>('[aria-current="true"]')?.focus()
+@@ -48,6 +52,7 @@ export function LanguagePicker(props: { align?: "left" | "right" } = {}) {
+     <div data-component="language-picker" data-design="menuActive menuColor">
+       <div data-component="dropdown">
+         <button
++          ref={trigger}
+           data-slot="trigger"
+           type="button"
+           popovertarget={menuId}
+diff --git a/services/site/src/component/site/place-menu.ts b/services/site/src/component/site/place-menu.ts
+index 223cca5dddd2..e8f818164227 100644
+--- a/services/site/src/component/site/place-menu.ts
++++ b/services/site/src/component/site/place-menu.ts
+@@ -1,15 +1,19 @@
++import { headerBottom, keepUnderHeader } from "./under-header"
++
+ let anchors = 0
+ 
+ /**
+  * Opens a dropdown's menu where it fits. Call it as soon as the menu is in the page, laid out by its
+  * CSS against its positioning box (the trigger, or a split button): beside it, at its gap, with its
+  * width and inline alignment. The menu opens below unless only above has room; with room on neither
+- * side it takes the taller one and scrolls. Sideways it keeps 16px clear of the window's edges, and
+- * on phones takes that whole width (long rows end in an ellipsis).
++ * side it takes the taller one and scrolls. The room above ends at the pinned header (under-header.ts).
++ * Sideways it keeps 16px clear of the window's edges, and on phones takes that whole width (long rows
++ * end in an ellipsis).
+  *
+  * The menu then moves to the top layer (a manual popover), so no scrolling box, such as the product
+  * carousel's track, cuts it off, and stays tied to its box by CSS anchor positioning as the page
+- * scrolls. A browser without anchor positioning keeps it in its box.
++ * scrolls, cut where it passes under the header, which stays on top. A browser without anchor
++ * positioning keeps it in its box.
+  */
+ export function placeMenu(menu: HTMLElement) {
+   const box = menu.offsetParent
+@@ -24,7 +28,7 @@ export function placeMenu(menu: HTMLElement) {
+   const laid = menu.getBoundingClientRect()
+   const gap = Math.max(0, laid.top >= anchor.bottom ? laid.top - anchor.bottom : anchor.top - laid.bottom)
+   const below = window.innerHeight - anchor.bottom - gap - 8
+-  const above = anchor.top - gap - 8
++  const above = anchor.top - gap - 8 - headerBottom(menu)
+   const side = laid.height <= below || (laid.height > above && below >= above) ? "below" : "above"
+   const room = side === "below" ? below : above
+   const shift = Math.max(left - laid.left, Math.min(0, right - laid.right))
+@@ -55,4 +59,5 @@ export function placeMenu(menu: HTMLElement) {
+   menu.popover = "manual"
+   menu.showPopover()
+   menu.style.animation = ""
++  keepUnderHeader(menu, box)
+ }
+diff --git a/services/site/src/component/site/under-header.ts b/services/site/src/component/site/under-header.ts
+new file mode 100644
+index 000000000000..bee7745db289
+--- /dev/null
++++ b/services/site/src/component/site/under-header.ts
+@@ -0,0 +1,70 @@
++// The header pinned to the window's top: the announcement banner, the top bar under it and the page's
++// Contents row under that. Nothing on the page may draw over it, but a menu in the top layer (a
++// popover) draws over everything whatever its z-index, so such a menu is cut at the header's lower
++// edge instead and scrolls under it like the rest of the page.
++const header = [
++  '[data-component="announcement-banner"]',
++  '[data-component="topbar"]',
++  '[data-component="contents-menu"]',
++].join(", ")
++
++const watched = new WeakMap<HTMLElement, () => void>()
++
++/**
++ * The header's lower edge in the window, 0 when nothing is pinned: the bars stacked down from the
++ * window's top edge (a Contents row further down the page isn't pinned yet). A bar that holds `menu`
++ * doesn't count.
++ */
++export function headerBottom(menu: HTMLElement) {
++  const bars = [...document.querySelectorAll<HTMLElement>(header)]
++    .filter((bar) => !bar.contains(menu))
++    .map((bar) => bar.getBoundingClientRect())
++    .filter((rect) => rect.height > 0)
++    .sort((a, b) => a.top - b.top)
++  let bottom = 0
++  for (const rect of bars) if (rect.top <= bottom + 1) bottom = Math.max(bottom, rect.bottom)
++  return bottom
++}
++
++/**
++ * Keeps an open top-layer menu under the header while the page scrolls: whatever part of it is
++ * above the header's lower edge is cut off (drawing and pointer alike). `anchor` is the element the
++ * menu is anchored to. It stops once the menu closes or leaves the page.
++ */
++export function keepUnderHeader(menu: HTMLElement, anchor: HTMLElement) {
++  watched.get(menu)?.()
++  // The menu's top edge from the anchor's. The browser moves an anchored menu for a scroll only in
++  // the next frame, so while the page scrolls the anchor, always where it's drawn, places it, and it's
++  // measured two frames after scrolling ends (it may have flipped to the anchor's other side). The
++  // opening animation scales the menu, so it's measured again once that ends.
++  let offset = 0
++  const measure = () => {
++    offset = menu.getBoundingClientRect().top - anchor.getBoundingClientRect().top
++    update()
++  }
++  const settled = () => requestAnimationFrame(() => requestAnimationFrame(measure))
++  const update = () => {
++    if (!menu.isConnected || !menu.matches(":popover-open")) return stop()
++    const bottom = headerBottom(menu)
++    const cut = bottom - anchor.getBoundingClientRect().top - offset
++    // Only the top edge is cut; the other sides reach far out, so the menu keeps its shadow.
++    menu.style.clipPath = bottom > 0 && cut > 0 ? `inset(${cut}px -100vmax -100vmax)` : ""
++  }
++  const stop = () => {
++    menu.style.clipPath = ""
++    window.removeEventListener("scroll", update, true)
++    window.removeEventListener("scrollend", settled, true)
++    window.removeEventListener("resize", measure)
++    menu.removeEventListener("animationend", measure)
++    menu.removeEventListener("toggle", measure)
++    watched.delete(menu)
++  }
++  watched.set(menu, stop)
++  // Capturing, so a scrolling box inside the page (the product carousel's track) counts too.
++  window.addEventListener("scroll", update, { capture: true, passive: true })
++  window.addEventListener("scrollend", settled, { capture: true, passive: true })
++  window.addEventListener("resize", measure, { passive: true })
++  menu.addEventListener("animationend", measure)
++  menu.addEventListener("toggle", measure)
++  measure()
++}

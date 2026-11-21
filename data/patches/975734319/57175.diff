@@ -1,0 +1,112 @@
+diff --git a/packages/core/src/plugin/provider/digitalocean.ts b/packages/core/src/plugin/provider/digitalocean.ts
+index 653d3243fbdd..b0083c59aae9 100644
+--- a/packages/core/src/plugin/provider/digitalocean.ts
++++ b/packages/core/src/plugin/provider/digitalocean.ts
+@@ -1,6 +1,6 @@
+ import type { IntegrationOAuthMethodRegistration } from "@opencode/plugin/effect/integration"
+ import { define } from "@opencode/plugin/effect/plugin"
+-import { Clock, Deferred, Effect, Option, Schedule, Schema, Semaphore, Stream } from "effect"
++import { Clock, Deferred, Effect, Option, Schema, Semaphore, Stream } from "effect"
+ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
+ import type { Server } from "node:http"
+ import { App } from "../../app.js"
+@@ -174,8 +174,7 @@ export const DigitalOceanPlugin = define({
+       Stream.runForEach(refresh),
+       Effect.forkScoped({ startImmediately: true }),
+     )
+-    // Retain the last successful inventory for this credential through transient failures.
+-    yield* refresh().pipe(Effect.repeat(Schedule.spaced("5 minutes")), Effect.forkScoped)
++    yield* refresh().pipe(Effect.forkScoped)
+   }),
+ } satisfies PluginInternal.InternalPlugin)
+ 
+diff --git a/packages/core/test/plugin/provider-digitalocean.test.ts b/packages/core/test/plugin/provider-digitalocean.test.ts
+index 5386fa6a9eb3..b69ed3bfff17 100644
+--- a/packages/core/test/plugin/provider-digitalocean.test.ts
++++ b/packages/core/test/plugin/provider-digitalocean.test.ts
+@@ -1,6 +1,5 @@
+ import { describe, expect, test } from "bun:test"
+-import { Clock, Effect, Schedule } from "effect"
+-import { TestClock } from "effect/testing"
++import { Effect, Schedule } from "effect"
+ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
+ import { Credential } from "@opencode/core/credential"
+ import { Integration } from "@opencode/core/integration"
+@@ -93,7 +92,7 @@ describe("DigitalOceanPlugin", () => {
+     }),
+   )
+ 
+-  it.effect("refreshes routers, retains the latest success on errors, and accepts an empty inventory", () =>
++  it.effect("loads routers for the signed-in account", () =>
+     Effect.gen(function* () {
+       const fixture = yield* discovery
+       yield* oauthCredential()
+@@ -119,37 +118,6 @@ describe("DigitalOceanPlugin", () => {
+         limit: { context: 256_000 },
+       })
+ 
+-      fixture.remote.body = { model_routers: [{ name: "beta" }] }
+-      yield* TestClock.adjust("4 minutes")
+-      yield* drain
+-      expect(fixture.remote.requests).toHaveLength(1)
+-      yield* TestClock.adjust("1 minute")
+-      yield* drain
+-      expect(fixture.remote.requests).toHaveLength(2)
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:alpha"))).toBeUndefined()
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:beta"))).toBeDefined()
+-
+-      fixture.remote.status = 503
+-      yield* TestClock.adjust("5 minutes")
+-      yield* drain
+-      expect(fixture.remote.requests).toHaveLength(3)
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:beta"))).toBeDefined()
+-
+-      fixture.remote.status = 200
+-      fixture.remote.body = { model_routers: [{ name: 123 }] }
+-      yield* TestClock.adjust("5 minutes")
+-      yield* drain
+-      expect(fixture.remote.requests).toHaveLength(4)
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:beta"))).toBeDefined()
+-
+-      fixture.remote.body = { model_routers: [] }
+-      yield* TestClock.adjust("5 minutes")
+-      yield* drain
+-      expect(fixture.remote.requests).toHaveLength(5)
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:beta"))).toBeUndefined()
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("snapshot-model"))).toBeDefined()
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:configured"))).toBeDefined()
+-      expect(yield* fixture.models.get(Provider.ID.openai, Model.ID.make("router:alpha"))).toBeDefined()
+     }),
+   )
+ 
+@@ -173,9 +141,6 @@ describe("DigitalOceanPlugin", () => {
+ 
+       fixture.remote.status = 200
+       fixture.remote.body = { model_routers: [{ name: "beta" }] }
+-      yield* TestClock.adjust("5 minutes")
+-      yield* drain
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:beta"))).toBeDefined()
+ 
+       const count = fixture.remote.requests.length
+       yield* credentials.create({ integrationID, value: Credential.Key.make({ type: "key", key: "do-key" }) })
+@@ -192,20 +157,6 @@ describe("DigitalOceanPlugin", () => {
+     }),
+   )
+ 
+-  it.effect("stops discovery when the token expires while retaining its last successful inventory", () =>
+-    Effect.gen(function* () {
+-      const fixture = yield* discovery
+-      yield* oauthCredential("do-token", (yield* Clock.currentTimeMillis) + 60_000)
+-      yield* fixture.install
+-      yield* drain
+-      expect(fixture.remote.requests).toHaveLength(1)
+-      yield* TestClock.adjust("5 minutes")
+-      yield* drain
+-      expect(fixture.remote.requests).toHaveLength(1)
+-      expect(yield* fixture.models.get(providerID, Model.ID.make("router:alpha"))).toBeDefined()
+-    }),
+-  )
+-
+   it.live("completes browser OAuth independently of router discovery and releases the listener", () =>
+     Effect.gen(function* () {
+       const fixture = yield* discovery

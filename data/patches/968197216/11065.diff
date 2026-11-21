@@ -1,0 +1,13 @@
+diff --git a/docs/sidebar.json b/docs/sidebar.json
+index cc9146cfc36..ef76affe229 100644
+--- a/docs/sidebar.json
++++ b/docs/sidebar.json
+@@ -161,7 +161,7 @@
+       },
+       {
+         "label": "Get Started with Extensions",
+-        "slug": "docs/extensions/getting-started-extensions.md"
++        "slug": "docs/extensions/getting-started-extensions"
+       },
+       {
+         "label": "Extension Releasing",

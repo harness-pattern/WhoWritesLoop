@@ -1,0 +1,1118 @@
+diff --git a/packages/app/e2e/regression/session-location-sync.spec.ts b/packages/app/e2e/regression/session-location-sync.spec.ts
+index edfd13d7324d..a04d37b27f8c 100644
+--- a/packages/app/e2e/regression/session-location-sync.spec.ts
++++ b/packages/app/e2e/regression/session-location-sync.spec.ts
+@@ -37,7 +37,7 @@ for (const endpoint of ["/api/location", "/api/agent"]) {
+         return (
+           url.pathname === endpoint &&
+           url.searchParams.get("location[directory]") === directory &&
+-          (recover ? response.ok() : requests === 3 && response.status() === 500)
++          (recover ? response.ok() : requests >= 3 && response.status() === 500)
+         )
+       })
+       await page.goto(`/server/${base64Encode(fixture.serverKey)}/session/${sessionID}`)
+@@ -50,7 +50,7 @@ for (const endpoint of ["/api/location", "/api/agent"]) {
+       await settled
+       await expect(prompt).toBeEditable()
+       await expect(prompt).toHaveText("Continue after reconnecting")
+-      expect(requests).toBe(recover ? 2 : 3)
++      expect(requests).toBeGreaterThanOrEqual(recover ? 2 : 3)
+       await expect(page.getByText("Session location unavailable", { exact: true })).toHaveCount(0)
+       await expect(page.getByRole("button", { name: "Choose directory", exact: true })).toHaveCount(0)
+       expect(recovery).toEqual([])
+@@ -59,6 +59,53 @@ for (const endpoint of ["/api/location", "/api/agent"]) {
+   }
+ }
+ 
++for (const error of [
++  { _tag: "FileNotFoundError", path: "/projects/current", message: "Unrelated file" },
++  { _tag: "LocationNotFoundError", directory: "/projects/other", message: "Other location" },
++  undefined,
++]) {
++  test(`does not recover from an unrelated 404 (${error?._tag ?? "no typed error"})`, async ({ page }) => {
++    const recovery = recoveryRequests(page)
++    const directory = "/projects/current"
++    const sessionID = "ses_location_unrelated_404"
++    await mockOpenCodeServer(page, {
++      directory: fixture.directory,
++      project: fixture.project,
++      provider: fixture.provider,
++      sessions: [{ id: sessionID, projectID: fixture.project.id, directory, title: "Unrelated error" }],
++      fileList: () => [],
++      pageMessages: () => ({
++        items: [{ id: "msg_saved", type: "user", text: "Continue in the current worktree", time: { created: 1 } }],
++      }),
++    })
++    await page.route("**/api/location?**", (route) => {
++      if (new URL(route.request().url()).searchParams.get("location[directory]") !== directory) return route.fallback()
++      return route.fulfill({
++        status: 404,
++        ...(error ? { json: error } : { body: "" }),
++        headers: { "access-control-allow-origin": "*" },
++      })
++    })
++    const failure = page.waitForResponse((response) => {
++      const url = new URL(response.url())
++      return (
++        url.pathname === "/api/location" &&
++        url.searchParams.get("location[directory]") === directory &&
++        response.status() === 404
++      )
++    })
++    await page.goto(`/server/${base64Encode(fixture.serverKey)}/session/${sessionID}`)
++    await failure
++    await expect(page.getByText("Continue in the current worktree", { exact: true })).toBeVisible()
++    const prompt = page.getByRole("textbox", { name: "Prompt", exact: true })
++    await expect(prompt).toBeEditable()
++    await prompt.fill("Keep this draft")
++    await expect(prompt).toHaveText("Keep this draft")
++    await expect(page.getByText("Session location unavailable", { exact: true })).toHaveCount(0)
++    expect(recovery).toEqual([])
++  })
++}
++
+ test("follows a live session move while the agent catalog is still loading", async ({ page }) => {
+   const recovery = recoveryRequests(page)
+   const directory = "/projects/old-tree"
+@@ -217,7 +264,7 @@ test("ignores an old failed location read after reconnecting", async ({ page })
+   await expect(prompt).toHaveText("Keep typing here")
+   await expect(page.getByText("Session location unavailable", { exact: true })).toHaveCount(0)
+   await expect(page.getByRole("button", { name: "Choose directory", exact: true })).toHaveCount(0)
+-  expect(requests).toBe(2)
++  expect(requests).toBeGreaterThanOrEqual(2)
+   expect(recovery).toEqual([])
+ })
+ 
+diff --git a/packages/app/e2e/regression/session-removed-worktree.spec.ts b/packages/app/e2e/regression/session-removed-worktree.spec.ts
+new file mode 100644
+index 000000000000..04c76d64d721
+--- /dev/null
++++ b/packages/app/e2e/regression/session-removed-worktree.spec.ts
+@@ -0,0 +1,330 @@
++import { expect, test } from "@playwright/test"
++import { base64Encode } from "@opencode/util/encode"
++import { fixture } from "../smoke/session-timeline.fixture"
++import { mockOpenCodeServer } from "../utils/mock-server"
++import { installSseTransport } from "../utils/sse-transport"
++
++test("keeps a session in a removed worktree readable and movable", async ({ page }) => {
++  const missing = "/projects/removed-worktree"
++  const sessionDirectory = `${missing}/src`
++  const destination = fixture.directory
++  const sessionID = "ses_removed_worktree"
++  const session = {
++    id: sessionID,
++    projectID: fixture.project.id,
++    directory: sessionDirectory,
++    title: "Removed worktree",
++  }
++  const transport = await installSseTransport(page, { server: fixture.serverKey })
++  await mockOpenCodeServer(page, {
++    directory: destination,
++    project: fixture.project,
++    provider: fixture.provider,
++    sessions: [session],
++    fileList: () => [],
++    pageMessages: () => ({
++      items: [{ id: "msg_saved", type: "user", text: "Saved conversation in removed worktree", time: { created: 1 } }],
++    }),
++  })
++  await page.route("**/api/**", (route) => {
++    const url = new URL(route.request().url())
++    if (url.searchParams.get("location[directory]") !== sessionDirectory) return route.fallback()
++    if (url.pathname === "/api/location")
++      return route.fulfill({
++        status: 404,
++        json: {
++          _tag: "LocationNotFoundError",
++          directory: sessionDirectory,
++          message: `Location not found: ${sessionDirectory}`,
++        },
++        headers: { "access-control-allow-origin": "*" },
++      })
++    if (!["/api/agent", "/api/provider", "/api/model", "/api/model/default"].includes(url.pathname))
++      return route.fallback()
++    return route.fulfill({
++      status: 500,
++      json: { _tag: "ServiceUnavailableError", message: "Unable to boot removed location" },
++      headers: { "access-control-allow-origin": "*" },
++    })
++  })
++  await page.route(`**/api/session/${sessionID}/move`, (route) => route.fulfill({ status: 204, body: "" }))
++
++  await page.goto(`/server/${base64Encode(fixture.serverKey)}/session/${sessionID}`, { waitUntil: "domcontentloaded" })
++  await expect(page.getByText("Saved conversation in removed worktree", { exact: true })).toBeVisible()
++  const prompt = page.getByRole("textbox", { name: "Prompt", exact: true })
++  await expect(page.getByRole("status")).toContainText("Session location unavailable")
++  await expect(page.getByRole("status")).toContainText(sessionDirectory)
++  await expect(prompt).toHaveCount(0)
++  await expect(page.getByRole("button", { name: "Choose directory", exact: true })).toBeEnabled()
++  await transport.waitForConnection()
++  await page.getByRole("button", { name: "Choose worktree", exact: true }).click()
++  const create = page.waitForRequest(
++    (request) => new URL(request.url()).pathname === "/api/worktree" && request.method() === "POST",
++    { timeout: 10_000 },
++  )
++  const move = page.waitForRequest(
++    (request) => new URL(request.url()).pathname === `/api/session/${sessionID}/move` && request.method() === "POST",
++  )
++  await page.getByRole("menuitem", { name: "New worktree" }).click()
++  expect((await create).postDataJSON()).toMatchObject({ projectID: fixture.project.id, from: fixture.project.worktree })
++  const created = `${destination}/copy`
++  expect((await move).postDataJSON()).toMatchObject({ directory: created })
++  session.directory = created
++  await transport.send({
++    id: "evt_removed_worktree_moved",
++    type: "session.moved",
++    created: 2,
++    durable: { aggregateID: sessionID, seq: 1, version: 1 },
++    data: { sessionID, location: { directory: created }, projectID: fixture.project.id },
++  })
++  await expect(prompt).toBeEditable()
++  await expect(page.getByText("Session location unavailable", { exact: true })).toHaveCount(0)
++  await expect(page.locator('[data-action="composer-model"]')).toContainText("Claude Opus 4.6")
++  await expect(page.getByText("Saved conversation in removed worktree", { exact: true })).toBeVisible()
++})
++
++test("preserves a draft when a worktree disappears and resumes after choosing a directory", async ({ page }) => {
++  const source = "/projects/draft-worktree"
++  const destination = "/projects/restored"
++  const sessionID = "ses_draft_recovery"
++  const session = { id: sessionID, projectID: fixture.project.id, directory: source, title: "Draft recovery" }
++  const transport = await installSseTransport(page, { server: fixture.serverKey })
++  let missing = false
++  await mockOpenCodeServer(page, {
++    directory: destination,
++    project: { ...fixture.project, worktree: destination },
++    provider: fixture.provider,
++    sessions: [session],
++    fileList: () => [],
++    pageMessages: () => ({
++      items: [{ id: "msg_draft", type: "user", text: "Saved draft history", time: { created: 1 } }],
++    }),
++  })
++  await page.route("**/api/location?**", (route) => {
++    const url = new URL(route.request().url())
++    if (url.searchParams.get("location[directory]") !== source || !missing) return route.fallback()
++    return route.fulfill({
++      status: 404,
++      json: { _tag: "LocationNotFoundError", directory: source, message: `Location not found: ${source}` },
++      headers: { "access-control-allow-origin": "*" },
++    })
++  })
++  let moves = 0
++  await page.route(`**/api/session/${sessionID}/move`, (route) => {
++    moves++
++    if (moves === 1)
++      return route.fulfill({
++        status: 400,
++        json: { _tag: "InvalidRequestError", message: "Destination is unavailable" },
++        headers: { "access-control-allow-origin": "*" },
++      })
++    return route.fulfill({ status: 204, body: "" })
++  })
++
++  await page.goto(`/server/${base64Encode(fixture.serverKey)}/session/${sessionID}`)
++  const prompt = page.getByRole("textbox", { name: "Prompt", exact: true })
++  await expect(prompt).toBeEditable()
++  await prompt.fill("A draft to keep after moving")
++  const connection = await transport.waitForConnection()
++  const missingResponse = page.waitForResponse((response) => {
++    const url = new URL(response.url())
++    return (
++      url.pathname === "/api/location" &&
++      url.searchParams.get("location[directory]") === source &&
++      response.status() === 404
++    )
++  })
++  missing = true
++  await transport.close()
++  await transport.waitForConnection({ after: connection.id })
++  await missingResponse
++  await expect(page.getByRole("status")).toContainText("Session location unavailable")
++  await expect(prompt).toHaveCount(0)
++  await expect(page.getByText("Saved draft history", { exact: true })).toBeVisible()
++
++  await page.getByRole("button", { name: "Choose directory", exact: true }).click()
++  const dialog = page.getByRole("dialog", { name: "Choose directory", exact: true })
++  await expect(dialog.getByRole("combobox")).toBeFocused()
++  await dialog.getByRole("combobox").fill(destination)
++  await dialog.getByRole("combobox").press("Enter")
++  await expect(dialog.locator(".directory-picker-selection")).toHaveText(destination)
++  const move = page.waitForRequest(
++    (request) => new URL(request.url()).pathname === `/api/session/${sessionID}/move` && request.method() === "POST",
++  )
++  await dialog.getByRole("button", { name: "Select folder", exact: true }).click()
++  expect((await move).postDataJSON()).toEqual({ directory: destination })
++  await expect(page.getByText("Failed to move session", { exact: true })).toBeVisible()
++  await expect(page.getByRole("button", { name: "Choose directory", exact: true })).toBeEnabled()
++  await expect(prompt).toHaveCount(0)
++  expect(moves).toBe(1)
++
++  await page.getByRole("button", { name: "Choose directory", exact: true }).click()
++  await expect(dialog.getByRole("combobox")).toBeFocused()
++  await dialog.getByRole("combobox").fill(destination)
++  await dialog.getByRole("combobox").press("Enter")
++  await expect(dialog.locator(".directory-picker-selection")).toHaveText(destination)
++  const secondMove = page.waitForRequest(
++    (request) => new URL(request.url()).pathname === `/api/session/${sessionID}/move` && request.method() === "POST",
++  )
++  await dialog.getByRole("button", { name: "Select folder", exact: true }).click()
++  expect((await secondMove).postDataJSON()).toEqual({ directory: destination })
++  expect(moves).toBe(2)
++  session.directory = destination
++  missing = false
++  await transport.send({
++    id: "evt_draft_recovery_moved",
++    type: "session.moved",
++    created: 2,
++    durable: { aggregateID: sessionID, seq: 1, version: 1 },
++    data: { sessionID, location: { directory: destination }, projectID: fixture.project.id },
++  })
++  await expect(prompt).toBeEditable()
++  await expect(prompt).toHaveText("A draft to keep after moving")
++  await expect(page.getByText("Saved draft history", { exact: true })).toBeVisible()
++})
++
++test("ignores a stale missing result after the session moves", async ({ page }) => {
++  const source = "/projects/old-worktree"
++  const destination = "/projects/new-worktree"
++  const sessionID = "ses_stale_location_read"
++  const session = { id: sessionID, projectID: fixture.project.id, directory: source, title: "Moving session" }
++  const requested = Promise.withResolvers<void>()
++  const release = Promise.withResolvers<void>()
++  const transport = await installSseTransport(page, { server: fixture.serverKey })
++  await mockOpenCodeServer(page, {
++    directory: fixture.directory,
++    project: fixture.project,
++    provider: fixture.provider,
++    sessions: [session],
++    pageMessages: () => ({ items: [] }),
++  })
++  await page.route("**/api/location?**", async (route) => {
++    if (new URL(route.request().url()).searchParams.get("location[directory]") !== source) return route.fallback()
++    requested.resolve()
++    await release.promise
++    return route.fulfill({
++      status: 404,
++      json: { _tag: "LocationNotFoundError", directory: source, message: `Location not found: ${source}` },
++      headers: { "access-control-allow-origin": "*" },
++    })
++  })
++  await page.goto(`/server/${base64Encode(fixture.serverKey)}/session/${sessionID}`)
++  await requested.promise
++  const prompt = page.getByRole("textbox", { name: "Prompt", exact: true })
++  await expect(prompt).toBeEditable()
++  await prompt.fill("Draft in new worktree")
++  await transport.waitForConnection()
++  const next = page.waitForResponse((response) => {
++    const url = new URL(response.url())
++    return (
++      url.pathname === "/api/location" && url.searchParams.get("location[directory]") === destination && response.ok()
++    )
++  })
++  session.directory = destination
++  await transport.send({
++    id: "evt_stale_probe_moved",
++    type: "session.moved",
++    created: 2,
++    durable: { aggregateID: sessionID, seq: 1, version: 1 },
++    data: { sessionID, location: { directory: destination }, projectID: fixture.project.id },
++  })
++  await next
++  const old = page.waitForResponse((response) => {
++    const url = new URL(response.url())
++    return (
++      url.pathname === "/api/location" &&
++      url.searchParams.get("location[directory]") === source &&
++      response.status() === 404
++    )
++  })
++  release.resolve()
++  await old
++  await expect(prompt).toBeEditable()
++  await expect(prompt).toHaveText("Draft in new worktree")
++  await expect(page.getByText("Session location unavailable", { exact: true })).toHaveCount(0)
++})
++
++test("moves a removed-worktree session into an existing worktree", async ({ page }) => {
++  const source = "/projects/deleted-worktree"
++  const destination = "/projects/existing-worktree"
++  const sessionID = "ses_existing_worktree"
++  const session = { id: sessionID, projectID: fixture.project.id, directory: source, title: "Existing worktree" }
++  const transport = await installSseTransport(page, { server: fixture.serverKey })
++  await mockOpenCodeServer(page, {
++    directory: fixture.directory,
++    project: { ...fixture.project, sandboxes: [destination] },
++    provider: fixture.provider,
++    sessions: [session],
++    pageMessages: () => ({ items: [] }),
++  })
++  await page.route("**/api/location?**", (route) => {
++    if (new URL(route.request().url()).searchParams.get("location[directory]") !== source) return route.fallback()
++    return route.fulfill({
++      status: 404,
++      json: { _tag: "LocationNotFoundError", directory: source, message: `Location not found: ${source}` },
++      headers: { "access-control-allow-origin": "*" },
++    })
++  })
++  await page.route(`**/api/session/${sessionID}/move`, (route) => route.fulfill({ status: 204, body: "" }))
++  await page.goto(`/server/${base64Encode(fixture.serverKey)}/session/${sessionID}`)
++  await expect(page.getByRole("status")).toContainText("Session location unavailable")
++  await transport.waitForConnection()
++  await page.getByRole("button", { name: "Choose worktree", exact: true }).click()
++  const option = page.getByRole("menuitem", { name: "existing-worktree", exact: true })
++  await expect(option).toBeVisible()
++  const move = page.waitForRequest(
++    (request) => new URL(request.url()).pathname === `/api/session/${sessionID}/move` && request.method() === "POST",
++  )
++  await option.click()
++  expect((await move).postDataJSON()).toEqual({ directory: destination })
++  session.directory = destination
++  await transport.send({
++    id: "evt_existing_worktree_moved",
++    type: "session.moved",
++    created: 2,
++    durable: { aggregateID: sessionID, seq: 1, version: 1 },
++    data: { sessionID, location: { directory: destination }, projectID: fixture.project.id },
++  })
++  await expect(page.getByRole("textbox", { name: "Prompt", exact: true })).toBeEditable()
++  await expect(page.getByText("Session location unavailable", { exact: true })).toHaveCount(0)
++})
++
++test("recovers a missing session directory without consulting the worktree inventory", async ({ page }) => {
++  const source = "/projects/unregistered-worktree"
++  const sessionID = "ses_unregistered_worktree"
++  await mockOpenCodeServer(page, {
++    directory: fixture.directory,
++    project: fixture.project,
++    provider: fixture.provider,
++    sessions: [{ id: sessionID, projectID: fixture.project.id, directory: source }],
++    pageMessages: () => ({
++      items: [{ id: "msg_saved", type: "user", text: "Keep this session", time: { created: 1 } }],
++    }),
++  })
++  const inventory: string[] = []
++  page.on("request", (request) => {
++    if (new URL(request.url()).pathname.startsWith("/api/worktree")) inventory.push(request.url())
++  })
++  await page.route("**/api/location?**", (route) => {
++    if (new URL(route.request().url()).searchParams.get("location[directory]") !== source) return route.fallback()
++    return route.fulfill({
++      status: 404,
++      json: { _tag: "LocationNotFoundError", directory: source, message: `Location not found: ${source}` },
++      headers: { "access-control-allow-origin": "*" },
++    })
++  })
++  const missing = page.waitForResponse((response) => {
++    const url = new URL(response.url())
++    return (
++      url.pathname === "/api/location" &&
++      url.searchParams.get("location[directory]") === source &&
++      response.status() === 404
++    )
++  })
++  await page.goto(`/server/${base64Encode(fixture.serverKey)}/session/${sessionID}`)
++  await missing
++  await expect(page.getByText("Keep this session", { exact: true })).toBeVisible()
++  await expect(page.getByRole("status")).toContainText("Session location unavailable")
++  await expect(page.getByRole("textbox", { name: "Prompt", exact: true })).toHaveCount(0)
++  expect(inventory).toEqual([])
++})
+diff --git a/packages/app/src/session/composer/location-missing.tsx b/packages/app/src/session/composer/location-missing.tsx
+new file mode 100644
+index 000000000000..f6a3efd31dde
+--- /dev/null
++++ b/packages/app/src/session/composer/location-missing.tsx
+@@ -0,0 +1,135 @@
++import { Button } from "@opencode/ui/button"
++import { useDialog } from "@opencode/ui/context/dialog"
++import { DockShell, DockTray } from "@opencode/ui/dock-surface"
++import { Icon } from "@opencode/ui/icon"
++import { Menu } from "@opencode/ui/menu"
++import { getFilename } from "@opencode/util/path"
++import { useMutation } from "@tanstack/solid-query"
++import { createEffect, createResource, For, Show } from "solid-js"
++import { createStore } from "solid-js/store"
++import { useLanguage } from "@/runtime/i18n/language"
++import { useServerSDK } from "@/runtime/server/client"
++import { useData } from "@/runtime/server/current"
++import { showToast } from "@/shell/notifications/toast"
++import { useDirectoryPicker } from "@/workspaces/selection/picker"
++import { createWorktree } from "@/workspaces/create"
++
++export type MissingLocation = { sessionID: string; projectID: string; directory: string }
++
++export function SessionLocationMissing(props: MissingLocation) {
++  const language = useLanguage()
++  const sdk = useServerSDK()
++  const data = useData()
++  const dialog = useDialog()
++  const pickDirectory = useDirectoryPicker()
++  const [state, setState] = createStore({ restoreFocus: false, worktreesOpen: false })
++  const project = () => data.project.get(props.projectID)
++  const [worktrees] = createResource(
++    () => (state.worktreesOpen ? props.projectID : undefined),
++    async (projectID) => {
++      try {
++        await sdk.api.worktree.refresh({ projectID })
++        return await sdk.api.worktree.list({ projectID })
++      } catch {
++        showToast({ variant: "error", title: language.t("session.location.worktreesFailed") })
++        return []
++      }
++    },
++    { initialValue: [] },
++  )
++  let button: HTMLButtonElement | undefined
++
++  const move = useMutation(() => ({
++    mutationFn: async (input: { sessionID: string; directory?: string }) => {
++      const current = project()
++      if (!current) throw new Error(language.t("workspace.move.failed"))
++      const destination =
++        input.directory ??
++        (await createWorktree({
++          api: sdk.api,
++          data,
++          directory: current.canonical,
++          project: { id: current.id, canonical: current.canonical, directory: current.canonical },
++        }))
++      await sdk.api.session.move({ sessionID: input.sessionID, directory: destination })
++    },
++    onError: (error) => {
++      setState("restoreFocus", true)
++      showToast({
++        variant: "error",
++        title: language.t("workspace.move.failed"),
++        description: error instanceof Error ? error.message : language.t("common.requestFailed"),
++      })
++    },
++  }))
++
++  createEffect(() => {
++    if (!state.restoreFocus || move.isPending || dialog.active) return
++    setState("restoreFocus", false)
++    button?.focus()
++  })
++
++  const choose = () => {
++    if (move.isPending) return
++    const sessionID = props.sessionID
++    pickDirectory({
++      server: sdk.server,
++      title: language.t("session.location.choose"),
++      onSelect: (result) => {
++        const directory = Array.isArray(result) ? result[0] : result
++        if (directory) move.mutate({ sessionID, directory })
++        if (!directory) setState("restoreFocus", true)
++      },
++    })
++  }
++
++  return (
++    <div data-component="session-location-missing">
++      <DockShell class="flex flex-col gap-2 p-3">
++        <div role="status" class="flex items-start gap-2 text-13-regular leading-[var(--line-height-base)]">
++          <Icon name="warning" class="shrink-0 text-icon-warning-base" />
++          <div class="min-w-0 flex flex-col gap-1">
++            <div class="font-medium text-text-strong">{language.t("session.location.unavailable")}</div>
++            <div class="break-all font-mono text-12-regular text-text-weak">{props.directory}</div>
++            <div class="text-text-base">{language.t("session.location.description")}</div>
++          </div>
++        </div>
++      </DockShell>
++      <DockTray class="flex flex-wrap justify-end gap-2 p-2">
++        <Show when={project()?.vcs === "git"}>
++          <Menu placement="top-end" onOpenChange={(open) => setState("worktreesOpen", open)}>
++            <Menu.Trigger as={Button} variant="neutral" disabled={move.isPending}>
++              {language.t("session.location.worktree")}
++            </Menu.Trigger>
++            <Menu.Portal>
++              <Menu.Content class="max-h-80 max-w-[calc(100vw-32px)] overflow-y-auto">
++                <Menu.Item onSelect={() => move.mutate({ sessionID: props.sessionID })} disabled={move.isPending}>
++                  <Icon name="workspace-new" />
++                  {language.t("workspace.new")}
++                </Menu.Item>
++                <Show when={worktrees.loading}>
++                  <Menu.Item disabled>{language.t("common.loading")}</Menu.Item>
++                </Show>
++                <For each={worktrees.latest.filter((item) => item.strategy && item.directory !== props.directory)}>
++                  {(worktree) => (
++                    <Menu.Item
++                      title={worktree.directory}
++                      onSelect={() => move.mutate({ sessionID: props.sessionID, directory: worktree.directory })}
++                      disabled={move.isPending}
++                    >
++                      <Icon name="workspace-isolated" />
++                      <span class="truncate">{getFilename(worktree.directory)}</span>
++                    </Menu.Item>
++                  )}
++                </For>
++              </Menu.Content>
++            </Menu.Portal>
++          </Menu>
++        </Show>
++        <Button ref={button} variant="contrast" onClick={choose} disabled={move.isPending}>
++          {language.t(move.isPending ? "session.location.moving" : "session.location.choose")}
++        </Button>
++      </DockTray>
++    </div>
++  )
++}
+diff --git a/packages/app/src/session/composer/region.tsx b/packages/app/src/session/composer/region.tsx
+index 60eb3c6da247..792607973a3f 100644
+--- a/packages/app/src/session/composer/region.tsx
++++ b/packages/app/src/session/composer/region.tsx
+@@ -4,7 +4,7 @@ import { useDialog } from "@opencode/ui/context/dialog"
+ import { isScrollKeyTarget, scrollKey, scrollKeyOwner } from "@opencode/ui/scroll-view"
+ import { makeEventListener } from "@solid-primitives/event-listener"
+ import { useNavigate } from "@solidjs/router"
+-import { createEffect, createMemo, on, onMount, type Accessor } from "solid-js"
++import { createEffect, createMemo, on, onMount, Show, type Accessor } from "solid-js"
+ import { Composer } from "@/composer/composer"
+ import { useComposerState } from "@/composer/persistence"
+ import { createComposerControls } from "@/composer/selection"
+@@ -29,6 +29,7 @@ import { createSessionComposerController, type SessionComposerController } from
+ import { SessionQueuePanel } from "./queue-panel"
+ import { resolveSessionComposerSelection } from "./selection"
+ import { createSessionRequestModel } from "../requests/model"
++import { SessionLocationMissing, type MissingLocation } from "./location-missing"
+ 
+ export function createActiveSessionRegion(input: {
+   session: SessionModel
+@@ -219,22 +220,33 @@ export type ActiveSessionRegionModel = ReturnType<typeof createActiveSessionRegi
+ export function ActiveSessionComposerRegion(props: {
+   model: SessionComposerController
+   suggestionBoundary: () => HTMLElement | undefined
++  missing?: Accessor<MissingLocation | undefined>
+ }) {
+   return (
+     <SessionComposerRegion
+-      controller={props.model.region}
++      controller={{
++        ...props.model.region,
++        showComposer: () => props.model.region.showComposer() || !!props.missing?.(),
++      }}
+       composer={
+-        <div class="relative">
+-          <SessionQueuePanel queue={props.model.queue} />
+-          <div class="relative z-10">
+-            <Composer
+-              model={props.model.composer}
+-              borderUnderlay
+-              readOnly={props.model.queue.undoing()}
+-              suggestionBoundary={props.suggestionBoundary}
+-            />
+-          </div>
+-        </div>
++        <Show
++          when={props.missing?.()}
++          fallback={
++            <div class="relative">
++              <SessionQueuePanel queue={props.model.queue} />
++              <div class="relative z-10">
++                <Composer
++                  model={props.model.composer}
++                  borderUnderlay
++                  readOnly={props.model.queue.undoing()}
++                  suggestionBoundary={props.suggestionBoundary}
++                />
++              </div>
++            </div>
++          }
++        >
++          {(missing) => <SessionLocationMissing {...missing()} />}
++        </Show>
+       }
+     />
+   )
+diff --git a/packages/app/src/session/route.tsx b/packages/app/src/session/route.tsx
+index 0900b868de3a..77bc364280a4 100644
+--- a/packages/app/src/session/route.tsx
++++ b/packages/app/src/session/route.tsx
+@@ -1,7 +1,9 @@
+-import { ErrorBoundary, createEffect, createMemo, Show, type ParentProps } from "solid-js"
++import { ErrorBoundary, createEffect, createMemo, onCleanup, Show, type ParentProps } from "solid-js"
++import { createStore } from "solid-js/store"
+ import { useParams } from "@solidjs/router"
+ import { DataProvider } from "@opencode/session-ui/context"
+ import { SessionUserMessage } from "@opencode/session-ui/message"
++import { isLocationNotFoundError } from "@opencode/client/promise"
+ import { TextShimmer } from "@opencode/ui/text-shimmer"
+ import { CommentsProvider } from "@/composer/comments"
+ import { readPromptPresentation } from "@/composer/comment-note"
+@@ -27,13 +29,46 @@ import { SessionErrorFallback } from "./route-error"
+ import { createSessionResolution } from "./session-resolution"
+ import { SessionScreen } from "./screen"
+ import { PreparingComposer } from "./preparing-composer"
++import type { MissingLocation } from "./composer/location-missing"
+ 
+ export function TargetSessionRouteContent() {
+   const params = useParams<{ serverKey: string; id: string }>()
+   const data = useData()
+   const server = useServer()
+   const tabs = useTabs()
++  const [locationState, setLocationState] = createStore<{ missing?: MissingLocation }>({})
+   const directory = createMemo(() => data.session.get(params.id)?.location.directory)
++  createEffect(() => {
++    const session = data.session.get(params.id)
++    const directory = session?.location.directory
++    const project = session && data.project.get(session.projectID)
++    const connected = server.ctx.sdk.connection.status() === "connected"
++    setLocationState("missing", undefined)
++    if (!session || !directory || !project || !connected || directory === project.canonical) return
++    let stale = false
++    onCleanup(() => {
++      stale = true
++    })
++    void server.ctx.sdk.api.location.get({ location: { directory } }).then(
++      () => undefined,
++      (error) => {
++        if (
++          !stale &&
++          server.ctx.sdk.connection.status() === "connected" &&
++          isLocationNotFoundError(error) &&
++          error.directory === directory
++        )
++          setLocationState("missing", { sessionID: session.id, projectID: project.id, directory })
++      },
++    )
++  })
++  const missing = createMemo(() => {
++    const session = data.session.get(params.id)
++    const state = locationState.missing
++    if (!state || !session || session.id !== state.sessionID || session.location.directory !== state.directory) return
++    if (server.ctx.sdk.connection.status() !== "connected") return
++    return state
++  })
+ 
+   return (
+     <>
+@@ -41,7 +76,10 @@ export function TargetSessionRouteContent() {
+       <ModelsProvider directory={directory}>
+         <TargetSessionSettingsCommand />
+         <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)}>
+-          <Show when={tabs.pendingSession(server.key, params.id)} fallback={<ResolvedTargetSessionRoute />}>
++          <Show
++            when={tabs.pendingSession(server.key, params.id)}
++            fallback={<ResolvedTargetSessionRoute missing={missing} />}
++          >
+             {(pending) => <PreparingSession sessionID={params.id} pending={pending()} />}
+           </Show>
+         </SessionRouteErrorBoundary>
+@@ -111,7 +149,7 @@ function SessionRouteErrorBoundary(props: ParentProps<{ sessionID?: string; serv
+   )
+ }
+ 
+-function ResolvedTargetSessionRoute() {
++function ResolvedTargetSessionRoute(props: { missing: () => MissingLocation | undefined }) {
+   const params = useParams<{ id: string }>()
+   const server = useServer()
+   const tabs = useTabs()
+@@ -138,7 +176,7 @@ function ResolvedTargetSessionRoute() {
+         {(value) => (
+           <LocationProvider directory={value}>
+             <SessionUIProvider directory={value()} server={server.key}>
+-              <TargetSessionPage />
++              <TargetSessionPage missing={props.missing} />
+             </SessionUIProvider>
+           </LocationProvider>
+         )}
+@@ -163,7 +201,7 @@ function SessionStatePanel(props: ParentProps) {
+   )
+ }
+ 
+-function TargetSessionPage() {
++function TargetSessionPage(props: { missing: () => MissingLocation | undefined }) {
+   return (
+     // These providers select their scoped state reactively and retain bounded caches,
+     // so keep their owners alive while navigating between workspaces on this server.
+@@ -171,7 +209,7 @@ function TargetSessionPage() {
+       <FileProvider>
+         <ComposerPersistenceProvider>
+           <CommentsProvider>
+-            <SessionPage />
++            <SessionPage missing={props.missing} />
+           </CommentsProvider>
+         </ComposerPersistenceProvider>
+       </FileProvider>
+@@ -179,9 +217,9 @@ function TargetSessionPage() {
+   )
+ }
+ 
+-function SessionPage() {
++function SessionPage(props: { missing: () => MissingLocation | undefined }) {
+   const session = useSessionModel()
+-  return <SessionScreen session={session} />
++  return <SessionScreen session={session} missing={props.missing} />
+ }
+ 
+ function MarkSessionNotificationsViewed(props: { sessionID: () => string | undefined }) {
+diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
+index 80e5bab2afec..3c90a4fbe6d3 100644
+--- a/packages/app/src/session/screen.tsx
++++ b/packages/app/src/session/screen.tsx
+@@ -9,6 +9,7 @@ import {
+   createEffect,
+   createComputed,
+   on,
++  type Accessor,
+ } from "solid-js"
+ import { createStore } from "solid-js/store"
+ import { ResizeHandle } from "@opencode/ui/resize-handle"
+@@ -36,6 +37,7 @@ import { createSessionBrowser } from "./browser/model"
+ import { createTimelineCache } from "./timeline/cache"
+ import { ArtifactMarkdownProvider, ArtifactOpenerProvider } from "./files/open-artifact"
+ import { createSessionBtw } from "./btw/model"
++import type { MissingLocation } from "./composer/location-missing"
+ 
+ const SessionMobileFiles = lazy(async () => {
+   const { SessionMobileFiles } = await import("./files/session-mobile-files")
+@@ -47,19 +49,23 @@ const SessionSummaryPanel = lazy(async () => {
+   return { default: SessionSummaryPanel }
+ })
+ 
+-export function SessionScreen(props: { session: SessionModel }) {
++export function SessionScreen(props: { session: SessionModel; missing?: Accessor<MissingLocation | undefined> }) {
+   // The timeline cache captures its owner when created, so link handling must be provided above it.
+   const browser = createSessionBrowser(props.session)
+   return (
+     <ArtifactOpenerProvider session={props.session} browser={browser}>
+       <ArtifactMarkdownProvider>
+-        <SessionScreenContent session={props.session} browser={browser} />
++        <SessionScreenContent session={props.session} browser={browser} missing={props.missing} />
+       </ArtifactMarkdownProvider>
+     </ArtifactOpenerProvider>
+   )
+ }
+ 
+-function SessionScreenContent(props: { session: SessionModel; browser: ReturnType<typeof createSessionBrowser> }) {
++function SessionScreenContent(props: {
++  session: SessionModel
++  browser: ReturnType<typeof createSessionBrowser>
++  missing?: Accessor<MissingLocation | undefined>
++}) {
+   const session = props.session
+   const browser = props.browser
+   const server = useServer()
+@@ -324,7 +330,9 @@ function SessionScreenContent(props: { session: SessionModel; browser: ReturnTyp
+       </div>
+ 
+       <Show when={composer.active()} keyed>
+-        {(model) => <ActiveSessionComposerRegion model={model} suggestionBoundary={timeline.scroller} />}
++        {(model) => (
++          <ActiveSessionComposerRegion model={model} suggestionBoundary={timeline.scroller} missing={props.missing} />
++        )}
+       </Show>
+     </>
+   )
+diff --git a/packages/app/src/session/timeline/session-workspace-menu.tsx b/packages/app/src/session/timeline/session-workspace-menu.tsx
+index 637c1d1cc7f4..c347b763583c 100644
+--- a/packages/app/src/session/timeline/session-workspace-menu.tsx
++++ b/packages/app/src/session/timeline/session-workspace-menu.tsx
+@@ -69,7 +69,7 @@ export function SessionWorkspaceMenu(props: {
+               api: sdk.api,
+               data,
+               directory: props.directory,
+-              project: data.location.info({ directory: props.directory })?.project,
++              project: { id: props.project.id, canonical: props.project.worktree, directory: props.project.worktree },
+             })
+           : selection
+       if (!destination) return
+diff --git a/packages/client/src/promise/generated/client.ts b/packages/client/src/promise/generated/client.ts
+index e78020b7442a..f6ee95283d7d 100644
+--- a/packages/client/src/promise/generated/client.ts
++++ b/packages/client/src/promise/generated/client.ts
+@@ -447,7 +447,7 @@ export function make(options: ClientOptions) {
+             path: `/api/location`,
+             query: { location: input?.["location"] },
+             successStatus: 200,
+-            declaredStatuses: [400, 401],
++            declaredStatuses: [400, 401, 404],
+             empty: false,
+           },
+           requestOptions,
+diff --git a/packages/client/src/promise/generated/types.ts b/packages/client/src/promise/generated/types.ts
+index 217cc570e5b1..e767142f71c2 100644
+--- a/packages/client/src/promise/generated/types.ts
++++ b/packages/client/src/promise/generated/types.ts
+@@ -2518,6 +2518,14 @@ export type UnauthorizedError = { readonly _tag: "UnauthorizedError"; readonly m
+ export const isUnauthorizedError = (value: unknown): value is UnauthorizedError =>
+   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "UnauthorizedError"
+ 
++export type LocationNotFoundError = {
++  readonly _tag: "LocationNotFoundError"
++  readonly directory: string
++  readonly message: string
++}
++export const isLocationNotFoundError = (value: unknown): value is LocationNotFoundError =>
++  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "LocationNotFoundError"
++
+ export type ServiceUnavailableError = {
+   readonly _tag: "ServiceUnavailableError"
+   readonly message: string
+diff --git a/packages/protocol/src/api.ts b/packages/protocol/src/api.ts
+index e837cff11653..f3e36dd8f1e8 100644
+--- a/packages/protocol/src/api.ts
++++ b/packages/protocol/src/api.ts
+@@ -66,9 +66,7 @@ type FormGroups<LocationId extends HttpApiMiddleware.AnyId, LocationService> = R
+   typeof makeFormGroup<LocationId, LocationService>
+ >
+ 
+-type LocationGroup<LocationId extends HttpApiMiddleware.AnyId, LocationService> = ReturnType<
+-  typeof makeLocationGroup<LocationId, LocationService>
+->
++type LocationGroup = ReturnType<typeof makeLocationGroup>
+ 
+ type MixedMiddlewareGroups<
+   LocationId extends HttpApiMiddleware.AnyId,
+@@ -94,7 +92,7 @@ type ApiGroups<
+   | typeof PersistentPtyGroup
+   | typeof CredentialGroup
+   | LocationGroups<LocationId>
+-  | LocationGroup<LocationId, LocationService>
++  | LocationGroup
+   | FormGroups<LocationId, LocationService>
+   | SessionGroups<SessionLocationId, SessionLocationService, FormLocationId, FormLocationService>
+   | MixedMiddlewareGroups<LocationId, LocationService, SessionLocationId, SessionLocationService>
+@@ -154,7 +152,7 @@ const makeApiFromGroup = <
+ > =>
+   HttpApi.make("server")
+     .add(ServerGroup)
+-    .add(makeLocationGroup(locationMiddleware))
++    .add(makeLocationGroup())
+     .add(AgentGroup.middleware(locationMiddleware))
+     .add(PluginGroup.middleware(locationMiddleware))
+     .add(makeSessionGroup(sessionLocationMiddleware, formLocationMiddleware))
+diff --git a/packages/protocol/src/errors.ts b/packages/protocol/src/errors.ts
+index 5e2ee1705c8a..a318f45272f0 100644
+--- a/packages/protocol/src/errors.ts
++++ b/packages/protocol/src/errors.ts
+@@ -129,6 +129,15 @@ export class FileNotFoundError extends Schema.TaggedError<FileNotFoundError>()(
+   { httpApiStatus: 404 },
+ ) {}
+ 
++export class LocationNotFoundError extends Schema.TaggedError<LocationNotFoundError>()(
++  "LocationNotFoundError",
++  {
++    directory: Schema.String,
++    message: Schema.String,
++  },
++  { httpApiStatus: 404 },
++) {}
++
+ export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()(
+   "AgentNotFoundError",
+   {
+diff --git a/packages/protocol/src/groups/location.ts b/packages/protocol/src/groups/location.ts
+index ffcce9a4cd2f..8fc6cb567d8e 100644
+--- a/packages/protocol/src/groups/location.ts
++++ b/packages/protocol/src/groups/location.ts
+@@ -1,7 +1,7 @@
+ import { Location } from "@opencode/schema/location"
+-import { Context, Schema } from "effect"
+-import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+-import { ServiceUnavailableError } from "../errors.js"
++import { Schema } from "effect"
++import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
++import { LocationNotFoundError, ServiceUnavailableError } from "../errors.js"
+ 
+ export const LocationQuery = Schema.Struct({
+   location: Schema.optional(
+@@ -26,18 +26,16 @@ export const locationQueryOpenApi = OpenApi.annotations({
+   },
+ })
+ 
+-// Middleware is applied per endpoint: reload acts on every loaded location and
+-// must not boot the caller's location first.
+-export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, LocationService>(
+-  locationMiddleware: Context.Key<LocationId, LocationService>,
+-) =>
++// Get checks the path before entering the location scope; reload acts on all
++// loaded locations and must not boot the caller's location first.
++export const makeLocationGroup = () =>
+   HttpApiGroup.make("server.location")
+     .add(
+       HttpApiEndpoint.get("location.get", "/api/location", {
+         query: LocationQuery,
+         success: Location.PublicInfo,
++        error: LocationNotFoundError,
+       })
+-        .middleware(locationMiddleware)
+         .annotateMerge(locationQueryOpenApi)
+         .annotateMerge(
+           OpenApi.annotations({
+diff --git a/packages/server/src/handlers/location.ts b/packages/server/src/handlers/location.ts
+index bfd7eec2785b..5db75ff483df 100644
+--- a/packages/server/src/handlers/location.ts
++++ b/packages/server/src/handlers/location.ts
+@@ -1,22 +1,41 @@
+ import { Location } from "@opencode/core/location"
+ import { LocationServiceMap } from "@opencode/core/location-service-map"
+-import { ServiceUnavailableError } from "@opencode/protocol/errors"
++import { LocationNotFoundError, ServiceUnavailableError } from "@opencode/protocol/errors"
++import { FSUtil } from "@opencode/util/fs-util"
+ import { Cause, Effect } from "effect"
+ import { HttpApiBuilder } from "effect/unstable/httpapi"
+ import { Api } from "../api"
++import { requestRef } from "../location"
+ 
+ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (handlers) =>
+   Effect.gen(function* () {
+     const locations = yield* LocationServiceMap.Service
++    const fs = yield* FSUtil.Service
+     return handlers
+       .handle(
+         "location.get",
+-        Effect.fn(function* () {
+-          const location = yield* Location.Service
+-          return new Location.Info({
+-            directory: location.directory,
+-            project: location.project,
+-          })
++        Effect.fn(function* (ctx) {
++          const ref = requestRef(ctx.request)
++          const missing = () =>
++            new LocationNotFoundError({ directory: ref.directory, message: `Location not found: ${ref.directory}` })
++          const stat = yield* fs.stat(ref.directory).pipe(
++            Effect.catchTag("PlatformError", (error) => {
++              if (error.reason._tag === "NotFound") return missing()
++              if (
++                error.reason._tag === "BadResource" &&
++                error.reason.cause instanceof Error &&
++                "code" in error.reason.cause &&
++                error.reason.cause.code === "ENOTDIR"
++              )
++                return missing()
++              return Effect.die(error)
++            }),
++          )
++          if (stat.type !== "Directory") return yield* missing()
++          return yield* Effect.gen(function* () {
++            const location = yield* Location.Service
++            return new Location.Info({ directory: location.directory, project: location.project })
++          }).pipe(Effect.provide(locations.get(ref)))
+         }),
+       )
+       .handle("location.reload", () =>
+diff --git a/packages/server/src/routes.ts b/packages/server/src/routes.ts
+index c4f746f1d82b..ed760a380a19 100644
+--- a/packages/server/src/routes.ts
++++ b/packages/server/src/routes.ts
+@@ -22,6 +22,7 @@ import { ShellSelect } from "@opencode/core/shell/select"
+ import { Job } from "@opencode/core/job"
+ import { Mcp } from "@opencode/core/mcp/index"
+ import { Global } from "@opencode/util/global"
++import { FSUtil } from "@opencode/util/fs-util"
+ import { InstructionDiscovery } from "@opencode/core/instruction-discovery"
+ import { LocationServiceMap } from "@opencode/core/location-service-map"
+ import { LocationActivity } from "@opencode/core/location-activity"
+@@ -51,6 +52,7 @@ import type { ServerOptions } from "./options"
+ 
+ const applicationServiceNodes = [
+   Global.node,
++  FSUtil.node,
+   Database.node,
+   Bus.node,
+   EventLogger.node,
+@@ -168,6 +170,7 @@ function makeRoutes<AuthError, AuthServices>(
+             PermissionSaved.Service,
+             PluginUpdate.Service,
+             Project.Service,
++            FSUtil.Service,
+             WellKnown.Service,
+           )(context),
+         ),
+diff --git a/packages/server/test/location-get.test.ts b/packages/server/test/location-get.test.ts
+new file mode 100644
+index 000000000000..92e510541868
+--- /dev/null
++++ b/packages/server/test/location-get.test.ts
+@@ -0,0 +1,86 @@
++import fs from "node:fs/promises"
++import path from "node:path"
++import { expect } from "bun:test"
++import { Effect } from "effect"
++import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
++import { it } from "../../core/test/lib/effect"
++import { startServer } from "./fixture/server"
++
++it.live("reads an existing directory through the existing location endpoint", () =>
++  Effect.gen(function* () {
++    const tmp = yield* tmpdirScoped()
++    const existing = path.join(tmp.path, "existing")
++    yield* Effect.promise(() => fs.mkdir(existing))
++    const server = yield* startServer(tmp.path)
++    const url = new URL("/api/location", server.base)
++    url.searchParams.set("location[directory]", existing)
++    const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
++    expect(response.status).toBe(200)
++    expect((yield* Effect.promise(() => response.json())).directory).toBe(existing)
++
++    const header = yield* Effect.promise(() =>
++      fetch(new URL("/api/location", server.base), {
++        headers: { ...server.headers, "x-opencode-directory": encodeURIComponent(existing) },
++      }),
++    )
++    expect((yield* Effect.promise(() => header.json())).directory).toBe(existing)
++
++    const precedence = yield* Effect.promise(() =>
++      fetch(url, {
++        headers: { ...server.headers, "x-opencode-directory": encodeURIComponent(path.join(tmp.path, "removed")) },
++      }),
++    )
++    expect((yield* Effect.promise(() => precedence.json())).directory).toBe(existing)
++
++    const defaultLocation = yield* Effect.promise(() =>
++      fetch(new URL("/api/location", server.base), { headers: server.headers }),
++    )
++    expect(defaultLocation.status).toBe(200)
++    expect((yield* Effect.promise(() => defaultLocation.json())).directory).toBe(process.cwd())
++
++    yield* Effect.promise(() => fs.rmdir(existing))
++    const removed = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
++    expect(removed.status).toBe(404)
++    expect(yield* Effect.promise(() => removed.json())).toMatchObject({
++      _tag: "LocationNotFoundError",
++      directory: existing,
++    })
++  }),
++)
++
++it.live("reports only a missing or non-directory location as a typed 404 before booting", () =>
++  Effect.gen(function* () {
++    const tmp = yield* tmpdirScoped()
++    const missing = path.join(tmp.path, "removed")
++    const file = path.join(tmp.path, "file")
++    const loop = path.join(tmp.path, "loop")
++    yield* Effect.promise(async () => {
++      await fs.writeFile(file, "content")
++      await fs.symlink(loop, loop)
++    })
++    const server = yield* startServer(tmp.path)
++    const get = (directory: string) =>
++      Effect.promise(async () => {
++        const url = new URL("/api/location", server.base)
++        url.searchParams.set("location[directory]", directory)
++        const response = await fetch(url, { headers: server.headers })
++        return { status: response.status, body: await response.json() }
++      })
++
++    for (const directory of [missing, file, path.join(file, "child")]) {
++      expect(yield* get(directory)).toMatchObject({
++        status: 404,
++        body: { _tag: "LocationNotFoundError", directory },
++      })
++    }
++    expect((yield* get(loop)).status).toBe(500)
++    const probe = yield* Effect.promise(() =>
++      fetch(new URL("/api/location/probe", server.base), { headers: server.headers }),
++    )
++    expect(probe.status).toBe(404)
++    const loaded = yield* Effect.promise(async () =>
++      (await fetch(new URL("/api/debug/location", server.base), { headers: server.headers })).json(),
++    )
++    expect(loaded).toEqual([])
++  }),
++)

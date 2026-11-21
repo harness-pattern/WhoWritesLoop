@@ -1,0 +1,103 @@
+diff --git a/packages/app/src/settings/general/general.tsx b/packages/app/src/settings/general/general.tsx
+index 42570f0dbab0..9a63b508db45 100644
+--- a/packages/app/src/settings/general/general.tsx
++++ b/packages/app/src/settings/general/general.tsx
+@@ -394,7 +394,7 @@ export const SettingsGeneral: Component = () => {
+           </div>
+         </SettingsRow>
+ 
+-        <Show when={mobile() && import.meta.env.VITE_OPENCODE_CHANNEL !== "prod"}>
++        <Show when={mobile()}>
+           <SettingsRow
+             title={language.t("settings.general.row.mobileTitlebarBottom.title")}
+             description={language.t("settings.general.row.mobileTitlebarBottom.description")}
+diff --git a/packages/app/src/settings/search-catalog.ts b/packages/app/src/settings/search-catalog.ts
+index 983992d1ccfc..0cf4f6b69222 100644
+--- a/packages/app/src/settings/search-catalog.ts
++++ b/packages/app/src/settings/search-catalog.ts
+@@ -12,7 +12,7 @@ type Entry<Tab> = {
+   description?: Label
+   section?: Label
+   subtab?: "mcps" | "plugins" | "skills" | "lsps"
+-  available?: "desktop" | "browser" | "dev" | "mobile-dev"
++  available?: "desktop" | "browser" | "mobile"
+ }
+ 
+ export const clientSettings: Entry<SettingsRootTab>[] = [
+@@ -83,7 +83,7 @@ export const clientSettings: Entry<SettingsRootTab>[] = [
+     tab: "general",
+     label: "settings.general.row.mobileTitlebarBottom.title",
+     target: "settings-mobile-titlebar-bottom",
+-    available: "mobile-dev",
++    available: "mobile",
+   },
+   {
+     tab: "general",
+diff --git a/packages/app/src/settings/search-index.ts b/packages/app/src/settings/search-index.ts
+index 04f1468b8828..72d5bc728eaa 100644
+--- a/packages/app/src/settings/search-index.ts
++++ b/packages/app/src/settings/search-index.ts
+@@ -17,7 +17,6 @@ export function settingsSearchIndex(input: {
+   servers: readonly SettingsSearchServer[]
+   desktop: boolean
+   browser: boolean
+-  dev: boolean
+   mobile: boolean
+   translate: ReturnType<typeof useLanguage>["t"]
+ }) {
+@@ -57,8 +56,7 @@ export function settingsSearchIndex(input: {
+   clientSettings.forEach((entry) => {
+     if (entry.available === "desktop" && !input.desktop) return
+     if (entry.available === "browser" && !input.browser) return
+-    if ((entry.available === "dev" || entry.available === "mobile-dev") && !input.dev) return
+-    if (entry.available === "mobile-dev" && !input.mobile) return
++    if (entry.available === "mobile" && !input.mobile) return
+     add(entry, { type: "root", tab: entry.tab, target: entry.target }, "")
+   })
+   input.servers.forEach((server) => {
+diff --git a/packages/app/src/settings/search-results.test.ts b/packages/app/src/settings/search-results.test.ts
+index 03bd4e85c54e..3324728eeb30 100644
+--- a/packages/app/src/settings/search-results.test.ts
++++ b/packages/app/src/settings/search-results.test.ts
+@@ -18,7 +18,6 @@ function index(input: Partial<Parameters<typeof settingsSearchIndex>[0]> = {}) {
+     servers,
+     desktop: false,
+     browser: false,
+-    dev: false,
+     mobile: false,
+     translate: (key) => strings[key],
+     ...input,
+@@ -49,7 +48,7 @@ describe("settings search index", () => {
+     expect(rankSettings("font", items, root)).toHaveLength(3)
+   })
+ 
+-  test("only advertises settings supported by this platform and channel", () => {
++  test("only advertises settings supported by this platform", () => {
+     const targets = (input: Parameters<typeof index>[0]) => index(input).map((item) => item.view.target)
+     expect(targets({})).not.toContain("settings-pinch-zoom")
+     expect(targets({})).not.toContain("settings-experimental-browser")
+@@ -57,9 +56,9 @@ describe("settings search index", () => {
+     expect(targets({})).toContain("settings-tab-layout")
+     expect(targets({ desktop: true })).toContain("settings-pinch-zoom")
+     expect(targets({ browser: true })).not.toContain("settings-experimental-browser")
+-    expect(targets({ dev: true })).not.toContain("settings-show-project-icon")
+-    expect(targets({ dev: true })).not.toContain("settings-mobile-titlebar-bottom")
+-    expect(targets({ dev: true, mobile: true })).toContain("settings-mobile-titlebar-bottom")
++    expect(targets({})).not.toContain("settings-show-project-icon")
++    expect(targets({})).not.toContain("settings-mobile-titlebar-bottom")
++    expect(targets({ mobile: true })).toContain("settings-mobile-titlebar-bottom")
+   })
+ 
+   test("uses section labels and stable identities independent of translated text", () => {
+diff --git a/packages/app/src/settings/search.tsx b/packages/app/src/settings/search.tsx
+index 1e251025f2f8..051b3c9bb3f8 100644
+--- a/packages/app/src/settings/search.tsx
++++ b/packages/app/src/settings/search.tsx
+@@ -75,7 +75,6 @@ export function SettingsSearch() {
+       servers: inventory(),
+       desktop: platform.platform === "desktop",
+       browser: !!platform.browserPane,
+-      dev: import.meta.env.VITE_OPENCODE_CHANNEL !== "prod",
+       mobile: mobile(),
+       translate: language.t,
+     }),

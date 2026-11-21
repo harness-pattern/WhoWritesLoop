@@ -1,0 +1,61 @@
+diff --git a/.github/workflows/e2e-tests.yml b/.github/workflows/e2e-tests.yml
+index 29b0a39fdf67..3f56fd9b7ec3 100644
+--- a/.github/workflows/e2e-tests.yml
++++ b/.github/workflows/e2e-tests.yml
+@@ -216,7 +216,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        shard: [1, 2, 3]
++        shard: [1, 2, 3, 4, 5]
+     permissions:
+       contents: read
+     env:
+diff --git a/.github/workflows/test-suite.yml b/.github/workflows/test-suite.yml
+index 323f47976470..57142b5f8d96 100644
+--- a/.github/workflows/test-suite.yml
++++ b/.github/workflows/test-suite.yml
+@@ -81,7 +81,7 @@ jobs:
+           retention-days: 1
+ 
+   e2e-test:
+-    name: E2E Test (${{ matrix.project }})
++    name: E2E Test (${{ matrix.project }} ${{ matrix.shard }}/4)
+     if: inputs.has_code == 'true'
+     runs-on: starsling-ubuntu-24.04
+     timeout-minutes: 30
+@@ -90,6 +90,7 @@ jobs:
+       matrix:
+         project:
+           - packages/*
++        shard: [1, 2, 3, 4]
+     env:
+       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+@@ -124,14 +125,15 @@ jobs:
+         id: normalize
+         run: echo "project_id=$(echo '${{ matrix.project }}' | tr '/' '-' | sed 's/\*/_star_/g')" >> $GITHUB_OUTPUT
+ 
+-      - name: Run changed tests (${{ matrix.project }})
++      - name: Run changed tests (${{ matrix.project }} ${{ matrix.shard }}/4)
+         run: |
+           pnpm vitest run \
+             --project 'e2e:${{ matrix.project }}' \
+             --reporter=blob \
+             --reporter=verbose \
+             --reporter=github-actions \
+-            --outputFile.blob=.vitest-reports/blob-e2e-${{ steps.normalize.outputs.project_id }}.json \
++            --outputFile.blob=.vitest-reports/blob-e2e-${{ steps.normalize.outputs.project_id }}-${{ matrix.shard }}.json \
++            --shard=${{ matrix.shard }}/4 \
+             --passWithNoTests
+         env:
+           NODE_OPTIONS: '--max_old_space_size=8192'
+@@ -140,7 +142,7 @@ jobs:
+         if: always()
+         uses: actions/upload-artifact@v6
+         with:
+-          name: vitest-blob-e2e-${{ steps.normalize.outputs.project_id }}
++          name: vitest-blob-e2e-${{ steps.normalize.outputs.project_id }}-${{ matrix.shard }}
+           path: .vitest-reports/
+           include-hidden-files: true
+           retention-days: 1

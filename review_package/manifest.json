@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-11-21T15:35:44.564900+00:00",
+  "seed": 20261121,
+  "database": "data/evolution2watch_data.sqlite",
+  "sample_size": 120,
+  "tier_counts": {
+    "T1": 42,
+    "T2": 42,
+    "T3": 36
+  },
+  "files": {
+    "review_sample.csv": "4cc263be4b57f56cd40a1394fdaa4e243c39a39c56810b377be9ba2776d40716",
+    "review_form.csv": "c9203d64fced23b1d41aec81428aa451cf35bc613dad7f17f2096db745a8e291",
+    "repo_counts.csv": "55b64391025ef960b3359057bfb98eb5c3f01d07882a3cb09eccfed2fd81ba99",
+    "revert_sample.csv": "e54b3d5fce62b74c73f2917d16e4714a25d4b48f5c4f7289e790d184cab7e3f9",
+    "pattern_sample.csv": "a5beaec403e5a3b3a7f940c501c7cb3685a2a1725ceb33557c325e9c69547737",
+    "review.html": "e9856faeeba1f0d3b92c22f1ba971f95b55b3cb0c098b1c7abcb4e36943bddac"
+  }
+}
