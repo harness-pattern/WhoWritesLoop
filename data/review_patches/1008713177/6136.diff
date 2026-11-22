@@ -1,0 +1,223 @@
+diff --git a/packages/core/src/core/coreToolScheduler.test.ts b/packages/core/src/core/coreToolScheduler.test.ts
+index c4418da937b..37b62c1256b 100644
+--- a/packages/core/src/core/coreToolScheduler.test.ts
++++ b/packages/core/src/core/coreToolScheduler.test.ts
+@@ -838,6 +838,68 @@ describe('CoreToolScheduler', () => {
+     );
+   });
+ 
++  it('aborts and fails a tool call that exceeds the execution timeout', async () => {
++    const previousTimeout = process.env['QWEN_CODE_TOOL_EXECUTION_TIMEOUT_MS'];
++    process.env['QWEN_CODE_TOOL_EXECUTION_TIMEOUT_MS'] = '30';
++    try {
++      let toolSawAbort = false;
++      // A tool that never settles on its own — it resolves only once its
++      // AbortSignal fires, proving the timeout actually cancels the tool
++      // rather than merely abandoning it.
++      const execute = vi.fn(
++        (_params: unknown, signal?: AbortSignal) =>
++          new Promise<ToolResult>((resolve) => {
++            signal?.addEventListener('abort', () => {
++              toolSawAbort = true;
++              resolve({
++                llmContent: 'aborted late',
++                returnDisplay: 'aborted late',
++              });
++            });
++          }),
++      );
++      const toolsByName = new Map<string, MockTool>([
++        [
++          'read_file',
++          new MockTool({ name: 'read_file', canUpdateOutput: true, execute }),
++        ],
++      ]);
++      const { scheduler, onAllToolCallsComplete } =
++        createSchedulerForLegacyToolTests({ toolsByName });
++
++      await scheduler.schedule(
++        [
++          {
++            callId: 'timeout-1',
++            name: 'read_file',
++            args: { file_path: 'a.ts' },
++            isClientInitiated: false,
++            prompt_id: 'prompt-timeout',
++          },
++        ],
++        new AbortController().signal,
++      );
++
++      const completedCall = (
++        onAllToolCallsComplete.mock.calls[0][0] as ToolCall[]
++      )[0];
++      expect(completedCall.status).toBe('error');
++      if (completedCall.status === 'error') {
++        expect(completedCall.response.errorType).toBe(
++          ToolErrorType.EXECUTION_TIMEOUT,
++        );
++        expect(completedCall.response.error?.message).toContain('timed out');
++      }
++      expect(toolSawAbort).toBe(true);
++    } finally {
++      if (previousTimeout === undefined) {
++        delete process.env['QWEN_CODE_TOOL_EXECUTION_TIMEOUT_MS'];
++      } else {
++        process.env['QWEN_CODE_TOOL_EXECUTION_TIMEOUT_MS'] = previousTimeout;
++      }
++    }
++  });
++
+   it('executes only the first request for duplicate callIds in one batch', async () => {
+     const execute = vi.fn().mockResolvedValue({
+       llmContent: 'first result',
+diff --git a/packages/core/src/core/coreToolScheduler.ts b/packages/core/src/core/coreToolScheduler.ts
+index b15aec8567e..4cb69e853d1 100644
+--- a/packages/core/src/core/coreToolScheduler.ts
++++ b/packages/core/src/core/coreToolScheduler.ts
+@@ -220,6 +220,22 @@ const TOOL_FAILURE_KIND_NON_INTERACTIVE_DENIED = 'non_interactive_denied';
+ const TOOL_FAILURE_KIND_BACKGROUND_AGENT_DENIED = 'background_agent_denied';
+ 
+ const TOOL_SPAN_STATUS_PRE_HOOK_BLOCKED = 'Tool execution blocked by hook';
++
++/**
++ * Builds the failure ToolResult surfaced when a tool call exceeds the
++ * execution timeout. Reported as a normal tool error so the model can adapt
++ * (narrow scope, retry, etc.) instead of the session hanging.
++ */
++function createToolTimeoutResult(timeoutMs: number): ToolResult {
++  const message =
++    `Tool execution timed out after ${Math.round(timeoutMs / 1000)}s. ` +
++    `The tool may be stuck or operating on too large a scope.`;
++  return {
++    llmContent: message,
++    returnDisplay: message,
++    error: { message, type: ToolErrorType.EXECUTION_TIMEOUT },
++  };
++}
+ const TOOL_SPAN_STATUS_POST_HOOK_STOPPED = 'Tool execution stopped by hook';
+ const TOOL_SPAN_STATUS_PERMISSION_DENIED = 'Permission denied for tool';
+ const TOOL_SPAN_STATUS_PERMISSION_HOOK_DENIED =
+@@ -3315,6 +3331,39 @@ export class CoreToolScheduler {
+     );
+     try {
+       let promise: Promise<ToolResult>;
++
++      // Per-tool-call execution timeout. Disabled by default (experimental):
++      // set QWEN_CODE_TOOL_EXECUTION_TIMEOUT_MS to a positive number of
++      // milliseconds to cap how long a single tool call may run.
++      const toolExecutionTimeoutMs = parsePositiveIntegerEnv(
++        process.env['QWEN_CODE_TOOL_EXECUTION_TIMEOUT_MS'],
++        0,
++      );
++
++      // When a timeout is active, run the tool under a derived AbortSignal so
++      // that on timeout we actually cancel the in-flight work (cooperative
++      // tools stop; the shell kills its subprocess) instead of abandoning it
++      // to run on unobserved. A user abort on the parent signal is forwarded
++      // to the derived signal. The forwarding listener is torn down once the
++      // tool settles (see finally below) so it never accumulates on the
++      // long-lived parent (turn) signal across tool calls.
++      let execSignal = signal;
++      let timeoutController: AbortController | undefined;
++      let removeParentAbortForward: (() => void) | undefined;
++      if (toolExecutionTimeoutMs > 0) {
++        timeoutController = new AbortController();
++        execSignal = timeoutController.signal;
++        if (signal.aborted) {
++          timeoutController.abort(signal.reason);
++        } else {
++          const controller = timeoutController;
++          const forwardAbort = () => controller.abort(signal.reason);
++          signal.addEventListener('abort', forwardAbort, { once: true });
++          removeParentAbortForward = () =>
++            signal.removeEventListener('abort', forwardAbort);
++        }
++      }
++
+       if (invocation instanceof ShellToolInvocation) {
+         const setPidCallback = (pid: number) => {
+           this.toolCalls = this.toolCalls.map((tc) =>
+@@ -3348,7 +3397,7 @@ export class CoreToolScheduler {
+           );
+         };
+         promise = invocation.execute(
+-          signal,
++          execSignal,
+           liveOutputCallback,
+           shellExecutionConfig,
+           setPidCallback,
+@@ -3357,13 +3406,45 @@ export class CoreToolScheduler {
+         );
+       } else {
+         promise = invocation.execute(
+-          signal,
++          execSignal,
+           liveOutputCallback,
+           shellExecutionConfig,
+         );
+       }
+ 
+-      const toolResult: ToolResult = await promise;
++      let toolResult: ToolResult;
++      if (timeoutController) {
++        let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
++        try {
++          toolResult = await new Promise<ToolResult>((resolve, reject) => {
++            timeoutTimer = setTimeout(() => {
++              debugLogger.warn(
++                `Tool ${canonicalName} (${callId}) timed out after ` +
++                  `${toolExecutionTimeoutMs}ms — aborting`,
++              );
++              // Cancel the in-flight tool via the derived signal, then resolve
++              // with a timeout error so the scheduler is unblocked even if the
++              // tool ignores the abort. A later settle from `promise` is a
++              // no-op once this wrapper Promise has already resolved.
++              timeoutController?.abort(
++                new Error(
++                  `Tool execution timed out after ${toolExecutionTimeoutMs}ms`,
++                ),
++              );
++              resolve(createToolTimeoutResult(toolExecutionTimeoutMs));
++            }, toolExecutionTimeoutMs);
++            timeoutTimer.unref?.();
++            promise.then(resolve, reject);
++          });
++        } finally {
++          if (timeoutTimer) clearTimeout(timeoutTimer);
++          // Tear down the parent-abort forwarding listener now that the tool
++          // has settled (no-op if a user abort already removed it via `once`).
++          removeParentAbortForward?.();
++        }
++      } else {
++        toolResult = await promise;
++      }
+       // A tool that observes signal.aborted and resolves with a normal
+       // ToolResult (no .error field) would otherwise close the execution
+       // sub-span as success while the parent tool span ends as cancelled.
+diff --git a/packages/core/src/tools/tool-error.ts b/packages/core/src/tools/tool-error.ts
+index 077d0aec430..327438e4448 100644
+--- a/packages/core/src/tools/tool-error.ts
++++ b/packages/core/src/tools/tool-error.ts
+@@ -14,6 +14,8 @@ export enum ToolErrorType {
+   UNHANDLED_EXCEPTION = 'unhandled_exception',
+   TOOL_NOT_REGISTERED = 'tool_not_registered',
+   EXECUTION_FAILED = 'execution_failed',
++  // A tool call exceeded the per-tool execution timeout and was aborted.
++  EXECUTION_TIMEOUT = 'execution_timeout',
+   // Try to execute a tool that is excluded due to the approval mode
+   EXECUTION_DENIED = 'execution_denied',
+ 
+diff --git a/packages/vscode-ide-companion/NOTICES.txt b/packages/vscode-ide-companion/NOTICES.txt
+index f54d15c5f78..efb91c9dea1 100644
+--- a/packages/vscode-ide-companion/NOTICES.txt
++++ b/packages/vscode-ide-companion/NOTICES.txt
+@@ -1665,7 +1665,7 @@ SOFTWARE.
+ 
+ 
+ ============================================================
+-hasown@2.0.2
++hasown@2.0.4
+ (git+https://github.com/inspect-js/hasOwn.git)
+ 
+ MIT License

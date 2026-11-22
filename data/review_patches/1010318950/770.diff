@@ -1,0 +1,481 @@
+diff --git a/src/minisweagent/config/warpgrep.yaml b/src/minisweagent/config/warpgrep.yaml
+new file mode 100644
+index 000000000..83dcf7ddd
+--- /dev/null
++++ b/src/minisweagent/config/warpgrep.yaml
+@@ -0,0 +1,44 @@
++agent:
++  agent_class: minisweagent.models.litellm_warpgrep.WarpGrepAgent
++  instance_template: |
++    Please solve this issue: {{task}}
++
++    You have two tools available:
++
++    1. **bash** - Execute bash commands to interact with the codebase
++    2. **warpgrep** - AI-powered code search. Use it to find relevant code spans quickly.
++       Call it with a natural language query, e.g. warpgrep({"query": "authentication middleware"})
++
++    ## Recommended Workflow
++
++    1. Use `warpgrep` to find relevant code for the issue
++    2. Read and analyze the found code spans with `bash`
++    3. Edit the source code to resolve the issue
++    4. Verify your fix works
++    5. Submit by running: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
++       Do not combine it with any other command.
++
++    ## Command Execution Rules
++
++    Each response should include:
++    1. **Reasoning text** explaining your analysis and plan
++    2. At least one tool call (bash or warpgrep)
++
++    Directory or environment variable changes are not persistent across commands.
++
++    <system_information>
++    {{system}} {{release}} {{version}} {{machine}}
++    </system_information>
++model:
++  model_class: litellm_warpgrep
++  format_error_template: |
++    Tool call error:
++
++    <error>
++    {{error}}
++    </error>
++
++    Every response needs to use the 'bash' or 'warpgrep' tool at least once.
++
++    - bash: {"command": "your_command_here"}
++    - warpgrep: {"query": "search description"}
+diff --git a/src/minisweagent/models/__init__.py b/src/minisweagent/models/__init__.py
+index 408dbf531..632f710eb 100644
+--- a/src/minisweagent/models/__init__.py
++++ b/src/minisweagent/models/__init__.py
+@@ -86,6 +86,7 @@ def get_model_name(input_model_name: str | None = None, config: dict | None = No
+     "portkey_response": "minisweagent.models.portkey_response_model.PortkeyResponseAPIModel",
+     "requesty": "minisweagent.models.requesty_model.RequestyModel",
+     "deterministic": "minisweagent.models.test_models.DeterministicModel",
++    "litellm_warpgrep": "minisweagent.models.litellm_warpgrep.LitellmWarpGrepModel",
+ }
+ 
+ 
+diff --git a/src/minisweagent/models/litellm_warpgrep.py b/src/minisweagent/models/litellm_warpgrep.py
+new file mode 100644
+index 000000000..faba43c60
+--- /dev/null
++++ b/src/minisweagent/models/litellm_warpgrep.py
+@@ -0,0 +1,83 @@
++import json
++import logging
++import os
++
++import litellm
++
++from minisweagent.agents.interactive import InteractiveAgent
++from minisweagent.exceptions import FormatError, Submitted
++from minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
++from minisweagent.models.utils.actions_toolcall import BASH_TOOL, parse_toolcall_actions
++from minisweagent.models.utils.warpgrep import WARPGREP_TOOL, WarpGrepClient
++
++logger = logging.getLogger("litellm_warpgrep")
++
++
++class LitellmWarpGrepModel(LitellmModel):
++    def __init__(self, *, config_class=LitellmModelConfig, **kwargs):
++        super().__init__(config_class=config_class, **kwargs)
++        api_key = os.getenv("MORPH_API_KEY") or os.getenv("WARPGREP_API_KEY")
++        if not api_key:
++            msg = "Set MORPH_API_KEY or WARPGREP_API_KEY to use warpgrep."
++            raise ValueError(msg)
++        self.warpgrep = WarpGrepClient(api_key=api_key)
++
++    def _query(self, messages, **kwargs):
++        try:
++            return litellm.completion(
++                model=self.config.model_name,
++                messages=messages,
++                tools=[BASH_TOOL, WARPGREP_TOOL],
++                **(self.config.model_kwargs | kwargs),
++            )
++        except litellm.exceptions.AuthenticationError as e:
++            e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
++            raise e
++
++    def _parse_actions(self, response) -> list[dict]:
++        tool_calls = response.choices[0].message.tool_calls or []
++        bash_calls = [tc for tc in tool_calls if tc.function.name != "warpgrep"]
++        warpgrep_calls = [tc for tc in tool_calls if tc.function.name == "warpgrep"]
++        if not tool_calls:
++            return parse_toolcall_actions([], format_error_template=self.config.format_error_template)
++        actions = (
++            parse_toolcall_actions(bash_calls, format_error_template=self.config.format_error_template)
++            if bash_calls
++            else []
++        )
++        for tc in warpgrep_calls:
++            try:
++                args = json.loads(tc.function.arguments)
++            except json.JSONDecodeError as e:
++                raise FormatError(
++                    {
++                        "role": "user",
++                        "content": f"Error parsing warpgrep arguments: {e}",
++                        "extra": {"interrupt_type": "FormatError"},
++                    }
++                )
++            actions.append({"command": args.get("query", ""), "tool_call_id": tc.id, "tool": "warpgrep"})
++        return actions
++
++
++class WarpGrepAgent(InteractiveAgent):
++    def execute_actions(self, message: dict) -> list[dict]:
++        actions = message.get("extra", {}).get("actions", [])
++        commands = [a["command"] for a in actions if a.get("tool") != "warpgrep"]
++        outputs = []
++        try:
++            if commands:
++                self._ask_confirmation_or_interrupt(commands)
++            for action in actions:
++                if action.get("tool") == "warpgrep":
++                    result = self.model.warpgrep.search(os.getcwd(), action["command"])
++                    outputs.append({"output": result, "returncode": 0, "exception_info": ""})
++                else:
++                    outputs.append(self.env.execute(action))
++        except Submitted as e:
++            self._check_for_new_task_or_submit(e)
++        finally:
++            result_msgs = self.add_messages(
++                *self.model.format_observation_messages(message, outputs, self.get_template_vars())
++            )
++        return result_msgs
+diff --git a/src/minisweagent/models/utils/warpgrep.py b/src/minisweagent/models/utils/warpgrep.py
+new file mode 100644
+index 000000000..58cd8ebff
+--- /dev/null
++++ b/src/minisweagent/models/utils/warpgrep.py
+@@ -0,0 +1,174 @@
++import json
++import logging
++import re
++import shutil
++import subprocess
++import urllib.request
++from pathlib import Path
++
++logger = logging.getLogger("warpgrep")
++
++WARPGREP_TOOL = {
++    "type": "function",
++    "function": {
++        "name": "warpgrep",
++        "description": (
++            "Search a codebase using an AI-powered code search agent. Returns relevant code spans matching the query."
++        ),
++        "parameters": {
++            "type": "object",
++            "properties": {
++                "query": {
++                    "type": "string",
++                    "description": "Natural language description of the code to search for",
++                }
++            },
++            "required": ["query"],
++        },
++    },
++}
++
++_EXCLUDED_DIRS = {".git", "__pycache__", "node_modules", ".venv", "env"}
++
++
++def generate_repo_tree(root: Path, max_depth: int = 4) -> str:
++    lines: list[str] = []
++
++    def _walk(directory: Path, prefix: str, depth: int) -> None:
++        if depth > max_depth:
++            return
++        entries = sorted(directory.iterdir(), key=lambda e: (not e.is_dir(), e.name))
++        dirs = [e for e in entries if e.is_dir() and e.name not in _EXCLUDED_DIRS]
++        files = [e for e in entries if e.is_file()]
++        items = dirs + files
++        for i, entry in enumerate(items):
++            connector = "--- " if i == len(items) - 1 else "|-- "
++            lines.append(f"{prefix}{connector}{entry.name}")
++            if entry.is_dir():
++                extension = "    " if i == len(items) - 1 else "|   "
++                _walk(entry, prefix + extension, depth + 1)
++
++    lines.append(root.name)
++    _walk(root, "", 1)
++    return "\n".join(lines)
++
++
++class WarpGrepClient:
++    def __init__(
++        self,
++        api_key: str,
++        endpoint: str = "https://api.morphllm.com/v1/chat/completions",
++        model: str = "morph-warp-grep-v2",
++        max_turns: int = 4,
++        timeout: int = 60,
++    ):
++        self._api_key = api_key
++        self._endpoint = endpoint
++        self._model = model
++        self._max_turns = max_turns
++        self._timeout = timeout
++
++    def search(self, repo_root: str | Path, query: str) -> str:
++        repo_root = Path(repo_root).resolve()
++        tree = generate_repo_tree(repo_root)
++        messages = [
++            {
++                "role": "user",
++                "content": f"<repo_structure>\n{tree}\n</repo_structure>\n\n<search_string>\n{query}\n</search_string>",
++            }
++        ]
++        for turn in range(1, self._max_turns + 1):
++            content = self._complete(messages)
++            tool_calls = self._parse_tool_calls(content)
++            if not tool_calls:
++                return content
++            results: list[str] = []
++            for call in tool_calls:
++                if call["name"] == "finish":
++                    return self._format_finish(call.get("specs", []), repo_root)
++                results.append(self._execute_tool_call(call, repo_root))
++            response_text = (
++                f"<tool_response>\nTurn {turn}/{self._max_turns}\n" + "\n".join(results) + "\n</tool_response>"
++            )
++            messages.append({"role": "assistant", "content": content})
++            messages.append({"role": "user", "content": response_text})
++        return "WarpGrep: max turns reached without finish."
++
++    def _complete(self, messages: list[dict]) -> str:
++        payload = json.dumps({"model": self._model, "messages": messages}).encode()
++        req = urllib.request.Request(
++            self._endpoint,
++            data=payload,
++            headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
++        )
++        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
++            data = json.loads(resp.read())
++        return data["choices"][0]["message"]["content"]
++
++    def _parse_tool_calls(self, content: str) -> list[dict]:
++        calls = []
++        for match in re.finditer(r"<tool_call><function=(\w+)>(.*?)</function></tool_call>", content, re.DOTALL):
++            name, args_str = match.group(1), match.group(2).strip()
++            args = json.loads(args_str)
++            if name == "finish":
++                calls.append({"name": "finish", "specs": args.get("files", [])})
++            else:
++                calls.append({"name": name, **args})
++        return calls
++
++    def _execute_tool_call(self, call: dict, repo_root: Path) -> str:
++        name = call["name"]
++        if name == "ripgrep":
++            if not shutil.which("rg"):
++                return "Error: rg (ripgrep) is not installed"
++            cmd = ["rg", "--no-heading", "-n"]
++            if include := call.get("include"):
++                cmd.extend(["--glob", include])
++            cmd.append(call.get("pattern", ""))
++            cmd.append(str(repo_root))
++            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
++            return result.stdout[:20000] or "(no matches)"
++        if name == "read":
++            path = (repo_root / call.get("path", "")).resolve()
++            if not path.is_relative_to(repo_root):
++                return "Error: path traversal blocked"
++            if not path.is_file():
++                return f"Error: {path} not found"
++            lines = path.read_text().splitlines()
++            start = call.get("start", 1) - 1
++            end = call.get("end", len(lines))
++            return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines[start:end], start=start))
++        if name == "list_directory":
++            path = (repo_root / call.get("path", "")).resolve()
++            if not path.is_relative_to(repo_root):
++                return "Error: path traversal blocked"
++            if not path.is_dir():
++                return f"Error: {path} is not a directory"
++            return "\n".join(sorted(e.name for e in path.iterdir()))
++        return f"Unknown tool: {name}"
++
++    def _format_finish(self, specs: list[str], repo_root: Path) -> str:
++        if not specs:
++            return "WarpGrep: no results."
++        parts: list[str] = []
++        for spec in specs:
++            file_part, *range_parts = spec.split(":")
++            path = (repo_root / file_part).resolve()
++            if not path.is_relative_to(repo_root) or not path.is_file():
++                parts.append(f"# {spec}\n(file not found)")
++                continue
++            lines = path.read_text().splitlines()
++            if not range_parts:
++                parts.append(f"# {file_part}\n" + "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines)))
++                continue
++            for rng in range_parts[0].split(","):
++                if "-" in rng:
++                    start, end = rng.split("-", 1)
++                    s, e = int(start) - 1, int(end)
++                else:
++                    s, e = int(rng) - 1, int(rng)
++                parts.append(
++                    f"# {file_part}:{rng}\n"
++                    + "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines[s:e], start=s))
++                )
++        return "\n\n".join(parts)
+diff --git a/tests/test_warpgrep.py b/tests/test_warpgrep.py
+new file mode 100644
+index 000000000..11ff4253b
+--- /dev/null
++++ b/tests/test_warpgrep.py
+@@ -0,0 +1,144 @@
++import shutil
++
++import pytest
++
++from minisweagent.models.utils.warpgrep import WarpGrepClient, generate_repo_tree
++
++
++class TestGenerateRepoTree:
++    def test_excludes_hidden_and_venv_dirs(self, tmp_path):
++        (tmp_path / ".git").mkdir()
++        (tmp_path / ".git" / "config").touch()
++        (tmp_path / "__pycache__").mkdir()
++        (tmp_path / "node_modules").mkdir()
++        (tmp_path / ".venv").mkdir()
++        (tmp_path / "src").mkdir()
++        (tmp_path / "src" / "main.py").touch()
++        tree = generate_repo_tree(tmp_path)
++        assert ".git" not in tree
++        assert "__pycache__" not in tree
++        assert "node_modules" not in tree
++        assert ".venv" not in tree
++        assert "src" in tree
++        assert "main.py" in tree
++
++    def test_respects_max_depth(self, tmp_path):
++        d = tmp_path
++        for name in ["alpha", "bravo", "charlie", "delta", "echo"]:
++            d = d / name
++            d.mkdir()
++            (d / "file.txt").touch()
++        tree = generate_repo_tree(tmp_path, max_depth=2)
++        assert "alpha" in tree
++        assert "bravo" in tree
++        assert "delta" not in tree
++        assert "echo" not in tree
++
++    def test_empty_directory(self, tmp_path):
++        tree = generate_repo_tree(tmp_path)
++        assert tree == tmp_path.name
++
++
++class TestParseToolCalls:
++    def test_parses_single_ripgrep_call(self):
++        client = WarpGrepClient(api_key="test")
++        content = '<tool_call><function=ripgrep>{"pattern": "auth", "include": "*.py"}</function></tool_call>'
++        calls = client._parse_tool_calls(content)
++        assert len(calls) == 1
++        assert calls[0]["name"] == "ripgrep"
++        assert calls[0]["pattern"] == "auth"
++        assert calls[0]["include"] == "*.py"
++
++    def test_parses_multiple_calls(self):
++        client = WarpGrepClient(api_key="test")
++        content = (
++            '<tool_call><function=ripgrep>{"pattern": "foo"}</function></tool_call>'
++            '<tool_call><function=read>{"path": "x.py", "start": 1, "end": 10}</function></tool_call>'
++        )
++        calls = client._parse_tool_calls(content)
++        assert len(calls) == 2
++        assert calls[0]["name"] == "ripgrep"
++        assert calls[1]["name"] == "read"
++        assert calls[1]["path"] == "x.py"
++
++    def test_parses_finish_call(self):
++        client = WarpGrepClient(api_key="test")
++        content = '<tool_call><function=finish>{"files": ["src/a.py:1-5"]}</function></tool_call>'
++        calls = client._parse_tool_calls(content)
++        assert len(calls) == 1
++        assert calls[0]["name"] == "finish"
++        assert calls[0]["specs"] == ["src/a.py:1-5"]
++
++    def test_no_tool_calls(self):
++        client = WarpGrepClient(api_key="test")
++        assert client._parse_tool_calls("Just some text with no calls") == []
++
++    def test_invalid_json_propagates(self):
++        client = WarpGrepClient(api_key="test")
++        content = "<tool_call><function=ripgrep>not valid json</function></tool_call>"
++        with pytest.raises(ValueError):
++            client._parse_tool_calls(content)
++
++
++class TestExecuteToolCall:
++    def test_read_file(self, tmp_path):
++        client = WarpGrepClient(api_key="test")
++        f = tmp_path / "hello.py"
++        f.write_text("line1\nline2\nline3\nline4\n")
++        result = client._execute_tool_call({"name": "read", "path": "hello.py", "start": 2, "end": 3}, tmp_path)
++        assert "2: line2" in result
++        assert "3: line3" in result
++        assert "line1" not in result
++
++    def test_list_directory(self, tmp_path):
++        client = WarpGrepClient(api_key="test")
++        (tmp_path / "a.py").touch()
++        (tmp_path / "b.py").touch()
++        result = client._execute_tool_call({"name": "list_directory", "path": "."}, tmp_path)
++        assert "a.py" in result
++        assert "b.py" in result
++
++    def test_path_traversal_blocked_read(self, tmp_path):
++        client = WarpGrepClient(api_key="test")
++        result = client._execute_tool_call({"name": "read", "path": "../../etc/passwd"}, tmp_path)
++        assert "path traversal blocked" in result
++
++    def test_path_traversal_blocked_list(self, tmp_path):
++        client = WarpGrepClient(api_key="test")
++        result = client._execute_tool_call({"name": "list_directory", "path": "../.."}, tmp_path)
++        assert "path traversal blocked" in result
++
++    @pytest.mark.skipif(
++        shutil.which("rg") is None,
++        reason="rg not installed",
++    )
++    def test_ripgrep_execution(self, tmp_path):
++        client = WarpGrepClient(api_key="test")
++        (tmp_path / "test.py").write_text("def hello():\n    return 42\n")
++        result = client._execute_tool_call({"name": "ripgrep", "pattern": "hello", "include": "*.py"}, tmp_path)
++        assert "hello" in result
++
++
++class TestFormatFinish:
++    def test_format_line_ranges(self, tmp_path):
++        client = WarpGrepClient(api_key="test")
++        f = tmp_path / "code.py"
++        f.write_text("\n".join(f"line{i}" for i in range(1, 11)))
++        result = client._format_finish(["code.py:2-4"], tmp_path)
++        assert "2: line2" in result
++        assert "4: line4" in result
++        assert "line1" not in result
++
++    def test_format_no_specs(self, tmp_path):
++        client = WarpGrepClient(api_key="test")
++        assert client._format_finish([], tmp_path) == "WarpGrep: no results."
++
++
++class TestMissingApiKey:
++    def test_missing_key_raises(self, monkeypatch):
++        monkeypatch.delenv("MORPH_API_KEY", raising=False)
++        monkeypatch.delenv("WARPGREP_API_KEY", raising=False)
++        from minisweagent.models.litellm_warpgrep import LitellmWarpGrepModel
++
++        with pytest.raises(ValueError, match="MORPH_API_KEY"):
++            LitellmWarpGrepModel(model_name="test-model", cost_tracking="ignore_errors")

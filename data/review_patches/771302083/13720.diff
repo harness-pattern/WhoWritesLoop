@@ -1,0 +1,85 @@
+diff --git a/openhands/app_server/app_conversation/live_status_app_conversation_service.py b/openhands/app_server/app_conversation/live_status_app_conversation_service.py
+index 861e1152e4f3..3c2facf3bea7 100644
+--- a/openhands/app_server/app_conversation/live_status_app_conversation_service.py
++++ b/openhands/app_server/app_conversation/live_status_app_conversation_service.py
+@@ -92,6 +92,7 @@
+ from openhands.sdk.plugin import PluginSource
+ from openhands.sdk.secret import LookupSecret, SecretValue, StaticSecret
+ from openhands.sdk.utils.paging import page_iterator
++from openhands.sdk.utils.redact import sanitize_dict
+ from openhands.sdk.workspace.remote.async_remote_workspace import AsyncRemoteWorkspace
+ from openhands.server.types import AppMode
+ from openhands.storage.data_models.conversation_metadata import ConversationTrigger
+@@ -1108,7 +1109,7 @@ async def _configure_llm_and_mcp(
+ 
+         # Wrap in the mcpServers structure required by the SDK
+         mcp_config = {'mcpServers': mcp_servers} if mcp_servers else {}
+-        _logger.info(f'Final MCP configuration: {mcp_config}')
++        _logger.info(f'Final MCP configuration: {sanitize_dict(mcp_config)}')
+ 
+         return llm, mcp_config
+ 
+diff --git a/openhands/mcp/utils.py b/openhands/mcp/utils.py
+index cf6a8fca1d89..df0e420a4076 100644
+--- a/openhands/mcp/utils.py
++++ b/openhands/mcp/utils.py
+@@ -24,6 +24,7 @@
+ from openhands.mcp.error_collector import mcp_error_collector
+ from openhands.runtime.base import Runtime
+ from openhands.runtime.impl.cli.cli_runtime import CLIRuntime
++from openhands.sdk.utils.redact import sanitize_dict
+ 
+ 
+ def convert_mcp_clients_to_tools(mcp_clients: list[MCPClient] | None) -> list[dict]:
+@@ -177,7 +178,9 @@ async def fetch_mcp_tools_from_config(
+     mcp_clients = []
+     mcp_tools = []
+     try:
+-        logger.debug(f'Creating MCP clients with config: {mcp_config}')
++        logger.debug(
++            f'Creating MCP clients with config: {sanitize_dict(mcp_config.model_dump())}'
++        )
+ 
+         # Create clients - this will fetch tools but not maintain active connections
+         mcp_clients = await create_mcp_clients(
+diff --git a/openhands/server/session/session.py b/openhands/server/session/session.py
+index c8cb92bd74df..aaeed22a2384 100644
+--- a/openhands/server/session/session.py
++++ b/openhands/server/session/session.py
+@@ -37,6 +37,7 @@
+ from openhands.events.stream import EventStreamSubscriber
+ from openhands.llm.llm_registry import LLMRegistry
+ from openhands.runtime.runtime_status import RuntimeStatus
++from openhands.sdk.utils.redact import sanitize_dict
+ from openhands.server.constants import ROOM_KEY
+ from openhands.server.services.conversation_stats import ConversationStats
+ from openhands.server.session.agent_session import AgentSession
+@@ -184,7 +185,7 @@ async def initialize_agent(
+ 
+         # NOTE: this need to happen AFTER the config is updated with the search_api_key
+         self.logger.debug(
+-            f'MCP configuration before setup - self.config.mcp_config: {self.config.mcp}'
++            f'MCP configuration before setup - self.config.mcp_config: {sanitize_dict(self.config.mcp.model_dump())}'
+         )
+ 
+         # Check if settings has custom mcp_config
+@@ -192,7 +193,9 @@ async def initialize_agent(
+         if mcp_config is not None:
+             # Use the provided MCP SHTTP servers instead of default setup
+             self.config.mcp = self.config.mcp.merge(mcp_config)
+-            self.logger.debug(f'Merged custom MCP Config: {mcp_config}')
++            self.logger.debug(
++                f'Merged custom MCP Config: {sanitize_dict(mcp_config.model_dump())}'
++            )
+ 
+         # Add OpenHands' MCP server by default
+         (
+@@ -209,7 +212,7 @@ async def initialize_agent(
+             self.config.mcp.stdio_servers.extend(openhands_mcp_stdio_servers)
+ 
+         self.logger.debug(
+-            f'MCP configuration after setup - self.config.mcp: {self.config.mcp}'
++            f'MCP configuration after setup - self.config.mcp: {sanitize_dict(self.config.mcp.model_dump())}'
+         )
+ 
+         # TODO: override other LLM config & agent config groups (#2075)

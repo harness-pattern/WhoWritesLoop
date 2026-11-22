@@ -1,0 +1,522 @@
+diff --git a/.openhands/microagents/repo.md b/.openhands/microagents/repo.md
+index 0f3c054d307a..22435340fe1c 100644
+--- a/.openhands/microagents/repo.md
++++ b/.openhands/microagents/repo.md
+@@ -1,8 +1,3 @@
+----
+-name: repo
+-type: repo
+-agent: CodeActAgent
+----
+ This repository contains the code for OpenHands, an automated AI software engineer. It has a Python backend
+ (in the `openhands` directory) and React frontend (in the `frontend` directory).
+ 
+diff --git a/docs/modules/usage/llms/azure-llms.md b/docs/modules/usage/llms/azure-llms.md
+index a7b10a608488..8f6f501d6b21 100644
+--- a/docs/modules/usage/llms/azure-llms.md
++++ b/docs/modules/usage/llms/azure-llms.md
+@@ -1,6 +1,7 @@
+ # Azure
+ 
+-OpenHands uses LiteLLM to make calls to Azure's chat models. You can find their documentation on using Azure as a provider [here](https://docs.litellm.ai/docs/providers/azure).
++OpenHands uses LiteLLM to make calls to Azure's chat models. You can find their documentation on using Azure as a 
++provider [here](https://docs.litellm.ai/docs/providers/azure).
+ 
+ ## Azure OpenAI Configuration
+ 
+@@ -18,7 +19,7 @@ docker run -it --pull=always \
+     ...
+ ```
+ 
+-Then in the OpenHands UI Settings:
++Then in the OpenHands UI Settings under the `LLM` tab:
+ 
+ :::note
+ You will need your ChatGPT deployment name which can be found on the deployments page in Azure. This is referenced as
+diff --git a/docs/modules/usage/llms/google-llms.md b/docs/modules/usage/llms/google-llms.md
+index 4122de4bbe1c..ee0b6fab0e4a 100644
+--- a/docs/modules/usage/llms/google-llms.md
++++ b/docs/modules/usage/llms/google-llms.md
+@@ -7,10 +7,11 @@ OpenHands uses LiteLLM to make calls to Google's chat models. You can find their
+ 
+ ## Gemini - Google AI Studio Configs
+ 
+-When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings:
++When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings under the `LLM` tab:
+ - `LLM Provider` to `Gemini`
+ - `LLM Model` to the model you will be using.
+-If the model is not in the list, toggle `Advanced` options, and enter it in `Custom Model` (e.g. gemini/&lt;model-name&gt; like `gemini/gemini-2.0-flash`).
++If the model is not in the list, enable `Advanced` options, and enter it in `Custom Model` 
++(e.g. gemini/&lt;model-name&gt; like `gemini/gemini-2.0-flash`).
+ - `API Key` to your Gemini API key
+ 
+ ## VertexAI - Google Cloud Platform Configs
+@@ -24,7 +25,8 @@ VERTEXAI_PROJECT="<your-gcp-project-id>"
+ VERTEXAI_LOCATION="<your-gcp-location>"
+ ```
+ 
+-Then set the following in the OpenHands UI through the Settings:
++Then set the following in the OpenHands UI through the Settings under the `LLM` tab:
+ - `LLM Provider` to `VertexAI`
+ - `LLM Model` to the model you will be using.
+-If the model is not in the list, toggle `Advanced` options, and enter it in `Custom Model` (e.g. vertex_ai/&lt;model-name&gt;).
++If the model is not in the list, enable `Advanced` options, and enter it in `Custom Model` 
++(e.g. vertex_ai/&lt;model-name&gt;).
+diff --git a/docs/modules/usage/llms/groq.md b/docs/modules/usage/llms/groq.md
+index 0de104cf1400..5c13a18f2092 100644
+--- a/docs/modules/usage/llms/groq.md
++++ b/docs/modules/usage/llms/groq.md
+@@ -1,22 +1,21 @@
+ # Groq
+ 
+-OpenHands uses LiteLLM to make calls to chat models on Groq. You can find their documentation on using Groq as a provider [here](https://docs.litellm.ai/docs/providers/groq).
++OpenHands uses LiteLLM to make calls to chat models on Groq. You can find their documentation on using Groq as a 
++provider [here](https://docs.litellm.ai/docs/providers/groq).
+ 
+ ## Configuration
+ 
+-When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings:
++When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings under the `LLM` tab:
+ - `LLM Provider` to `Groq`
+ - `LLM Model` to the model you will be using. [Visit here to see the list of
+-models that Groq hosts](https://console.groq.com/docs/models). If the model is not in the list, toggle
+-`Advanced` options, and enter it in `Custom Model` (e.g. groq/&lt;model-name&gt; like `groq/llama3-70b-8192`).
++models that Groq hosts](https://console.groq.com/docs/models). If the model is not in the list, 
++enable `Advanced` options, and enter it in `Custom Model` (e.g. groq/&lt;model-name&gt; like `groq/llama3-70b-8192`).
+ - `API key` to your Groq API key. To find or create your Groq API Key, [see here](https://console.groq.com/keys).
+ 
+-
+-
+ ## Using Groq as an OpenAI-Compatible Endpoint
+ 
+ The Groq endpoint for chat completion is [mostly OpenAI-compatible](https://console.groq.com/docs/openai). Therefore, you can access Groq models as you
+-would access any OpenAI-compatible endpoint. In the OpenHands UI through the Settings:
++would access any OpenAI-compatible endpoint. In the OpenHands UI through the Settings under the `LLM` tab:
+ 1. Enable `Advanced` options
+ 2. Set the following:
+    - `Custom Model` to the prefix `openai/` + the model you will be using (e.g. `openai/llama3-70b-8192`)
+diff --git a/docs/modules/usage/llms/litellm-proxy.md b/docs/modules/usage/llms/litellm-proxy.md
+index 21413e0ef191..7954b93714a0 100644
+--- a/docs/modules/usage/llms/litellm-proxy.md
++++ b/docs/modules/usage/llms/litellm-proxy.md
+@@ -7,7 +7,7 @@ OpenHands supports using the [LiteLLM proxy](https://docs.litellm.ai/docs/proxy/
+ To use LiteLLM proxy with OpenHands, you need to:
+ 
+ 1. Set up a LiteLLM proxy server (see [LiteLLM documentation](https://docs.litellm.ai/docs/proxy/quick_start))
+-2. When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings:
++2. When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings under the `LLM` tab:
+   * Enable `Advanced` options
+   * `Custom Model` to the prefix `litellm_proxy/` + the model you will be using (e.g. `litellm_proxy/anthropic.claude-3-5-sonnet-20241022-v2:0`)
+   * `Base URL` to your LiteLLM proxy URL (e.g. `https://your-litellm-proxy.com`)
+@@ -15,6 +15,7 @@ To use LiteLLM proxy with OpenHands, you need to:
+ 
+ ## Supported Models
+ 
+-The supported models depend on your LiteLLM proxy configuration. OpenHands supports any model that your LiteLLM proxy is configured to handle.
++The supported models depend on your LiteLLM proxy configuration. OpenHands supports any model that your LiteLLM proxy 
++is configured to handle.
+ 
+ Refer to your LiteLLM proxy configuration for the list of available models and their names.
+diff --git a/docs/modules/usage/llms/local-llms.md b/docs/modules/usage/llms/local-llms.md
+index 0cb01751a67e..d7d4fca4152b 100644
+--- a/docs/modules/usage/llms/local-llms.md
++++ b/docs/modules/usage/llms/local-llms.md
+@@ -75,7 +75,7 @@ Start OpenHands using `make run`.
+ 
+ ### Configure OpenHands
+ 
+-Once OpenHands is running, you'll need to set the following in the OpenHands UI through the Settings:
++Once OpenHands is running, you'll need to set the following in the OpenHands UI through the Settings under the `LLM` tab: 
+ 1. Enable `Advanced` options.
+ 2. Set the following:
+ - `Custom Model` to `openai/<served-model-name>` (e.g. `openai/openhands-lm-32b-v0.1`)
+diff --git a/docs/modules/usage/llms/openai-llms.md b/docs/modules/usage/llms/openai-llms.md
+index d0358989691a..3224af521005 100644
+--- a/docs/modules/usage/llms/openai-llms.md
++++ b/docs/modules/usage/llms/openai-llms.md
+@@ -1,14 +1,15 @@
+ # OpenAI
+ 
+-OpenHands uses LiteLLM to make calls to OpenAI's chat models. You can find their documentation on using OpenAI as a provider [here](https://docs.litellm.ai/docs/providers/openai).
++OpenHands uses LiteLLM to make calls to OpenAI's chat models. You can find their documentation on using OpenAI as a 
++provider [here](https://docs.litellm.ai/docs/providers/openai).
+ 
+ ## Configuration
+ 
+-When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings:
++When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings under the `LLM` tab:
+ * `LLM Provider` to `OpenAI`
+ * `LLM Model` to the model you will be using.
+ [Visit here to see a full list of OpenAI models that LiteLLM supports.](https://docs.litellm.ai/docs/providers/openai#openai-chat-completion-models)
+-If the model is not in the list, toggle `Advanced` options, and enter it in `Custom Model` (e.g. openai/&lt;model-name&gt; like `openai/gpt-4o`).
++If the model is not in the list, enable `Advanced` options, and enter it in `Custom Model` (e.g. openai/&lt;model-name&gt; like `openai/gpt-4o`).
+ * `API Key` to your OpenAI API key. To find or create your OpenAI Project API Key, [see here](https://platform.openai.com/api-keys).
+ 
+ ## Using OpenAI-Compatible Endpoints
+@@ -17,7 +18,7 @@ Just as for OpenAI Chat completions, we use LiteLLM for OpenAI-compatible endpoi
+ 
+ ## Using an OpenAI Proxy
+ 
+-If you're using an OpenAI proxy, in the OpenHands UI through the Settings:
++If you're using an OpenAI proxy, in the OpenHands UI through the Settings under the `LLM` tab:
+ 1. Enable `Advanced` options
+ 2. Set the following:
+    - `Custom Model` to openai/&lt;model-name&gt; (e.g. `openai/gpt-4o` or openai/&lt;proxy-prefix&gt;/&lt;model-name&gt;)
+diff --git a/docs/modules/usage/llms/openrouter.md b/docs/modules/usage/llms/openrouter.md
+index 2b5204d26c82..0895b31fe306 100644
+--- a/docs/modules/usage/llms/openrouter.md
++++ b/docs/modules/usage/llms/openrouter.md
+@@ -1,12 +1,14 @@
+ # OpenRouter
+ 
+-OpenHands uses LiteLLM to make calls to chat models on OpenRouter. You can find their documentation on using OpenRouter as a provider [here](https://docs.litellm.ai/docs/providers/openrouter).
++OpenHands uses LiteLLM to make calls to chat models on OpenRouter. You can find their documentation on using 
++OpenRouter as a provider [here](https://docs.litellm.ai/docs/providers/openrouter).
+ 
+ ## Configuration
+ 
+-When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings:
++When running OpenHands, you'll need to set the following in the OpenHands UI through the Settings under the `LLM` tab:
+ * `LLM Provider` to `OpenRouter`
+ * `LLM Model` to the model you will be using.
+ [Visit here to see a full list of OpenRouter models](https://openrouter.ai/models).
+-If the model is not in the list, toggle `Advanced` options, and enter it in `Custom Model` (e.g. openrouter/&lt;model-name&gt; like `openrouter/anthropic/claude-3.5-sonnet`).
++If the model is not in the list, enable `Advanced` options, and enter it in 
++`Custom Model` (e.g. openrouter/&lt;model-name&gt; like `openrouter/anthropic/claude-3.5-sonnet`).
+ * `API Key` to your OpenRouter API key.
+diff --git a/docs/modules/usage/mcp.md b/docs/modules/usage/mcp.md
+index a91fe3401565..50742362b50b 100644
+--- a/docs/modules/usage/mcp.md
++++ b/docs/modules/usage/mcp.md
+@@ -13,9 +13,11 @@ or custom tools. MCP is based on the open standard defined at [modelcontextproto
+ 
+ ## Configuration
+ 
+-MCP configuration is defined in the `[mcp]` section of your `config.toml` file.
++MCP configuration can be defined in:
++* The OpenHands UI through the Settings under the `MCP` tab.
++* The `config.toml` file under the `[mcp]` section if not using the UI.
+ 
+-### Configuration Example
++### Configuration Example via config.toml
+ 
+ ```toml
+ [mcp]
+@@ -82,7 +84,7 @@ Stdio servers are configured using an object with the following properties:
+ 
+ When OpenHands starts, it:
+ 
+-1. Reads the MCP configuration from `config.toml`.
++1. Reads the MCP configuration.
+ 2. Connects to any configured SSE servers.
+ 3. Starts any configured stdio servers.
+ 4. Registers the tools provided by these servers with the agent.
+diff --git a/frontend/__tests__/components/features/home/home-header.test.tsx b/frontend/__tests__/components/features/home/home-header.test.tsx
+index fc0201ce13a9..befb348931a9 100644
+--- a/frontend/__tests__/components/features/home/home-header.test.tsx
++++ b/frontend/__tests__/components/features/home/home-header.test.tsx
+@@ -43,7 +43,6 @@ describe("HomeHeader", () => {
+     await userEvent.click(launchButton);
+ 
+     expect(createConversationSpy).toHaveBeenCalledExactlyOnceWith(
+-      "gui",
+       undefined,
+       undefined,
+       undefined,
+diff --git a/frontend/__tests__/components/features/home/repo-connector.test.tsx b/frontend/__tests__/components/features/home/repo-connector.test.tsx
+index 7a076c912e03..aeb285ebf9c2 100644
+--- a/frontend/__tests__/components/features/home/repo-connector.test.tsx
++++ b/frontend/__tests__/components/features/home/repo-connector.test.tsx
+@@ -99,12 +99,22 @@ describe("RepoConnector", () => {
+     });
+   });
+ 
+-  it("should only enable the launch button if a repo is selected", async () => {
++  it("should only enable the launch button if a repo and branch are selected", async () => {
+     const retrieveUserGitRepositoriesSpy = vi.spyOn(
+       OpenHands,
+       "retrieveUserGitRepositories",
+     );
+     retrieveUserGitRepositoriesSpy.mockResolvedValue(MOCK_RESPOSITORIES);
++    
++    // Mock the branch retrieval to return branches including main
++    const getRepositoryBranchesSpy = vi.spyOn(
++      OpenHands,
++      "getRepositoryBranches",
++    );
++    getRepositoryBranchesSpy.mockResolvedValue([
++      { name: "main" },
++      { name: "develop" }
++    ]);
+ 
+     renderRepoConnector();
+ 
+@@ -115,8 +125,12 @@ describe("RepoConnector", () => {
+     const dropdown = await waitFor(() => screen.getByTestId("repo-dropdown"));
+     await userEvent.click(dropdown);
+     await userEvent.click(screen.getByText("rbren/polaris"));
+-
+-    expect(launchButton).toBeEnabled();
++    
++    // With the new branch selection logic, main branch should be auto-selected
++    // Wait for the branch to be auto-selected
++    await waitFor(() => {
++      expect(launchButton).toBeEnabled();
++    });
+   });
+ 
+   it("should render the 'add git(hub|lab) repos' links if saas mode", async () => {
+@@ -151,6 +165,16 @@ describe("RepoConnector", () => {
+       "retrieveUserGitRepositories",
+     );
+     retrieveUserGitRepositoriesSpy.mockResolvedValue(MOCK_RESPOSITORIES);
++    
++    // Mock the branch retrieval to return branches including main
++    const getRepositoryBranchesSpy = vi.spyOn(
++      OpenHands,
++      "getRepositoryBranches",
++    );
++    getRepositoryBranchesSpy.mockResolvedValue([
++      { name: "main" },
++      { name: "develop" }
++    ]);
+ 
+     renderRepoConnector();
+ 
+@@ -170,18 +194,26 @@ describe("RepoConnector", () => {
+ 
+     const repoOption = screen.getByText("rbren/polaris");
+     await userEvent.click(repoOption);
++    
++    // Wait for the branch to be auto-selected
++    await waitFor(() => {
++      expect(launchButton).toBeEnabled();
++    });
++    
+     await userEvent.click(launchButton);
+ 
+-    expect(createConversationSpy).toHaveBeenCalledExactlyOnceWith(
+-      "gui",
+-      "rbren/polaris",
+-      "github",
+-      undefined,
+-      [],
+-      undefined,
+-      undefined,
+-      undefined,
+-    );
++    // With the new branch selection logic, main branch should be auto-selected
++    await waitFor(() => {
++      expect(createConversationSpy).toHaveBeenCalledWith(
++        "rbren/polaris",
++        "github",
++        undefined,
++        [],
++        undefined,
++        undefined,
++        "main"
++      );
++    });
+   });
+ 
+   it("should change the launch button text to 'Loading...' when creating a conversation", async () => {
+@@ -190,6 +222,23 @@ describe("RepoConnector", () => {
+       "retrieveUserGitRepositories",
+     );
+     retrieveUserGitRepositoriesSpy.mockResolvedValue(MOCK_RESPOSITORIES);
++    
++    // Mock the branch retrieval to return branches including main
++    const getRepositoryBranchesSpy = vi.spyOn(
++      OpenHands,
++      "getRepositoryBranches",
++    );
++    getRepositoryBranchesSpy.mockResolvedValue([
++      { name: "main" },
++      { name: "develop" }
++    ]);
++    
++    // Mock createConversation to simulate loading state
++    const createConversationSpy = vi.spyOn(OpenHands, "createConversation");
++    createConversationSpy.mockImplementation(() => new Promise(resolve => {
++      // Don't resolve immediately to keep the loading state
++      setTimeout(() => resolve({ id: "test-id" }), 500);
++    }));
+ 
+     renderRepoConnector();
+ 
+@@ -199,10 +248,19 @@ describe("RepoConnector", () => {
+     const dropdown = await waitFor(() => screen.getByTestId("repo-dropdown"));
+     await userEvent.click(dropdown);
+     await userEvent.click(screen.getByText("rbren/polaris"));
++    
++    // Wait for the branch to be auto-selected and button to be enabled
++    await waitFor(() => {
++      expect(launchButton).toBeEnabled();
++    });
+ 
+     await userEvent.click(launchButton);
+-    expect(launchButton).toBeDisabled();
+-    expect(launchButton).toHaveTextContent(/Loading/i);
++    
++    // Check for loading state
++    await waitFor(() => {
++      expect(launchButton).toBeDisabled();
++      expect(launchButton).toHaveTextContent(/Loading/i);
++    });
+   });
+ 
+   it("should not display a button to settings if the user is signed in with their git provider", async () => {
+diff --git a/frontend/__tests__/components/features/home/task-card.test.tsx b/frontend/__tests__/components/features/home/task-card.test.tsx
+index 3aad56ed1043..83bf2c17636c 100644
+--- a/frontend/__tests__/components/features/home/task-card.test.tsx
++++ b/frontend/__tests__/components/features/home/task-card.test.tsx
+@@ -85,7 +85,6 @@ describe("TaskCard", () => {
+       await userEvent.click(launchButton);
+ 
+       expect(createConversationSpy).toHaveBeenCalledWith(
+-        "suggested_task",
+         MOCK_RESPOSITORIES[0].full_name,
+         MOCK_RESPOSITORIES[0].git_provider,
+         undefined,
+diff --git a/frontend/__tests__/routes/home-screen.test.tsx b/frontend/__tests__/routes/home-screen.test.tsx
+index 0789dda955e1..0d2adc433e3b 100644
+--- a/frontend/__tests__/routes/home-screen.test.tsx
++++ b/frontend/__tests__/routes/home-screen.test.tsx
+@@ -174,6 +174,16 @@ describe("HomeScreen", () => {
+ 
+   describe("launch buttons", () => {
+     const setupLaunchButtons = async () => {
++      // Mock the branch retrieval to return branches including main
++      const getRepositoryBranchesSpy = vi.spyOn(
++        OpenHands,
++        "getRepositoryBranches",
++      );
++      getRepositoryBranchesSpy.mockResolvedValue([
++        { name: "main" },
++        { name: "develop" }
++      ]);
++      
+       let headerLaunchButton = screen.getByTestId("header-launch-button");
+       let repoLaunchButton = await screen.findByTestId("repo-launch-button");
+       let tasksLaunchButtons =
+@@ -185,11 +195,17 @@ describe("HomeScreen", () => {
+       await userEvent.click(dropdown);
+       const repoOption = screen.getAllByText("octocat/hello-world")[1];
+       await userEvent.click(repoOption);
++      
++      // Wait for the branch to be auto-selected
++      await waitFor(() => {
++        expect(repoLaunchButton).toBeEnabled();
++      });
+ 
+-      expect(headerLaunchButton).not.toBeDisabled();
+-      expect(repoLaunchButton).not.toBeDisabled();
++      // With the new branch selection logic, main branch should be auto-selected
++      expect(headerLaunchButton).toBeEnabled();
++      expect(repoLaunchButton).toBeEnabled();
+       tasksLaunchButtons.forEach((button) => {
+-        expect(button).not.toBeDisabled();
++        expect(button).toBeEnabled();
+       });
+ 
+       headerLaunchButton = screen.getByTestId("header-launch-button");
+diff --git a/frontend/src/api/open-hands.ts b/frontend/src/api/open-hands.ts
+index 41c25c6a8982..19d0dafc3e73 100644
+--- a/frontend/src/api/open-hands.ts
++++ b/frontend/src/api/open-hands.ts
+@@ -10,7 +10,6 @@ import {
+   GetTrajectoryResponse,
+   GitChangeDiff,
+   GitChange,
+-  ConversationTrigger,
+ } from "./open-hands.types";
+ import { openHands } from "./open-hands-axios";
+ import { ApiSettings, PostApiSettings, Provider } from "#/types/settings";
+@@ -144,7 +143,6 @@ class OpenHands {
+   }
+ 
+   static async createConversation(
+-    conversation_trigger: ConversationTrigger = "gui",
+     selectedRepository?: string,
+     git_provider?: Provider,
+     initialUserMsg?: string,
+@@ -154,7 +152,6 @@ class OpenHands {
+     selected_branch?: string,
+   ): Promise<Conversation> {
+     const body = {
+-      conversation_trigger,
+       repository: selectedRepository,
+       git_provider,
+       selected_branch,
+diff --git a/frontend/src/components/features/home/home-header.tsx b/frontend/src/components/features/home/home-header.tsx
+index f7744e127153..ea60c65036cf 100644
+--- a/frontend/src/components/features/home/home-header.tsx
++++ b/frontend/src/components/features/home/home-header.tsx
+@@ -28,7 +28,7 @@ export function HomeHeader() {
+           testId="header-launch-button"
+           variant="primary"
+           type="button"
+-          onClick={() => createConversation({ conversation_trigger: "gui" })}
++          onClick={() => createConversation({})}
+           isDisabled={isCreatingConversation}
+         >
+           {!isCreatingConversation && "Launch from Scratch"}
+diff --git a/frontend/src/components/features/home/repo-selection-form.tsx b/frontend/src/components/features/home/repo-selection-form.tsx
+index 2bc870eadd7b..2b09040cdc39 100644
+--- a/frontend/src/components/features/home/repo-selection-form.tsx
++++ b/frontend/src/components/features/home/repo-selection-form.tsx
+@@ -200,7 +200,6 @@ export function RepositorySelectionForm({
+         onClick={() =>
+           createConversation({
+             selectedRepository,
+-            conversation_trigger: "gui",
+             selected_branch: selectedBranch?.name,
+           })
+         }
+diff --git a/frontend/src/components/features/home/tasks/task-card.tsx b/frontend/src/components/features/home/tasks/task-card.tsx
+index c86dcdc05b30..cddc6764f268 100644
+--- a/frontend/src/components/features/home/tasks/task-card.tsx
++++ b/frontend/src/components/features/home/tasks/task-card.tsx
+@@ -40,7 +40,6 @@ export function TaskCard({ task }: TaskCardProps) {
+     const repo = getRepo(task.repo, task.git_provider);
+ 
+     return createConversation({
+-      conversation_trigger: "suggested_task",
+       selectedRepository: repo,
+       suggested_task: task,
+     });
+diff --git a/frontend/src/components/features/settings/git-settings/github-token-input.tsx b/frontend/src/components/features/settings/git-settings/github-token-input.tsx
+index 58a5f3e01f90..bec0f4fffe6b 100644
+--- a/frontend/src/components/features/settings/git-settings/github-token-input.tsx
++++ b/frontend/src/components/features/settings/git-settings/github-token-input.tsx
+@@ -51,10 +51,9 @@ export function GitHubTokenInput({
+         placeholder="github.com"
+         defaultValue={githubHostSet || undefined}
+         startContent={
+-          githubHostSet && githubHostSet.trim() !== "" ? (
++          githubHostSet &&
++          githubHostSet.trim() !== "" && (
+             <KeyStatusIcon testId="gh-set-host-indicator" isSet />
+-          ) : (
+-            <KeyStatusIcon testId="gh-set-host-indicator" isSet={false} />
+           )
+         }
+       />
+diff --git a/frontend/src/components/features/settings/git-settings/gitlab-token-input.tsx b/frontend/src/components/features/settings/git-settings/gitlab-token-input.tsx
+index c95db9ff7ec2..991ada89428a 100644
+--- a/frontend/src/components/features/settings/git-settings/gitlab-token-input.tsx
++++ b/frontend/src/components/features/settings/git-settings/gitlab-token-input.tsx
+@@ -51,10 +51,9 @@ export function GitLabTokenInput({
+         placeholder="gitlab.com"
+         defaultValue={gitlabHostSet || undefined}
+         startContent={
+-          gitlabHostSet && gitlabHostSet.trim() !== "" ? (
++          gitlabHostSet &&
++          gitlabHostSet.trim() !== "" && (
+             <KeyStatusIcon testId="gl-set-host-indicator" isSet />
+-          ) : (
+-            <KeyStatusIcon testId="gl-set-host-indicator" isSet={false} />
+           )
+         }
+       />
+diff --git a/frontend/src/components/shared/task-form.t

@@ -1,0 +1,540 @@
+diff --git a/packages/core/src/omni/disclosure.test.ts b/packages/core/src/omni/disclosure.test.ts
+index c79c1c593d0..990d55ac20c 100644
+--- a/packages/core/src/omni/disclosure.test.ts
++++ b/packages/core/src/omni/disclosure.test.ts
+@@ -7,9 +7,14 @@
+ import { describe, expect, it } from 'vitest';
+ import {
+   formatDisclosureText,
++  formatResourceHandleText,
++  formatResourcePathText,
+   isDisclosureText,
+   isKeyframeTimestampLabel,
+   OMNI_DISCLOSURE_TEXT_PREFIX,
++  OMNI_RESOURCE_PATH_TEXT_PREFIX,
++  parseResourceHandleText,
++  parseResourcePathText,
+ } from './disclosure.js';
+ 
+ describe('isKeyframeTimestampLabel', () => {
+@@ -55,3 +60,78 @@ describe('isDisclosureText', () => {
+     expect(isDisclosureText('the blue box says Figs in a Blanket')).toBe(false);
+   });
+ });
++
++describe('resource annotation forms', () => {
++  it('handle form parses as a handle, not a path', () => {
++    const text = formatResourceHandleText('pic.png', 'media-3-9f2cabcd');
++    expect(parseResourceHandleText(text)).toBe('media-3-9f2cabcd');
++    // Its 【媒体资源】 marker (not the path form's 【媒体路径】) keeps it out
++    // of the path parser.
++    expect(parseResourcePathText(text)).toBeUndefined();
++  });
++
++  it('path form parses as a path, not a handle', () => {
++    const p = '/workspace/kf/clip-keyframe-0001.jpg';
++    const text = formatResourcePathText(p);
++    expect(parseResourcePathText(text)).toBe(p);
++    expect(parseResourceHandleText(text)).toBeUndefined();
++  });
++
++  it('shows a path with a full-width separator VERBATIM (re-readable, R2-6)', () => {
++    // The guidance promises a displayed local path can be re-read or handed
++    // straight to a tool — true only if the model-visible payload IS the real
++    // on-disk path. So a `：` in the name rides verbatim under the path
++    // marker, never escaped: an escaped `odd\：name` would fail fs.lstat with
++    // ENOENT, and the round-trip parse returns the same bytes.
++    const p = '/tmp/odd：name/frame.jpg';
++    const text = formatResourcePathText(p);
++    expect(text).toBe(`${OMNI_RESOURCE_PATH_TEXT_PREFIX}${p}`);
++    expect(parseResourceHandleText(text)).toBeUndefined();
++    expect(parseResourcePathText(text)).toBe(p);
++  });
++
++  it('does not misread a path ending in a handle-shaped suffix as a handle', () => {
++    // A file literally named `.../clip：media-3-9f2cabcd` (full-width colon is
++    // a legal filename char). Disambiguation is by MARKER, not escaping: the
++    // path form's 【媒体路径】 marker means parseResourceHandleText (which keys
++    // on 【媒体资源】) never sees it, so the whole payload is the path. The
++    // genuine handle form of the same suffix still parses as a handle.
++    const pathText = formatResourcePathText('/tmp/clip：media-3-9f2cabcd');
++    expect(parseResourceHandleText(pathText)).toBeUndefined();
++    expect(parseResourcePathText(pathText)).toBe('/tmp/clip：media-3-9f2cabcd');
++    const handleText = formatResourceHandleText('clip', 'media-3-9f2cabcd');
++    expect(parseResourceHandleText(handleText)).toBe('media-3-9f2cabcd');
++    expect(parseResourcePathText(handleText)).toBeUndefined();
++  });
++
++  it('non-annotation text parses as neither form', () => {
++    expect(parseResourcePathText('just some text')).toBeUndefined();
++    expect(parseResourceHandleText('just some text')).toBeUndefined();
++  });
++
++  it('does NOT consume prefixed prose that is not an absolute path', () => {
++    // Ordinary text that merely begins with a resource marker — a pasted
++    // line, an @-mentioned document whose first line is `【媒体路径】清单` — must
++    // not be mistaken for a path annotation, or the exporter would delete it
++    // from request text and fabricate a phantom media entry keyed on it. The
++    // path parser's isAbsolutePathLike guard rejects the non-path payload.
++    expect(parseResourcePathText('【媒体路径】清单')).toBeUndefined();
++    expect(parseResourcePathText('【媒体路径】see attached')).toBeUndefined();
++    expect(
++      parseResourcePathText('【媒体路径】relative/path.mp4'),
++    ).toBeUndefined();
++    expect(parseResourceHandleText('【媒体资源】清单')).toBeUndefined();
++  });
++
++  it('accepts absolute paths on any OS shape (POSIX / Windows drive / UNC)', () => {
++    for (const p of [
++      '/movies/film.mkv',
++      'C:\\Users\\jane\\clip.mp4',
++      'D:/media/clip.mp4',
++      '\\\\host\\share\\clip.mp4',
++    ]) {
++      const text = formatResourcePathText(p);
++      expect(parseResourcePathText(text)).toBe(p);
++    }
++  });
++});
+diff --git a/packages/core/src/omni/disclosure.ts b/packages/core/src/omni/disclosure.ts
+index 3c19320a259..3d40496c2df 100644
+--- a/packages/core/src/omni/disclosure.ts
++++ b/packages/core/src/omni/disclosure.ts
+@@ -128,13 +128,28 @@ export function formatTranscriptText(
+   return `${OMNI_TRANSCRIPT_TEXT_PREFIX}${escapeAnnotationName(displayName)}：${transcript}`;
+ }
+ 
+-/** Marks a text Part as a session resource-handle annotation: the opaque
+- * `resourceId` minted for a delivered media resource (memory design M
+- * §5.2). The model references this handle in `omni_recall_media_memory`
+- * requests (and other omni tools that accept a resourceId) — it is the
+- * ONLY identity the model ever sees for the underlying file. */
++/** Marks a text Part as a session resource annotation in the HANDLE form
++ * ({@link formatResourceHandleText}): the opaque `resourceId` minted for
++ * the resource (memory design M §5.2), used for path-less sources
++ * (tool/URL/recall media) whose real locator is an internal object-store
++ * path the model must never see. The path form uses a SEPARATE marker
++ * ({@link OMNI_RESOURCE_PATH_TEXT_PREFIX}) so a verbatim absolute path —
++ * which may legally contain the `：` separator and backslashes — can never
++ * be misread as `<name>：<handle>`. The model references whichever value it
++ * is shown in `omni_recall_media_memory` (and other omni tools that accept
++ * a resourceId / inputPath); recall resolves the path form back to the
++ * session handle. */
+ export const OMNI_RESOURCE_HANDLE_TEXT_PREFIX = '【媒体资源】';
+ 
++/** Marks a text Part as a session resource annotation in the PATH form
++ * ({@link formatResourcePathText}): the ABSOLUTE PATH of a model-visible
++ * local file, shown in place of the handle because the model already holds
++ * that path and can re-read it or point tools at it directly. Its own
++ * marker (distinct from {@link OMNI_RESOURCE_HANDLE_TEXT_PREFIX}) lets the
++ * path ride VERBATIM — never escaped — so the displayed reference is
++ * byte-for-byte the real on-disk path on every OS. */
++export const OMNI_RESOURCE_PATH_TEXT_PREFIX = '【媒体路径】';
++
+ /** Model-facing resource-handle annotation for one delivered resource. */
+ export function formatResourceHandleText(
+   displayName: string,
+@@ -144,12 +159,126 @@ export function formatResourceHandleText(
+ }
+ 
+ /** Extract the resourceId from a handle annotation emitted by
+- * {@link formatResourceHandleText}, or undefined for any other text. The
+- * handle grammar is harness-minted (`media-<n>-<hex>`), so parsing keys
+- * on it rather than on the displayName (which may itself contain the
+- * separator). */
++ * {@link formatResourceHandleText}, or undefined for any other text
++ * (including the path form). The handle grammar is harness-minted
++ * (`media-<n>-<hex>`), so parsing keys on it rather than on the displayName
++ * (which may itself contain the separator).
++ *
++ * The split is located at the FIRST UNESCAPED separator via
++ * {@link splitAnnotationBody}: a displayName may itself contain a `：`, which
++ * the writer escapes, so an escape-blind split would cut at the wrong
++ * separator and lose the handle. (The path form is turned away by the marker
++ * check above — it rides its own {@link OMNI_RESOURCE_PATH_TEXT_PREFIX}.) And
++ * only a payload matching the exact handle grammar is accepted, so neither a
++ * genuine path nor a displayName ending in a handle-shaped suffix can
++ * masquerade as a real handle. */
+ export function parseResourceHandleText(text: string): string | undefined {
+   if (!text.startsWith(OMNI_RESOURCE_HANDLE_TEXT_PREFIX)) return undefined;
+-  const match = /：(media-\d+-[0-9a-f]+)$/.exec(text);
+-  return match?.[1];
++  const split = splitAnnotationBody(
++    text.slice(OMNI_RESOURCE_HANDLE_TEXT_PREFIX.length),
++  );
++  if (!split) return undefined;
++  return /^media-\d+-[0-9a-f]+$/.test(split.payload)
++    ? split.payload
++    : undefined;
++}
++
++/**
++ * Model-facing resource annotation for media the model can re-read from a
++ * real local path: the ABSOLUTE PATH stands in for the opaque handle. Used
++ * when the source is a model-visible local file (the model already holds
++ * the path and can read_file it or point tools at it directly), so an
++ * opaque `media-<n>-<hex>` handle would be redundant noise. Recall (both
++ * the active tool and the passive selector) recovers the session handle
++ * from the path via `MediaResourceRegistry.resolveByFileRef` — the binding
++ * is registered regardless of which form is shown. Path-less sources
++ * (tool/URL media, whose real locator is an internal object-store path)
++ * keep the handle form ({@link formatResourceHandleText}): no usable path
++ * exists to show.
++ *
++ * The path rides VERBATIM under its own marker
++ * ({@link OMNI_RESOURCE_PATH_TEXT_PREFIX}) — never escaped — so the
++ * displayed reference is byte-for-byte the on-disk path (re-readable on
++ * every OS), and the marker alone tells {@link parseResourcePathText} it
++ * apart from the handle form.
++ */
++export function formatResourcePathText(absolutePath: string): string {
++  return `${OMNI_RESOURCE_PATH_TEXT_PREFIX}${absolutePath}`;
++}
++
++/**
++ * True when `p` has the shape of an absolute filesystem path on any OS —
++ * POSIX (`/…`), a Windows drive (`C:\…` / `C:/…`), or a Windows UNC
++ * (`\\host\share`). Deliberately platform-INDEPENDENT: a trajectory captured
++ * on one OS is parsed on another, so `node:path.isAbsolute` (which only
++ * recognizes the host's grammar) is the wrong test. Used to keep
++ * {@link parseResourcePathText} from consuming ordinary prose that merely
++ * starts with the resource prefix — `formatResourcePathText` is only ever
++ * handed an absolute path.
++ */
++export function isAbsolutePathLike(p: string): boolean {
++  return (
++    p.startsWith('/') || // POSIX
++    /^[A-Za-z]:[\\/]/.test(p) || // Windows drive
++    p.startsWith('\\\\') // Windows UNC (unescaped)
++  );
++}
++
++/**
++ * Extract the absolute path from a path-form resource annotation emitted by
++ * {@link formatResourcePathText}, or undefined for any other text. Keys on
++ * the path form's OWN marker ({@link OMNI_RESOURCE_PATH_TEXT_PREFIX}), so
++ * the handle form (`【媒体资源】`) is never a candidate and the path rides
++ * verbatim — no unescaping.
++ *
++ * The payload must ALSO look like an absolute path ({@link isAbsolutePathLike}):
++ * `formatResourcePathText` only ever emits one, and the guard stops ordinary
++ * prose that merely opens with the marker (a pasted `【媒体路径】清单` line,
++ * an `@`-mentioned document whose first line starts with it) from being
++ * mistaken for an annotation. This textual guard is necessary but NOT
++ * sufficient — a pasted absolute-path line is byte-identical to a genuine
++ * annotation, so consumers that must never fabricate media (the exporter)
++ * additionally gate on {@link isHarnessAnnotationPart} provenance.
++ */
++export function parseResourcePathText(text: string): string | undefined {
++  if (!text.startsWith(OMNI_RESOURCE_PATH_TEXT_PREFIX)) return undefined;
++  const path = text.slice(OMNI_RESOURCE_PATH_TEXT_PREFIX.length);
++  return isAbsolutePathLike(path) ? path : undefined;
++}
++
++/** A harness-written path-form annotation Part: the text of
++ * {@link formatResourcePathText} plus a provenance tag. The path form's TEXT
++ * is byte-identical whether the harness emitted it or a user pasted /
++ * `@`-mentioned it, so text alone cannot tell a genuine annotation from
++ * prose. The writer tags its Parts; the exporter consumes a path-form Part
++ * only when this tag survived the transcript. The field rides the recorded
++ * Content (createUserContent preserves unknown Part fields, like `thought`)
++ * but the OpenAI converter rebuilds wire Parts by picking known fields, so
++ * the tag never reaches the model API. Structural (not genai `Part`) so the
++ * cycle-avoiding omni writer can return it as a plain `{ text }` shape. */
++export interface HarnessPathAnnotationPart {
++  text: string;
++  omniHarnessAnnotation: true;
++}
++
++/** Build the path-form annotation Part the writer emits, tagged with
++ * {@link HarnessPathAnnotationPart} provenance. Shared by the writer and
++ * tests so a test models the real emitted shape. */
++export function harnessPathAnnotationPart(
++  absolutePath: string,
++): HarnessPathAnnotationPart {
++  return {
++    text: formatResourcePathText(absolutePath),
++    omniHarnessAnnotation: true,
++  };
++}
++
++/** True when `part` carries the {@link HarnessPathAnnotationPart} provenance
++ * tag (mirrors the exporter's `isThoughtPart` field read). */
++export function isHarnessAnnotationPart(part: unknown): boolean {
++  return (
++    typeof part === 'object' &&
++    part !== null &&
++    (part as Partial<HarnessPathAnnotationPart>).omniHarnessAnnotation === true
++  );
+ }
+diff --git a/packages/core/src/omni/export.test.ts b/packages/core/src/omni/export.test.ts
+index ef0034e0f65..9f21bf70739 100644
+--- a/packages/core/src/omni/export.test.ts
++++ b/packages/core/src/omni/export.test.ts
+@@ -13,7 +13,9 @@ import {
+   formatDisclosureText,
+   formatOmissionText,
+   formatResourceHandleText,
++  formatResourcePathText,
+   formatTranscriptText,
++  harnessPathAnnotationPart,
+ } from './disclosure.js';
+ import {
+   exportOmniTrajectory,
+@@ -215,6 +217,216 @@ describe('exportOmniTrajectory', () => {
+     expect(derived.parentVersionId).toBe(sourceFile.fileVersionId);
+   });
+ 
++  it('consumes the PATH form of a model-visible local source', async () => {
++    // A local file the model read is annotated with its absolute path and
++    // no session handle (the exporter has no live registry). The exporter
++    // must still register the media entry — keyed by the path's basename,
++    // which is the file record's local source locator — or the turn drops
++    // its media and the session filter never seeds the file's closure.
++    await seedMemory();
++    await writeTranscript([
++      transcriptLine({
++        type: 'user',
++        timestamp: '2026-08-13T00:00:00.000Z',
++        message: {
++          parts: [
++            { text: '分析这部电影' },
++            // Tagged as harness-written: that provenance is what licenses the
++            // exporter to consume a path-shaped part (see the untagged case).
++            harnessPathAnnotationPart('/movies/film.mkv'),
++            { text: formatDisclosureText('film.mkv', '原 1080p → 480p') },
++          ],
++        },
++      }),
++    ]);
++
++    const records = await exportOmniTrajectory({ omniRootDir, transcriptPath });
++
++    const turn = records.find((r) => r.kind === 'turn') as
++      | OmniTrajectoryTurnRecord
++      | undefined;
++    expect(turn).toBeDefined();
++    // The path-form line is consumed as an annotation, not leaked as prose.
++    expect(turn!.request.text).toBe('分析这部电影');
++    // Media entry keyed by basename; no resourceId (transcript-only reader).
++    expect(turn!.request.media).toEqual([
++      {
++        name: 'film.mkv',
++        disclosures: ['原 1080p → 480p'],
++        transcripts: [],
++      },
++    ]);
++
++    // The seeded source file survives the session filter, since the media
++    // name matches its local source locator.
++    const files = records.filter(
++      (r): r is OmniTrajectoryFileRecord => r.kind === 'file',
++    );
++    const sourceFile = files.find((f) => f.origin === 'user');
++    expect(sourceFile?.source).toEqual({
++      protocol: 'local',
++      locator: 'film.mkv',
++    });
++  });
++
++  it('does NOT consume prefixed prose that is not an absolute path', async () => {
++    // A user line that merely opens with the resource prefix (a paste, or an
++    // @-mentioned document whose first line is 【媒体资源】清单) is ordinary
++    // prose: it must stay in request.text and never fabricate a media entry
++    // that could pull an unrelated file's closure into the export.
++    await seedUnrelatedMemory(); // a file whose locator is 'unrelated.png'
++    await writeTranscript([
++      transcriptLine({
++        type: 'user',
++        timestamp: '2026-08-13T00:00:00.000Z',
++        message: {
++          parts: [{ text: '【媒体资源】清单' }, { text: '请分析' }],
++        },
++      }),
++    ]);
++
++    const records = await exportOmniTrajectory({ omniRootDir, transcriptPath });
++    const turn = records.find((r) => r.kind === 'turn') as
++      | OmniTrajectoryTurnRecord
++      | undefined;
++    expect(turn).toBeDefined();
++    expect(turn!.request.media).toEqual([]);
++    expect(turn!.request.text).toContain('【媒体资源】清单');
++    // No phantom entry, so the unrelated file is not dragged into the export.
++    const files = records.filter((r) => r.kind === 'file');
++    expect(files).toHaveLength(0);
++  });
++
++  it('preserves a trailing-whitespace filename in the PATH form', async () => {
++    // A filename may legally END in whitespace (POSIX). The path form carries
++    // it at the end of the annotation part; a full trim on export would
++    // truncate the name, so the media entry would no longer match the file
++    // record's local locator and the file (plus its closure) would drop out.
++    const memory = new MediaMemoryService(omniRootDir);
++    await memory.recordFileRecognized({
++      fileRef: '/movies/film.mkv ',
++      sha256: 'a'.repeat(64),
++      mediaType: 'video',
++      metadata: { durationMs: 5000 },
++      sizeBytes: 100,
++      mimeType: 'video/x-matroska',
++      origin: 'user',
++      source: { protocol: 'local', locator: 'film.mkv ' },
++      recognition: {
++        ingestionConfigHash: '',
++        detectorVersion: 'omni-sniff-ffprobe/1',
++        probeStatus: 'complete',
++      },
++    });
++    await writeTranscript([
++      transcriptLine({
++        type: 'user',
++        timestamp: '2026-08-13T00:00:00.000Z',
++        message: {
++          parts: [harnessPathAnnotationPart('/movies/film.mkv ')],
++        },
++      }),
++    ]);
++
++    const records = await exportOmniTrajectory({ omniRootDir, transcriptPath });
++    const turn = records.find((r) => r.kind === 'turn') as
++      | OmniTrajectoryTurnRecord
++      | undefined;
++    // Trailing space preserved, so the name matches the file's local locator.
++    expect(turn!.request.media).toEqual([
++      { name: 'film.mkv ', disclosures: [], transcripts: [] },
++    ]);
++    const files = records.filter(
++      (r): r is OmniTrajectoryFileRecord => r.kind === 'file',
++    );
++    expect(files.find((f) => f.origin === 'user')?.source).toEqual({
++      protocol: 'local',
++      locator: 'film.mkv ',
++    });
++  });
++
++  it('does NOT consume an UNTAGGED path-shaped line (provenance gate)', async () => {
++    // R3-4: a path-form annotation's TEXT is byte-identical whether the
++    // harness emitted it or a user pasted / @-mentioned it, so text alone
++    // cannot tell a genuine annotation from prose. The exporter consumes a
++    // 【媒体路径】 part ONLY when it carries the harness provenance tag; an
++    // untagged look-alike stays prose and never fabricates a media entry that
++    // would drag the matching file's closure into the export.
++    await seedMemory(); // a file whose local locator is 'film.mkv'
++    await writeTranscript([
++      transcriptLine({
++        type: 'user',
++        timestamp: '2026-08-13T00:00:00.000Z',
++        message: {
++          // Same text harnessPathAnnotationPart produces, minus the tag.
++          parts: [{ text: formatResourcePathText('/movies/film.mkv') }],
++        },
++      }),
++    ]);
++
++    const records = await exportOmniTrajectory({ omniRootDir, transcriptPath });
++    const turn = records.find((r) => r.kind === 'turn') as
++      | OmniTrajectoryTurnRecord
++      | undefined;
++    expect(turn).toBeDefined();
++    // Not consumed: the line survives as prose and no media entry is minted.
++    expect(turn!.request.text).toContain('/movies/film.mkv');
++    expect(turn!.request.media).toEqual([]);
++    // No phantom entry, so the matching file is not dragged into the export.
++    const files = records.filter((r) => r.kind === 'file');
++    expect(files).toHaveLength(0);
++  });
++
++  it('consumes a Windows drive-letter PATH form via a cross-OS basename', async () => {
++    // R3-1: the exporter may run on a different OS than the trajectory was
++    // captured on, so `path.basename` (host-grammar only) is the wrong tool
++    // for a Windows path parsed on POSIX — it returns the whole `C:\…`
++    // string, misses the file's local locator, and drops the file's closure.
++    // The basename split must recognize BOTH separators.
++    const memory = new MediaMemoryService(omniRootDir);
++    await memory.recordFileRecognized({
++      fileRef: 'C:\\Users\\jane\\clip.mp4',
++      sha256: 'd'.repeat(64),
++      mediaType: 'video',
++      metadata: { durationMs: 5000 },
++      sizeBytes: 100,
++      mimeType: 'video/mp4',
++      origin: 'user',
++      source: { protocol: 'local', locator: 'clip.mp4' },
++      recognition: {
++        ingestionConfigHash: '',
++        detectorVersion: 'omni-sniff-ffprobe/1',
++        probeStatus: 'complete',
++      },
++    });
++    await writeTranscript([
++      transcriptLine({
++        type: 'user',
++        timestamp: '2026-08-13T00:00:00.000Z',
++        message: {
++          parts: [harnessPathAnnotationPart('C:\\Users\\jane\\clip.mp4')],
++        },
++      }),
++    ]);
++
++    const records = await exportOmniTrajectory({ omniRootDir, transcriptPath });
++    const turn = records.find((r) => r.kind === 'turn') as
++      | OmniTrajectoryTurnRecord
++      | undefined;
++    expect(turn).toBeDefined();
++    // Basename split on the backslash, so the name matches the local locator.
++    expect(turn!.request.media).toEqual([
++      { name: 'clip.mp4', disclosures: [], transcripts: [] },
++    ]);
++    const files = records.filter(
++      (r): r is OmniTrajectoryFileRecord => r.kind === 'file',
++    );
++    expect(files.find((f) => f.origin === 'user')?.source).toEqual({
++      protocol: 'local',
++      locator: 'clip.mp4',
++    });
++  });
++
+   it('preserves model-emitted tool arguments verbatim (no scrubbing)', async () => {
+     // The gate explicitly permits a model-authored inputPath (exactly one
+     // of inputPath|resourceId); the recorded assistant turn predates the
+@@ -512,10 +724,7 @@ describe('exportOmniTrajectory', () => {
+     );
+ 
+     expect(turns.map((t) => t.request.text)).toEqual(['q1', 'q2-survivor']);
+-    expect(turns.map((t) => t.response.text)).toEqual([
+-      'answer 1',
+-      'answer 2',
+-    ]);
++    expect(turns.map((t) => t.response.text)).toEqual(['answer 1', 'answer 2']);
+   });
+ 
+   it('exports only memory records reachable from this session', async () => {
+@@ -557,9 +766,7 @@ describe('exportOmniTrajectory', () => {
+       'a'.repeat(64),
+       'b'.repeat(64),
+     ]);
+-    expect(
+-      withMedia.filter((r) => r.kind === 'execution'),
+-    ).toHaveLength(1);
++    expect(withMedia.filter((r) => r.kind === 'execution')).toHaveLength(1);
+   });
+ 
+   it('degrades to transcript-only WITHOUT touching a corrupt ledger', async () => {
+diff --git a/packages/core/src/omni/export.ts b/packages/core/src/omni/export.ts
+index 7421f613cdb..1db60d9460b 100644
+--- a/packages/core/src/omni/export.ts
++++ b/packages/core/src/omni/export.ts
+@@ -13,7 +13,10 @@ import {
+   OMNI_OMISSION_TEXT_PREFIX,
+   OMNI_TRANSCRIPT_TEXT_PREFIX,
+   OMNI_RESOURCE_HANDLE_TEXT_PREFIX,
++  OMNI_RESOURCE_PATH_TEXT_PREFIX,
++  isHarnessAnnotationPart,
+   parseResourceHandleText,
++  parseResourcePathText,
+   splitAnnotationBody,
+   unescapeAnnotationName,
+ } from './disclosure.js';
+@@ -108,7 +111,12 @@ const debugLogger = createDebugLogger('omni:export');
+ export interface Om

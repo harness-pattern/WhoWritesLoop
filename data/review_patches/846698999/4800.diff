@@ -1,0 +1,549 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 03eb317111b4..6a62edd536bb 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1447,15 +1447,6 @@ dependencies = [
+  "windows-sys 0.59.0",
+ ]
+ 
+-[[package]]
+-name = "colored"
+-version = "3.0.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
+-dependencies = [
+- "windows-sys 0.59.0",
+-]
+-
+ [[package]]
+ name = "combine"
+ version = "4.6.7"
+@@ -2186,22 +2177,6 @@ dependencies = [
+  "pin-project-lite",
+ ]
+ 
+-[[package]]
+-name = "eventsource-client"
+-version = "0.12.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "4c80c6714d1a380314fcb11a22eeff022e1e1c9642f0bb54e15dc9cb29f37b29"
+-dependencies = [
+- "futures",
+- "hyper 0.14.32",
+- "hyper-rustls 0.24.2",
+- "hyper-timeout 0.4.1",
+- "log",
+- "pin-project",
+- "rand 0.8.5",
+- "tokio",
+-]
+-
+ [[package]]
+ name = "exr"
+ version = "1.73.0"
+@@ -2638,8 +2613,6 @@ dependencies = [
+  "keyring",
+  "lazy_static",
+  "lru",
+- "mcp-client",
+- "mcp-core",
+  "minijinja",
+  "mockall",
+  "nanoid",
+@@ -2730,8 +2703,6 @@ dependencies = [
+  "indicatif",
+  "is-terminal",
+  "jsonschema",
+- "mcp-client",
+- "mcp-core",
+  "nix 0.30.1",
+  "once_cell",
+  "rand 0.8.5",
+@@ -2767,7 +2738,7 @@ dependencies = [
+  "base64 0.21.7",
+  "chrono",
+  "clap",
+- "colored 2.2.0",
++ "colored",
+  "devgen-tree-sitter-swift",
+  "docx-rs",
+  "etcetera",
+@@ -2784,7 +2755,6 @@ dependencies = [
+  "libc",
+  "lopdf",
+  "lru",
+- "mcp-core",
+  "mpatch",
+  "oauth2",
+  "once_cell",
+@@ -2841,7 +2811,6 @@ dependencies = [
+  "goose",
+  "goose-mcp",
+  "http 1.2.0",
+- "mcp-core",
+  "reqwest 0.12.12",
+  "rmcp",
+  "schemars",
+@@ -3197,18 +3166,6 @@ dependencies = [
+  "webpki-roots 0.26.8",
+ ]
+ 
+-[[package]]
+-name = "hyper-timeout"
+-version = "0.4.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
+-dependencies = [
+- "hyper 0.14.32",
+- "pin-project-lite",
+- "tokio",
+- "tokio-io-timeout",
+-]
+-
+ [[package]]
+ name = "hyper-timeout"
+ version = "0.5.2"
+@@ -4009,49 +3966,6 @@ dependencies = [
+  "rayon",
+ ]
+ 
+-[[package]]
+-name = "mcp-client"
+-version = "0.1.0"
+-dependencies = [
+- "anyhow",
+- "async-trait",
+- "axum 0.8.1",
+- "base64 0.22.1",
+- "eventsource-client",
+- "futures",
+- "mcp-core",
+- "mockito",
+- "nanoid",
+- "nix 0.30.1",
+- "rand 0.8.5",
+- "reqwest 0.11.27",
+- "rmcp",
+- "serde",
+- "serde_json",
+- "serde_urlencoded",
+- "sha2",
+- "thiserror 1.0.69",
+- "tokio",
+- "tokio-util",
+- "tower 0.4.13",
+- "tracing",
+- "tracing-subscriber",
+- "url",
+- "webbrowser 1.0.4",
+-]
+-
+-[[package]]
+-name = "mcp-core"
+-version = "0.1.0"
+-dependencies = [
+- "rmcp",
+- "serde",
+- "serde_json",
+- "tempfile",
+- "thiserror 1.0.69",
+- "utoipa",
+-]
+-
+ [[package]]
+ name = "md-5"
+ version = "0.10.6"
+@@ -4154,30 +4068,6 @@ dependencies = [
+  "syn 2.0.99",
+ ]
+ 
+-[[package]]
+-name = "mockito"
+-version = "1.7.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7760e0e418d9b7e5777c0374009ca4c93861b9066f18cb334a20ce50ab63aa48"
+-dependencies = [
+- "assert-json-diff",
+- "bytes",
+- "colored 3.0.0",
+- "futures-util",
+- "http 1.2.0",
+- "http-body 1.0.1",
+- "http-body-util",
+- "hyper 1.6.0",
+- "hyper-util",
+- "log",
+- "rand 0.9.1",
+- "regex",
+- "serde_json",
+- "serde_urlencoded",
+- "similar",
+- "tokio",
+-]
+-
+ [[package]]
+ name = "mpatch"
+ version = "0.2.0"
+@@ -4186,7 +4076,7 @@ checksum = "80198b9262c39e1178905412aa9cbda2f62b7b279f437b057d2a4f225e42befd"
+ dependencies = [
+  "anyhow",
+  "clap",
+- "colored 2.2.0",
++ "colored",
+  "env_logger",
+  "log",
+  "similar",
+@@ -5488,12 +5378,10 @@ dependencies = [
+  "system-configuration",
+  "tokio",
+  "tokio-rustls 0.24.1",
+- "tokio-util",
+  "tower-service",
+  "url",
+  "wasm-bindgen",
+  "wasm-bindgen-futures",
+- "wasm-streams",
+  "web-sys",
+  "winreg",
+ ]
+@@ -6985,16 +6873,6 @@ dependencies = [
+  "uuid",
+ ]
+ 
+-[[package]]
+-name = "tokio-io-timeout"
+-version = "1.2.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "30b74022ada614a1b4834de765f9bb43877f910cc8ce4be40e89042c9223a8bf"
+-dependencies = [
+- "pin-project-lite",
+- "tokio",
+-]
+-
+ [[package]]
+ name = "tokio-macros"
+ version = "2.5.0"
+@@ -7113,7 +6991,7 @@ dependencies = [
+  "http-body 1.0.1",
+  "http-body-util",
+  "hyper 1.6.0",
+- "hyper-timeout 0.5.2",
++ "hyper-timeout",
+  "hyper-util",
+  "percent-encoding",
+  "pin-project",
+diff --git a/crates/goose-bench/src/eval_suites/core/computercontroller/script.rs b/crates/goose-bench/src/eval_suites/core/computercontroller/script.rs
+index cb50c3d6055a..92fb1353edd9 100644
+--- a/crates/goose-bench/src/eval_suites/core/computercontroller/script.rs
++++ b/crates/goose-bench/src/eval_suites/core/computercontroller/script.rs
+@@ -48,7 +48,7 @@ impl Evaluation for ComputerControllerScript {
+                         }
+ 
+                         // Parse the arguments as JSON
+-                        if let Ok(args) = serde_json::from_value::<Value>(tool_call.arguments.clone()) {
++                        if let Ok(args) = serde_json::from_value::<Value>(serde_json::Value::Object(tool_call.arguments.clone().unwrap_or_default())) {
+                             // Check all required parameters match exactly
+                             args.get("script").and_then(Value::as_str).is_some_and(|s| s.contains("beep"))
+                         } else {
+diff --git a/crates/goose-bench/src/eval_suites/core/computercontroller/web_scrape.rs b/crates/goose-bench/src/eval_suites/core/computercontroller/web_scrape.rs
+index 77ae2105fa26..9dfd983de2a2 100644
+--- a/crates/goose-bench/src/eval_suites/core/computercontroller/web_scrape.rs
++++ b/crates/goose-bench/src/eval_suites/core/computercontroller/web_scrape.rs
+@@ -51,7 +51,7 @@ impl Evaluation for ComputerControllerWebScrape {
+                         }
+ 
+                         // Parse the arguments as JSON
+-                        if let Ok(args) = serde_json::from_value::<Value>(tool_call.arguments.clone()) {
++                        if let Ok(args) = serde_json::from_value::<Value>(serde_json::Value::Object(tool_call.arguments.clone().unwrap_or_default())) {
+                             // Check all required parameters match exactly                                                        
+                             args.get("url").and_then(Value::as_str).map(|s| s.trim_end_matches('/')) == Some("https://news.ycombinator.com")
+                         } else {
+diff --git a/crates/goose-bench/src/eval_suites/core/developer/create_file.rs b/crates/goose-bench/src/eval_suites/core/developer/create_file.rs
+index 8a7a2587125e..a230415732cc 100644
+--- a/crates/goose-bench/src/eval_suites/core/developer/create_file.rs
++++ b/crates/goose-bench/src/eval_suites/core/developer/create_file.rs
+@@ -51,7 +51,7 @@ impl Evaluation for DeveloperCreateFile {
+                         }
+ 
+                         // Parse the arguments as JSON
+-                        if let Ok(args) = serde_json::from_value::<Value>(tool_call.arguments.clone()) {
++                        if let Ok(args) = serde_json::from_value::<Value>(serde_json::Value::Object(tool_call.arguments.clone().unwrap_or_default())) {
+                             // Check all required parameters match exactly
+                             args.get("command").and_then(Value::as_str) == Some("write") &&
+                             args.get("path").and_then(Value::as_str).is_some_and(|s| s.contains("test.txt")) &&
+@@ -82,7 +82,7 @@ impl Evaluation for DeveloperCreateFile {
+                         }
+ 
+                         // Parse the arguments as JSON
+-                        if let Ok(args) = serde_json::from_value::<Value>(tool_call.arguments.clone()) {
++                        if let Ok(args) = serde_json::from_value::<Value>(serde_json::Value::Object(tool_call.arguments.clone().unwrap_or_default())) {
+                             // Check all required parameters match exactly
+                             args.get("command").and_then(Value::as_str) == Some("view") &&
+                             args.get("path").and_then(Value::as_str).is_some_and(|s| s.contains("test.txt"))
+diff --git a/crates/goose-bench/src/eval_suites/core/developer/list_files.rs b/crates/goose-bench/src/eval_suites/core/developer/list_files.rs
+index 5eca6589dfca..ddc7db44e657 100644
+--- a/crates/goose-bench/src/eval_suites/core/developer/list_files.rs
++++ b/crates/goose-bench/src/eval_suites/core/developer/list_files.rs
+@@ -44,7 +44,7 @@ impl Evaluation for DeveloperListFiles {
+                         // Check if the tool call is for shell with ls or rg --files
+                         if let Ok(tool_call) = tool_req.tool_call.as_ref() {
+                             // Parse arguments as JSON Value first
+-                            if let Ok(args) = serde_json::from_value::<Value>(tool_call.arguments.clone()) {
++                            if let Ok(args) = serde_json::from_value::<Value>(serde_json::Value::Object(tool_call.arguments.clone().unwrap_or_default())) {
+                                 tool_call.name == "developer__shell" &&
+                                     args.get("command")
+                                         .and_then(Value::as_str).is_some_and(|cmd| {
+diff --git a/crates/goose-bench/src/eval_suites/core/developer/simple_repo_clone_test.rs b/crates/goose-bench/src/eval_suites/core/developer/simple_repo_clone_test.rs
+index bbc6afc699a5..1a95c68dd934 100644
+--- a/crates/goose-bench/src/eval_suites/core/developer/simple_repo_clone_test.rs
++++ b/crates/goose-bench/src/eval_suites/core/developer/simple_repo_clone_test.rs
+@@ -48,7 +48,9 @@ impl Evaluation for SimpleRepoCloneTest {
+                             }
+ 
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 let command = args.get("command").and_then(Value::as_str);
+                                 command.is_some_and(|cmd| {
+@@ -78,7 +80,9 @@ impl Evaluation for SimpleRepoCloneTest {
+                             }
+ 
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 let command = args.get("command").and_then(Value::as_str);
+                                 command.is_some_and(|cmd| {
+@@ -110,7 +114,9 @@ impl Evaluation for SimpleRepoCloneTest {
+                             }
+ 
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 let command = args.get("command").and_then(Value::as_str);
+                                 let file_text = args.get("file_text").and_then(Value::as_str);
+@@ -152,7 +158,9 @@ impl Evaluation for SimpleRepoCloneTest {
+                             }
+ 
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 let command = args.get("command").and_then(Value::as_str);
+                                 command.is_some_and(|cmd| {
+diff --git a/crates/goose-bench/src/eval_suites/core/developer_image/image.rs b/crates/goose-bench/src/eval_suites/core/developer_image/image.rs
+index 771b550d052b..98fa73b2c5e0 100644
+--- a/crates/goose-bench/src/eval_suites/core/developer_image/image.rs
++++ b/crates/goose-bench/src/eval_suites/core/developer_image/image.rs
+@@ -47,7 +47,9 @@ impl Evaluation for DeveloperImage {
+                     if let MessageContent::ToolRequest(tool_req) = content {
+                         if let Ok(tool_call) = tool_req.tool_call.as_ref() {
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 if tool_call.name == "developer__screen_capture"
+                                     && (args.get("display").and_then(Value::as_i64) == Some(0))
+diff --git a/crates/goose-bench/src/eval_suites/core/memory/save_fact.rs b/crates/goose-bench/src/eval_suites/core/memory/save_fact.rs
+index f5d01d9d8154..d079c63cc371 100644
+--- a/crates/goose-bench/src/eval_suites/core/memory/save_fact.rs
++++ b/crates/goose-bench/src/eval_suites/core/memory/save_fact.rs
+@@ -51,7 +51,7 @@ impl Evaluation for MemoryRememberMemory {
+                             }
+ 
+                             // Parse the arguments as JSON
+-                            if let Ok(args) = serde_json::from_value::<Value>(tool_call.arguments.clone()) {
++                            if let Ok(args) = serde_json::from_value::<Value>(serde_json::Value::Object(tool_call.arguments.clone().unwrap_or_default())) {
+                                 // Check all required parameters match exactly
+                                 args.get("category").and_then(Value::as_str).is_some_and(|s| s.contains("fact")) &&
+                                     args.get("data").and_then(Value::as_str) == Some("The capital of France is Paris.") &&
+diff --git a/crates/goose-bench/src/eval_suites/metrics.rs b/crates/goose-bench/src/eval_suites/metrics.rs
+index 1a424a21a34c..b8053efe12ef 100644
+--- a/crates/goose-bench/src/eval_suites/metrics.rs
++++ b/crates/goose-bench/src/eval_suites/metrics.rs
+@@ -73,7 +73,9 @@ fn count_tool_calls(messages: &[Message]) -> (i64, HashMap<String, i64>) {
+                     total_count += 1;
+ 
+                     // Count by name
+-                    *counts_by_name.entry(tool_call.name.clone()).or_insert(0) += 1;
++                    *counts_by_name
++                        .entry(tool_call.name.to_string())
++                        .or_insert(0) += 1;
+                 }
+             }
+         }
+diff --git a/crates/goose-bench/src/eval_suites/vibes/flappy_bird.rs b/crates/goose-bench/src/eval_suites/vibes/flappy_bird.rs
+index ddd076417c49..ea9f5fe26f6c 100644
+--- a/crates/goose-bench/src/eval_suites/vibes/flappy_bird.rs
++++ b/crates/goose-bench/src/eval_suites/vibes/flappy_bird.rs
+@@ -59,7 +59,9 @@ impl Evaluation for FlappyBird {
+ 
+                             // Parse the arguments as JSON
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 // Only check command is write and correct filename
+                                 args.get("command").and_then(Value::as_str) == Some("write")
+diff --git a/crates/goose-bench/src/eval_suites/vibes/goose_wiki.rs b/crates/goose-bench/src/eval_suites/vibes/goose_wiki.rs
+index 62a4efc542fc..dc16d37d187e 100644
+--- a/crates/goose-bench/src/eval_suites/vibes/goose_wiki.rs
++++ b/crates/goose-bench/src/eval_suites/vibes/goose_wiki.rs
+@@ -69,7 +69,9 @@ impl Evaluation for GooseWiki {
+ 
+                             // Parse the arguments as JSON
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 // Only check command is write and correct filename
+                                 args.get("command").and_then(Value::as_str) == Some("write")
+diff --git a/crates/goose-bench/src/eval_suites/vibes/squirrel_census.rs b/crates/goose-bench/src/eval_suites/vibes/squirrel_census.rs
+index ad66471d4c93..21133fdc487b 100644
+--- a/crates/goose-bench/src/eval_suites/vibes/squirrel_census.rs
++++ b/crates/goose-bench/src/eval_suites/vibes/squirrel_census.rs
+@@ -29,6 +29,7 @@ impl SquirrelCensus {
+ 
+ #[async_trait]
+ impl Evaluation for SquirrelCensus {
++    #[allow(clippy::too_many_lines)]
+     async fn run(
+         &self,
+         agent: &mut BenchAgent,
+@@ -81,7 +82,9 @@ After writing the script, run it using python3 and show the results. Do not ask
+                             }
+ 
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 args.get("command").and_then(Value::as_str) == Some("write")
+                                     && args
+@@ -111,7 +114,9 @@ After writing the script, run it using python3 and show the results. Do not ask
+                             }
+ 
+                             if let Ok(args) =
+-                                serde_json::from_value::<Value>(tool_call.arguments.clone())
++                                serde_json::from_value::<Value>(serde_json::Value::Object(
++                                    tool_call.arguments.clone().unwrap_or_default(),
++                                ))
+                             {
+                                 args.get("command")
+                                     .and_then(Value::as_str)
+diff --git a/crates/goose-cli/Cargo.toml b/crates/goose-cli/Cargo.toml
+index fb16ced65e80..4e12ff3dc3a4 100644
+--- a/crates/goose-cli/Cargo.toml
++++ b/crates/goose-cli/Cargo.toml
+@@ -18,8 +18,6 @@ path = "src/main.rs"
+ goose = { path = "../goose" }
+ goose-bench = { path = "../goose-bench" }
+ goose-mcp = { path = "../goose-mcp" }
+-mcp-client = { path = "../mcp-client" }
+-mcp-core = { path = "../mcp-core" }
+ rmcp = { workspace = true }
+ agent-client-protocol = "0.4.0"
+ clap = { version = "4.4", features = ["derive"] }
+diff --git a/crates/goose-cli/src/commands/acp.rs b/crates/goose-cli/src/commands/acp.rs
+index f387364e5d24..f6664a048c5c 100644
+--- a/crates/goose-cli/src/commands/acp.rs
++++ b/crates/goose-cli/src/commands/acp.rs
+@@ -285,24 +285,30 @@ impl GooseAcpAgent {
+         // Extract tool name and parameters from the ToolCall if successful
+         let (tool_name, locations) = match &tool_request.tool_call {
+             Ok(tool_call) => {
+-                let name = tool_call.name.clone();
+-
+                 // Extract file locations from certain tools for client tracking
+                 let mut locs = Vec::new();
+-                if name == "developer__text_editor" {
++                if tool_call.name == "developer__text_editor" {
+                     // Try to extract the path from the arguments
+-                    let args = &tool_call.arguments;
+-                    if let Some(path_str) = args.get("path").and_then(|p| p.as_str()) {
+-                        locs.push(acp::ToolCallLocation {
+-                            path: path_str.into(),
+-                            line: Some(1),
+-                            meta: None,
+-                        });
++                    if let Some(path_str) = tool_call
++                        .arguments
++                        .as_ref()
++                        .and_then(|args_map| args_map.get("path"))
++                        .and_then(|p| p.as_str())
++                    {
++                        let path = std::path::PathBuf::from(path_str);
++                        if path.exists() && path.is_file() {
++                            locs.push(acp::ToolCallLocation {
++                                path: path_str.into(),
++                                line: Some(1),
++                                meta: None,
++                            });
++                        }
+                     }
+                 }
+-                (name, locs)
++
++                (tool_call.name.to_string(), locs)
+             }
+-            Err(_) => ("unknown".to_string(), Vec::new()),
++            Err(_) => ("error".to_string(), vec![]),
+         };
+ 
+         // Send tool call notification
+diff --git a/crates/goose-cli/src/commands/web.rs b/crates/goose-cli/src/commands/web.rs
+index a0ca90e1cd9e..152574b723c9 100644
+--- a/crates/goose-cli/src/commands/web.rs
++++ b/crates/goose-cli/src/commands/web.rs
+@@ -17,6 +17,7 @@ use goose::conversation::message::Message as GooseMessage;
+ 
+ use axum::response::Redirect;
+ use serde::{Deserialize, Serialize};
++use serde_json::Value;
+ use std::{net::SocketAddr, sync::Arc};
+ use tokio::sync::{Mutex, RwLock};
+ use tower_http::cors::{Any, CorsLayer};
+@@ -459,8 +460,10 @@ async fn process_message_streaming(
+                                                 serde_json::to_string(
+                                                     &WebSocketMessage::ToolRequest {
+                                                         id: req.id.clone(),
+-                                                        tool_name: tool_call.name.clone(),
+-                                                        arguments: tool_call.arguments.clone(),
++                                                        tool_name: tool_call.name.to_string(),
++                                                        arguments: Value::from(
++                                                            tool_call.arguments.clone(),
++                                                        ),
+                                                     },
+                                                 )
+                                                 .unwrap()
+@@ -477,8 +480,13 @@ async fn process_message_streaming(
+                                             serde_json::to_string(
+                                                 &WebSocketMessage::ToolConfirmation {
+                                                     id: confirmation.id.clone(),
+-                                                    tool_name: confirmation.tool_name.clone(),
+-                                                    arguments: confirmation.arguments.clone(),
++                                                    tool_name: confirmation
++                                                        .tool_name
++                                                        .to_string()
++                                                        .clone(),
++                                                    arguments: Value::from(
++                                                        confirmation.arguments.clone(),
++                                                    ),
+                                            

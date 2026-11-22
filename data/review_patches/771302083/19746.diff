@@ -1,0 +1,700 @@
+diff --git a/.pr/model-router-ui-design.html b/.pr/model-router-ui-design.html
+new file mode 100644
+index 000000000000..aab55c269a3a
+--- /dev/null
++++ b/.pr/model-router-ui-design.html
+@@ -0,0 +1,157 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8" />
++    <title>Runtime model router UI</title>
++    <style>
++      :root {
++        color-scheme: light dark;
++        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
++        background: #10131a;
++        color: #eef2ff;
++      }
++      body {
++        margin: 0;
++        padding: 32px;
++      }
++      main {
++        max-width: 1040px;
++        margin: 0 auto;
++      }
++      h1, h2 {
++        margin: 0 0 12px;
++      }
++      p {
++        color: #c9d2e6;
++        line-height: 1.6;
++      }
++      code {
++        background: #1d2433;
++        border: 1px solid #2d374f;
++        border-radius: 6px;
++        padding: 2px 6px;
++      }
++      .card {
++        background: #151a24;
++        border: 1px solid #2d374f;
++        border-radius: 18px;
++        padding: 20px;
++        margin: 18px 0;
++        box-shadow: 0 12px 36px rgb(0 0 0 / 0.24);
++      }
++      .grid {
++        display: grid;
++        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
++        gap: 16px;
++      }
++      .label {
++        color: #8fb4ff;
++        font-size: 12px;
++        font-weight: 700;
++        letter-spacing: 0.08em;
++        text-transform: uppercase;
++      }
++      svg {
++        width: 100%;
++        height: auto;
++      }
++      .node {
++        fill: #20293b;
++        stroke: #5f78b8;
++        stroke-width: 2;
++      }
++      .new {
++        fill: #332817;
++        stroke: #f59e0b;
++      }
++      .text {
++        fill: #eef2ff;
++        font-size: 14px;
++        font-weight: 600;
++      }
++      .muted {
++        fill: #a7b1c8;
++        font-size: 12px;
++      }
++      .arrow {
++        stroke: #8fb4ff;
++        stroke-width: 2.5;
++        marker-end: url(#arrow);
++      }
++      ul {
++        line-height: 1.7;
++        color: #c9d2e6;
++      }
++    </style>
++  </head>
++  <body>
++    <main>
++      <h1>Runtime model router UI</h1>
++      <p>
++        This PR is the Canvas companion for the software-agent-sdk model-router work. It adds an optional conversation-header control that appears only when the runtime supports the new model-router status endpoint. The control lets testers add existing LLM profiles as routes and manually switch routes without waiting for a released <code>@openhands/typescript-client</code> package.
++      </p>
++
++      <section class="card">
++        <div class="label">API shape</div>
++        <h2>Canvas consumes the SDK PR routes directly</h2>
++        <div class="grid">
++          <div>
++            <p>Before, the chat UI could only live-switch by LLM profile through <code>/switch_profile</code>. That path replaces the conversation LLM directly and keeps profile switching as the UI concept.</p>
++          </div>
++          <div>
++            <p>After, the new control treats the model router as the state owner: <code>GET /model_router</code> reads routes and selection, <code>POST /model_router/routes</code> adds a profile-backed LLM route, and <code>PATCH /model_router</code> manually selects or resumes automatic routing.</p>
++          </div>
++        </div>
++      </section>
++
++      <section class="card">
++        <div class="label">Flow</div>
++        <h2>Plain LLM conversations can become routable</h2>
++        <svg viewBox="0 0 920 330" role="img" aria-label="Runtime model router UI flow">
++          <defs>
++            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
++              <path d="M 0 0 L 10 5 L 0 10 z" fill="#8fb4ff" />
++            </marker>
++          </defs>
++          <rect class="node" x="30" y="50" width="200" height="78" rx="14" />
++          <text class="text" x="52" y="84">Conversation header</text>
++          <text class="muted" x="52" y="108">model-router control</text>
++
++          <line class="arrow" x1="230" y1="89" x2="335" y2="89" />
++          <rect class="node" x="345" y="50" width="230" height="78" rx="14" />
++          <text class="text" x="367" y="84">ModelRouterService</text>
++          <text class="muted" x="367" y="108">copied TS client methods</text>
++
++          <line class="arrow" x1="575" y1="89" x2="680" y2="89" />
++          <rect class="new" x="690" y="50" width="200" height="78" rx="14" />
++          <text class="text" x="712" y="84">Agent Server</text>
++          <text class="muted" x="712" y="108">/model_router APIs</text>
++
++          <rect class="node" x="30" y="200" width="200" height="78" rx="14" />
++          <text class="text" x="52" y="234">LLM profiles</text>
++          <text class="muted" x="52" y="258">encrypted local config</text>
++
++          <line class="arrow" x1="230" y1="239" x2="345" y2="126" />
++          <rect class="new" x="345" y="200" width="230" height="78" rx="14" />
++          <text class="text" x="367" y="234">Add route</text>
++          <text class="muted" x="367" y="258">profile config + route key</text>
++
++          <line class="arrow" x1="575" y1="239" x2="690" y2="126" />
++          <rect class="new" x="690" y="200" width="200" height="78" rx="14" />
++          <text class="text" x="712" y="234">RouterLLM state</text>
++          <text class="muted" x="712" y="258">routes + selection</text>
++        </svg>
++      </section>
++
++      <section class="card">
++        <div class="label">Files to review</div>
++        <ul>
++          <li><code>src/api/conversation-service/model-router-service.api.ts</code> copies the unreleased TypeScript client methods against <code>ConversationClient</code>.</li>
++          <li><code>src/components/features/conversation/conversation-model-router-control.tsx</code> adds the conversation-window route add/switch popover.</li>
++          <li><code>src/components/features/conversation/conversation-main/conversation-main.tsx</code> mounts the control in the chat header.</li>
++          <li><code>__tests__/api/model-router-service.test.ts</code> and <code>__tests__/components/conversation-model-router-control.test.tsx</code> cover the API adapter and UI behavior.</li>
++        </ul>
++      </section>
++    </main>
++  </body>
++</html>
+diff --git a/__tests__/api/model-router-service.test.ts b/__tests__/api/model-router-service.test.ts
+new file mode 100644
+index 000000000000..d1c8f3847565
+--- /dev/null
++++ b/__tests__/api/model-router-service.test.ts
+@@ -0,0 +1,130 @@
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import ModelRouterService from "#/api/conversation-service/model-router-service.api";
++import { getAgentServerClientOptions } from "#/api/agent-server-client-options";
++import { ConversationClient } from "@openhands/typescript-client/clients";
++
++const transport = vi.hoisted(() => ({
++  get: vi.fn(),
++  post: vi.fn(),
++  patch: vi.fn(),
++}));
++
++vi.mock("@openhands/typescript-client/clients", () => ({
++  ConversationClient: vi.fn(function ConversationClientMock(
++    this: Record<string, unknown>,
++    options: { host: string; apiKey?: string },
++  ) {
++    Object.assign(this, {
++      host: options.host,
++      apiKey: options.apiKey,
++      client: transport,
++    });
++  }),
++}));
++
++vi.mock("#/api/agent-server-client-options", () => ({
++  getAgentServerClientOptions: vi.fn((options = {}) => ({
++    host: options.conversationUrl ?? "http://local-agent-server",
++    apiKey: options.sessionApiKey ?? "local-session-key",
++    timeout: 60000,
++  })),
++}));
++
++describe("ModelRouterService", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    transport.get.mockReset();
++    transport.post.mockReset();
++    transport.patch.mockReset();
++  });
++
++  it("reads model-router status through the conversation runtime client", async () => {
++    transport.get.mockResolvedValue({
++      data: {
++        enabled: false,
++        selection: null,
++        last_route_name: null,
++        routes: [],
++      },
++    });
++
++    const status = await ModelRouterService.getModelRouter(
++      "conv-1",
++      "https://runtime.example",
++      "session-key",
++    );
++
++    expect(getAgentServerClientOptions).toHaveBeenCalledWith({
++      conversationUrl: "https://runtime.example",
++      sessionApiKey: "session-key",
++    });
++    expect(ConversationClient).toHaveBeenCalledWith({
++      host: "https://runtime.example",
++      apiKey: "session-key",
++      timeout: 60000,
++    });
++    expect(transport.get).toHaveBeenCalledWith(
++      "/api/conversations/conv-1/model_router",
++    );
++    expect(status.enabled).toBe(false);
++  });
++
++  it("adds a saved LLM profile as a model-router route", async () => {
++    transport.post.mockResolvedValue({
++      data: {
++        enabled: true,
++        selection: { mode: "auto" },
++        last_route_name: null,
++        routes: [
++          {
++            name: "reviewer",
++            model: "openrouter/example-model",
++            label: "reviewer",
++          },
++        ],
++      },
++    });
++
++    const status = await ModelRouterService.addProfileRoute(
++      "conv-1",
++      null,
++      null,
++      "Reviewer",
++      "reviewer",
++    );
++
++    expect(transport.post).toHaveBeenCalledWith(
++      "/api/conversations/conv-1/model_router/routes",
++      {
++        profile_name: "Reviewer",
++        route_name: "reviewer",
++        base_route_name: "default",
++      },
++    );
++    expect(status.routes).toHaveLength(1);
++  });
++
++  it("switches model-router selection through PATCH", async () => {
++    transport.patch.mockResolvedValue({
++      data: {
++        enabled: true,
++        selection: { mode: "manual", manual_route_name: "reviewer" },
++        last_route_name: null,
++        routes: [],
++      },
++    });
++
++    const status = await ModelRouterService.switchRoute(
++      "conv-1",
++      null,
++      null,
++      "reviewer",
++    );
++
++    expect(transport.patch).toHaveBeenCalledWith(
++      "/api/conversations/conv-1/model_router",
++      { selection: { mode: "manual", manual_route_name: "reviewer" } },
++    );
++    expect(status.selection?.manual_route_name).toBe("reviewer");
++  });
++});
+diff --git a/__tests__/components/conversation-model-router-control.test.tsx b/__tests__/components/conversation-model-router-control.test.tsx
+new file mode 100644
+index 000000000000..0916fcfeedbd
+--- /dev/null
++++ b/__tests__/components/conversation-model-router-control.test.tsx
+@@ -0,0 +1,128 @@
++import { screen, waitFor } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { renderWithProviders } from "../../test-utils";
++import { ConversationModelRouterControl } from "#/components/features/conversation/conversation-model-router-control";
++import ModelRouterService from "#/api/conversation-service/model-router-service.api";
++
++const activeConversation = vi.hoisted(() => ({
++  current: {
++    id: "conv-1",
++    agent_kind: "openhands" as const,
++    llm_model: "default-model",
++    conversation_url: "https://runtime.example",
++    session_api_key: "session-key",
++  },
++}));
++
++vi.mock("#/hooks/query/use-active-conversation", () => ({
++  useActiveConversation: () => ({ data: activeConversation.current }),
++}));
++
++vi.mock("#/hooks/query/use-llm-profiles", () => ({
++  useLlmProfiles: () => ({
++    data: {
++      profiles: [
++        { name: "Reviewer", model: "reviewer-model" },
++        { name: "Architect", model: "architect-model" },
++      ],
++    },
++  }),
++}));
++
++vi.mock("#/contexts/active-backend-context", () => ({
++  useActiveBackend: () => ({
++    backend: { id: "local", kind: "local" },
++    orgId: null,
++  }),
++}));
++
++vi.mock("#/api/conversation-service/model-router-service.api", () => ({
++  default: {
++    getModelRouter: vi.fn(),
++    addProfileRoute: vi.fn(),
++    switchRoute: vi.fn(),
++    resumeAutoRouting: vi.fn(),
++  },
++}));
++
++describe("ConversationModelRouterControl", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    vi.mocked(ModelRouterService.getModelRouter).mockResolvedValue({
++      enabled: false,
++      selection: null,
++      last_route_name: null,
++      routes: [],
++    });
++  });
++
++  it("adds an LLM profile route to a started conversation", async () => {
++    vi.mocked(ModelRouterService.addProfileRoute).mockResolvedValue({
++      enabled: true,
++      selection: { mode: "auto" },
++      last_route_name: null,
++      routes: [
++        { name: "Reviewer", label: "Reviewer", model: "reviewer-model" },
++      ],
++    });
++
++    renderWithProviders(<ConversationModelRouterControl />);
++
++    await userEvent.click(
++      await screen.findByTestId("conversation-model-router-control"),
++    );
++    await userEvent.click(
++      await screen.findByTestId(
++        "conversation-model-router-add-profile-Reviewer",
++      ),
++    );
++
++    await waitFor(() => {
++      expect(ModelRouterService.addProfileRoute).toHaveBeenCalledWith(
++        "conv-1",
++        "https://runtime.example",
++        "session-key",
++        "Reviewer",
++        "Reviewer",
++      );
++    });
++  });
++
++  it("switches to an existing manual route", async () => {
++    vi.mocked(ModelRouterService.getModelRouter).mockResolvedValue({
++      enabled: true,
++      selection: { mode: "auto" },
++      last_route_name: null,
++      routes: [
++        { name: "Reviewer", label: "Reviewer", model: "reviewer-model" },
++      ],
++    });
++    vi.mocked(ModelRouterService.switchRoute).mockResolvedValue({
++      enabled: true,
++      selection: { mode: "manual", manual_route_name: "Reviewer" },
++      last_route_name: null,
++      routes: [
++        { name: "Reviewer", label: "Reviewer", model: "reviewer-model" },
++      ],
++    });
++
++    renderWithProviders(<ConversationModelRouterControl />);
++
++    await userEvent.click(
++      await screen.findByTestId("conversation-model-router-control"),
++    );
++    await userEvent.click(
++      await screen.findByTestId("conversation-model-router-route-Reviewer"),
++    );
++
++    await waitFor(() => {
++      expect(ModelRouterService.switchRoute).toHaveBeenCalledWith(
++        "conv-1",
++        "https://runtime.example",
++        "session-key",
++        "Reviewer",
++      );
++    });
++  });
++});
+diff --git a/src/api/conversation-service/model-router-service.api.ts b/src/api/conversation-service/model-router-service.api.ts
+new file mode 100644
+index 000000000000..8c64e1578c27
+--- /dev/null
++++ b/src/api/conversation-service/model-router-service.api.ts
+@@ -0,0 +1,156 @@
++import {
++  ConversationClient,
++  type ConversationClientOptions,
++} from "@openhands/typescript-client/clients";
++import { getAgentServerClientOptions } from "#/api/agent-server-client-options";
++
++export interface ModelRouterRouteInfo {
++  name: string;
++  model?: string | null;
++  label?: string | null;
++}
++
++export interface ModelRouterSelection {
++  mode: "auto" | "manual";
++  manual_route_name?: string | null;
++}
++
++export interface ModelRouterStatus {
++  enabled: boolean;
++  selection?: ModelRouterSelection | null;
++  last_route_name?: string | null;
++  routes: ModelRouterRouteInfo[];
++}
++
++interface ConversationClientTransport {
++  get<T>(path: string): Promise<{ data: T }>;
++  post<T>(path: string, body?: unknown): Promise<{ data: T }>;
++  patch<T>(path: string, body?: unknown): Promise<{ data: T }>;
++}
++
++interface ConversationClientTransportCarrier {
++  client: ConversationClientTransport;
++}
++
++class ModelRouterConversationClient extends ConversationClient {
++  private get transport(): ConversationClientTransport {
++    return (this as unknown as ConversationClientTransportCarrier).client;
++  }
++
++  async getModelRouter(conversationId: string): Promise<ModelRouterStatus> {
++    const response = await this.transport.get<ModelRouterStatus>(
++      `/api/conversations/${conversationId}/model_router`,
++    );
++    return response.data;
++  }
++
++  async addModelRouterRoute(
++    conversationId: string,
++    profileName: string,
++    routeName?: string,
++    baseRouteName = "default",
++  ): Promise<ModelRouterStatus> {
++    const response = await this.transport.post<ModelRouterStatus>(
++      `/api/conversations/${conversationId}/model_router/routes`,
++      {
++        profile_name: profileName,
++        route_name: routeName,
++        base_route_name: baseRouteName,
++      },
++    );
++    return response.data;
++  }
++
++  async updateModelRouter(
++    conversationId: string,
++    selection: ModelRouterSelection,
++  ): Promise<ModelRouterStatus> {
++    const response = await this.transport.patch<ModelRouterStatus>(
++      `/api/conversations/${conversationId}/model_router`,
++      { selection },
++    );
++    return response.data;
++  }
++
++  async switchModelRouter(
++    conversationId: string,
++    routeName: string,
++  ): Promise<ModelRouterStatus> {
++    return this.updateModelRouter(conversationId, {
++      mode: "manual",
++      manual_route_name: routeName,
++    });
++  }
++
++  async resumeAutoModelRouting(
++    conversationId: string,
++  ): Promise<ModelRouterStatus> {
++    return this.updateModelRouter(conversationId, { mode: "auto" });
++  }
++}
++
++function clientOptionsForConversation(
++  conversationUrl: string | null | undefined,
++  sessionApiKey?: string | null,
++): ConversationClientOptions {
++  return getAgentServerClientOptions({ conversationUrl, sessionApiKey });
++}
++
++function modelRouterClient(
++  conversationUrl: string | null | undefined,
++  sessionApiKey?: string | null,
++): ModelRouterConversationClient {
++  return new ModelRouterConversationClient(
++    clientOptionsForConversation(conversationUrl, sessionApiKey),
++  );
++}
++
++class ModelRouterService {
++  static async getModelRouter(
++    conversationId: string,
++    conversationUrl: string | null | undefined,
++    sessionApiKey?: string | null,
++  ): Promise<ModelRouterStatus> {
++    return modelRouterClient(conversationUrl, sessionApiKey).getModelRouter(
++      conversationId,
++    );
++  }
++
++  static async addProfileRoute(
++    conversationId: string,
++    conversationUrl: string | null | undefined,
++    sessionApiKey: string | null | undefined,
++    profileName: string,
++    routeName: string,
++  ): Promise<ModelRouterStatus> {
++    return modelRouterClient(
++      conversationUrl,
++      sessionApiKey,
++    ).addModelRouterRoute(conversationId, profileName, routeName);
++  }
++
++  static async switchRoute(
++    conversationId: string,
++    conversationUrl: string | null | undefined,
++    sessionApiKey: string | null | undefined,
++    routeName: string,
++  ): Promise<ModelRouterStatus> {
++    return modelRouterClient(conversationUrl, sessionApiKey).switchModelRouter(
++      conversationId,
++      routeName,
++    );
++  }
++
++  static async resumeAutoRouting(
++    conversationId: string,
++    conversationUrl: string | null | undefined,
++    sessionApiKey?: string | null,
++  ): Promise<ModelRouterStatus> {
++    return modelRouterClient(
++      conversationUrl,
++      sessionApiKey,
++    ).resumeAutoModelRouting(conversationId);
++  }
++}
++
++export default ModelRouterService;
+diff --git a/src/components/features/conversation/conversation-main/conversation-main.tsx b/src/components/features/conversation/conversation-main/conversation-main.tsx
+index c146c7f81234..53b9ce3655d6 100644
+--- a/src/components/features/conversation/conversation-main/conversation-main.tsx
++++ b/src/components/features/conversation/conversation-main/conversation-main.tsx
+@@ -15,6 +15,7 @@ import { mobileTopBarIconButtonClassName } from "#/utils/mobile-top-bar-icon-but
+ import { ChatInterfaceWrapper } from "./chat-interface-wrapper";
+ import { ConversationTabContent } from "../conversation-tabs/conversation-tab-content/conversation-tab-content";
+ import { ConversationNameWithStatus } from "../conversation-name-with-status";
++import { ConversationModelRouterControl } from "../conversation-model-router-control";
+ import { ConversationTabs } from "../conversation-tabs/conversation-tabs";
+ import { ResizeHandle } from "../../../ui/resize-handle";
+ import { useResizablePanels } from "#/hooks/use-resizable-panels";
+@@ -351,6 +352,7 @@ export function ConversationMain({ children }: { children?: ReactNode } = {}) {
+               <div className="min-w-0 flex-1" inert={!!children}>
+                 <ConversationNameWithStatus />
+               </div>
++              {!children ? <ConversationModelRouterControl /> : null}
+             </div>
+           ) : null}
+           <div className="flex-1 min-h-0 flex flex-col">
+diff --git a/src/components/features/conversation/conversation-model-router-control.tsx b/src/components/features/conversation/conversation-model-router-control.tsx
+new file mode 100644
+index 000000000000..d9f07d6e9547
+--- /dev/null
++++ b/src/components/features/conversation/conversation-model-router-control.tsx
+@@ -0,0 +1,326 @@
++import React from "react";
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { useTranslation } from "react-i18next";
++import type { ProfileInfo } from "@openhands/typescript-client";
++import SparkleIcon from "#/icons/sparkle.svg?react";
++import CheckIcon from "#/icons/checkmark.svg?react";
++import { ContextMenu } from "#/ui/context-menu";
++import { ContextMenuListItem } from "#/components/features/context-menu/context-menu-list-item";
++import { Divider } from "#/ui/divider";
++import { Typography } from "#/ui/typography";
++import { ComboboxCaretInline } from "#/ui/combobox-caret";
++import { useClickOutsideElement } from "#/hooks/use-click-outside-element";
++import { useActiveBackend } from "#/contexts/active-backend-context";
++import { useActiveConversation } from "#/hooks/query/use-active-conversation";
++import { useLlmProfiles } from "#/hooks/query/use-llm-profiles";
++import { MODEL_ROUTER_QUERY_KEYS } from "#/hooks/query/query-keys";
++import ModelRouterService, {
++  type ModelRouterStatus,
++} from "#/api/conversation-service/model-router-service.api";
++import { I18nKey } from "#/i18n/declaration";
++import { cn } from "#/utils/utils";
++
++function routeNameForProfile(
++  profileName: string,
++  status: ModelRouterStatus,
++): string {
++  const reserved = new Set(status.routes.map((route) => route.name));
++  if (!status.enabled) reserved.add("default");
++  if (!reserved.has(profileName)) return profileName;
++
++  let suffix = 2;
++  let candidate = `${profileName}-${suffix}`;
++  while (reserved.has(candidate)) {
++    suffix += 1;
++    candidate = `${profileName}-${suffix}`;
++  }
++  return candidate;
++}
++
++function wasProfileAdded(
++  profile: ProfileInfo,
++  status: ModelRouterStatus,
++): boolean {
++  return status.routes.some(
++    (route) =>
++      route.name === profile.name || route.name.startsWith(`${profile.name}-`),
++  );
++}
++
++function currentRouteName(status: ModelRouterStatus): string | null {
++  if (status.selection?.mode === "manual") {
++    return status.selection.manual_route_name ?? null;
++  }
++  return status.last_route_name ?? null;
++}
++
++function routeDescription(route: { model?: string | null }) {
++  return route.model?.trim() || null;
++}
++
++export function ConversationModelRouterControl() {
++  const { t } = useTranslation("openhands");
++  const { data: conversation } = useActiveConversation();
++  const { data: profilesData } = useLlmProfiles();
++  const { backend, orgId } = useActiveBackend();
++  const queryClient = useQueryClient();
++  const [isOpen, setIsOpen] = React.useState(false);
++  const triggerRef = React.useRef<HTMLButtonElement>(null);
++  const popoverRef = useClickOutsideElement<HTMLUListElement>(
++    () => setIsOpen(false),
++    triggerRef,
++  );
++
++  const conversationId = conversation?.id ?? null;
++  const conversationUrl = conversation?.conversation_url ?? null;
++  const sessionApiKey = conversation?.session_api_key ?? null;
++  const canUseModelRouter = Boolean(
++    conversationId &&
++    conversation?.agent_kind !== "acp"

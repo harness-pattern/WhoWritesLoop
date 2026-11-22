@@ -1,0 +1,88 @@
+diff --git a/core/util/tts.ts b/core/util/tts.ts
+index aace86bf9dc..158e895d55c 100644
+--- a/core/util/tts.ts
++++ b/core/util/tts.ts
+@@ -18,17 +18,13 @@ const ttsKillTimeout: number = 5000;
+ export function sanitizeMessageForTTS(message: string): string {
+   message = removeCodeBlocksAndTrim(message);
+ 
+-  // Remove or replace problematic characters
+-  message = message
+-    .replace(/"/g, "")
+-    .replace(/`/g, "")
+-    .replace(/\$/g, "")
+-    .replace(/\\/g, "")
+-    .replace(/[&|;()<>]/g, "");
++  // Remove shell-dangerous characters to prevent command injection
++  // Pattern matches: quotes (", ', `), command substitution ($), escape (\),
++  // shell metacharacters (&|;()<>), and newlines
++  message = message.replace(/["'`$\\&|;()<>\r\n]/g, " ");
+ 
+-  message = message.trim().replace(/\s+/g, " ");
+-
+-  return message;
++  // Normalize whitespace
++  return message.trim().replace(/\s+/g, " ");
+ }
+ 
+ export class TTS {
+@@ -52,12 +48,8 @@ export class TTS {
+         TTS.handle = exec(`say "${message}"`);
+         break;
+       case "win32":
+-        // Replace single quotes on windows
+         TTS.handle = exec(
+-          `powershell -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${message.replace(
+-            /'/g,
+-            "''",
+-          )}')"`,
++          `powershell -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${message}')"`,
+         );
+         break;
+       case "linux":
+diff --git a/gui/src/components/StyledMarkdownPreview/MermaidBlock.tsx b/gui/src/components/StyledMarkdownPreview/MermaidBlock.tsx
+index b11c69a0388..67715493885 100644
+--- a/gui/src/components/StyledMarkdownPreview/MermaidBlock.tsx
++++ b/gui/src/components/StyledMarkdownPreview/MermaidBlock.tsx
+@@ -6,6 +6,8 @@ import {
+ // @ts-ignore
+ import Panzoom from "@panzoom/panzoom";
+ // @ts-ignore
++import DOMPurify from "dompurify";
++// @ts-ignore
+ import mermaid from "mermaid";
+ import { useEffect, useRef, useState } from "react";
+ import { useDebouncedEffect } from "../find/useDebounce";
+@@ -96,7 +98,11 @@ export default function MermaidDiagram({ code }: { code: string }) {
+         try {
+           await mermaid.parse(code);
+           const renderedSVG = await mermaid.render(diagramId, code);
+-          mermaidRenderContainerRef.current.innerHTML = renderedSVG.svg;
++          // Sanitize the SVG output to prevent XSS attacks
++          const sanitizedSVG = DOMPurify.sanitize(renderedSVG.svg, {
++            USE_PROFILES: { svg: true, svgFilters: true },
++          });
++          mermaidRenderContainerRef.current.innerHTML = sanitizedSVG;
+           setError("");
+           const panzoom = Panzoom(mermaidRenderContainerRef.current, {
+             step: MINIMUM_ZOOM_STEP,
+diff --git a/gui/src/pages/config/sections/ToolsSection.tsx b/gui/src/pages/config/sections/ToolsSection.tsx
+index a48bd5df7ac..8ecebfbe1ec 100644
+--- a/gui/src/pages/config/sections/ToolsSection.tsx
++++ b/gui/src/pages/config/sections/ToolsSection.tsx
+@@ -1,4 +1,6 @@
+ import { ConfigYaml, parseConfigYaml } from "@continuedev/config-yaml";
++// @ts-ignore
++import DOMPurify from "dompurify";
+ import {
+   ArrowPathIcon,
+   ChevronDownIcon,
+@@ -395,7 +397,7 @@ function MCPServerPreview({
+             >
+               <span
+                 className="text-xs"
+-                dangerouslySetInnerHTML={{ __html: info }}
++                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(info) }}
+               />
+             </Alert>
+           ))}

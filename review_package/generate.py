@@ -67,7 +67,9 @@ def main():
     con.row_factory = sqlite3.Row
 
     rows = con.execute(
-        """SELECT p.repo_id, r.slug, r.category, p.number, p.title, p.body, p.author_login,
+        """SELECT p.repo_id, r.slug, r.category, p.number, p.title, p.body, p.author_login, p.author_association,
+                  p.comments_count, p.review_comments, p.commits_count, p.additions,
+                  p.deletions, p.changed_files, p.tier_evidence,
                   p.created_at, p.merged_at, p.state, p.tier, p.layers,
                   p.change_type, p.detail_status
            FROM prs p JOIN repos r USING(repo_id)
@@ -122,22 +124,34 @@ def main():
             "primary_layer_rule": r["_primary"] or "UNCLASSIFIED",
             "layers_rule": ",".join(sorted(json.loads(r["layers"] or "{}").keys())),
             "change_type_rule": r["change_type"] or "",
+            "repo_id": r["repo_id"],
+            "author_association": r["author_association"] or "",
+            "comments": r["comments_count"] or 0,
+            "review_comments": r["review_comments"] or 0,
+            "commits_count": r["commits_count"] or 0,
+            "additions": r["additions"] or 0,
+            "deletions": r["deletions"] or 0,
+            "changed_files": r["changed_files"] or 0,
+            "tier_evidence": r["tier_evidence"] or "",
             "body_excerpt": (r["body"] or "")[:1200],
             "files": [
-                {"path": f["path"], "layer": f["layer"], "a": f["additions"], "d": f["deletions"]}
+                {"path": f["path"], "layer": f["layer"], "status": f["status"], "a": f["additions"], "d": f["deletions"]}
                 for f in con.execute(
-                    """SELECT path, layer, additions, deletions FROM pr_files
+                    """SELECT path, layer, status, additions, deletions FROM pr_files
                        WHERE repo_id=? AND number=? ORDER BY (additions+deletions) DESC LIMIT 20""",
                     (r["repo_id"], r["number"]),
                 )
             ],
-            "commits": [
+            "commit_messages": [
                 (x["message"] or "").split("\n")[0][:180]
                 for x in con.execute(
                     "SELECT message FROM pr_commits WHERE repo_id=? AND number=? LIMIT 8",
                     (r["repo_id"], r["number"]),
                 )
             ],
+            "patch": (lambda q: q.read_text(encoding="utf-8")[:7000] if q.exists() else "")(
+                ROOT / "data" / "review_patches" / str(r["repo_id"]) / f"{r['number']}.diff"
+            ),
         })
 
     with open(HERE / "review_sample.csv", "w", newline="", encoding="utf-8") as f:
@@ -151,7 +165,7 @@ def main():
         "tier_correct", "tier_corrected",
         "layer_correct", "layer_corrected",
         "change_type_correct", "change_type_corrected",
-        "confidence_1_5", "notes",
+        "confidence_1_5", "unreviewable", "notes",
     ]
     with open(HERE / "review_form.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=form_cols)
@@ -286,6 +300,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   .agreebox table{width:100%;border-collapse:collapse;font-size:13px}
   .agreebox th,.agreebox td{border-bottom:1px solid #eee;padding:6px 8px;text-align:left}
   .codebook{white-space:pre-wrap;font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:#faf9f6;border:1px solid #eee;border-radius:6px;padding:12px;max-height:420px;overflow:auto}
+  pre.diff{white-space:pre;overflow:auto;max-height:420px;background:#1f242b;color:#e6e1d5;font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px;border-radius:4px;margin:8px 0 0}
   .hidden{display:none!important}
 </style>
 </head>
@@ -300,7 +315,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   <button id="export" class="primary">Export CSV</button>
 </header>
 <main>
-  <div class="warn">Work through the records in order. Your answers stay in this browser tab only — do not refresh before exporting. Export writes <code>review_form_filled.csv</code>; send it back with your reviewer name.</div>
+  <div class="warn">Work through the records in order. Answers autosave in this browser, so you can refresh safely. <b>Export CSV</b> writes <code>review_form_filled.csv</code>; send it back with your reviewer name.</div>
   <div id="app"></div>
   <div id="agreement" class="card agreebox hidden"></div>
   <div class="card" style="margin-top:16px">
@@ -322,14 +337,38 @@ HTML_TEMPLATE = r"""<!doctype html>
 const DATA = __DATA__;
 const FIELDS = ["title_matches","merge_status_matches","tier_correct","tier_corrected",
   "layer_correct","layer_corrected","change_type_correct","change_type_corrected",
-  "confidence_1_5","notes"];
+  "confidence_1_5","unreviewable","notes"];
 const state = {};
 let idx = 0;
 let reviewer = "";
+const STORE = "wwl_review_v1";
+function save(){ try{ localStorage.setItem(STORE, JSON.stringify({state, idx, reviewer})); }catch(e){} }
+function restore(){
+  try{
+    const d=JSON.parse(localStorage.getItem(STORE)||"null");
+    if(!d) return false;
+    Object.assign(state, d.state||{}); idx=d.idx||0; reviewer=d.reviewer||"";
+    return true;
+  }catch(e){ return false; }
+}
 const $ = (s) => document.querySelector(s);
 
 function get(id){ if(!state[id]) state[id] = {}; return state[id]; }
-function filled(id){ const s=get(id); return ["title_matches","merge_status_matches","tier_correct","layer_correct","change_type_correct"].every(k=>s[k]); }
+function filled(id){ const s=get(id); return s.unreviewable==="Y" || ["title_matches","merge_status_matches","tier_correct","layer_correct","change_type_correct"].every(k=>s[k]); }
+function assocLabel(a){
+  const m={OWNER:"owner",MEMBER:"member",COLLABORATOR:"collaborator",CONTRIBUTOR:"contributor",NONE:"external contributor"};
+  return m[a] || (a ? a.toLowerCase() : "association unknown");
+}
+function ruleWhy(r){
+  let ev={}; try{ev=JSON.parse(r.tier_evidence||"{}")}catch(e){}
+  const bits=[];
+  if(ev.rule) bits.push(`tier rule: ${ev.rule}`);
+  if(ev.match) bits.push(`matched text: “${ev.match}”`);
+  if(ev.login) bits.push(`account: ${ev.login}`);
+  bits.push(`primary layer ${r.primary_layer_rule} from ${r.layers_rule||"—"}`);
+  bits.push(`change type ${r.change_type_rule}`);
+  return escapeHtml(bits.join(" · "));
+}
 
 function opt(name, value, label, current){
   const sel = current === value ? (value==="Y"?"sel-yes":"sel-no") : "";
@@ -349,7 +388,7 @@ function render(){
   <div class="card">
     <div class="meta"><span>${r.id}</span><span>${r.repo} #${r.pr_number}</span><span>${r.created_at}</span><span>${r.merge_status}</span></div>
     <div class="title">${escapeHtml(r.title)}</div>
-    <div class="meta"><span>author: <b>${escapeHtml(r.author_login)}</b></span><a href="${r.url}" target="_blank" rel="noopener">open on GitHub ↗</a></div>
+    <div class="meta"><span>author: <b>${escapeHtml(r.author_login)}</b></span><span>${assocLabel(r.author_association)}</span><span>+${r.additions} / −${r.deletions}</span><span>${r.changed_files} files</span><span>${r.commits_count} commits</span><span>${r.review_comments} review comments</span><a href="${r.url}" target="_blank" rel="noopener">open on GitHub ↗</a></div>
     <div class="rule" id="rulebox">
       <span>rule tier: <b>${r.tier_rule}</b></span>
       <span>rule layer: <b>${r.primary_layer_rule}</b></span>
@@ -357,12 +396,20 @@ function render(){
       <span>all layers: ${r.layers_rule}</span>
     </div>
     <details class="evidence">
+      <summary>Why the rule said this</summary>
+      <p class="note">${ruleWhy(r)}</p>
+    </details>
+    <details class="evidence">
       <summary>Evidence: files, commits, PR body (embedded; GitHub link optional)</summary>
       ${r.body_excerpt ? `<div class="bodytext">${escapeHtml(r.body_excerpt)}</div>` : ""}
-      <table><thead><tr><th>file</th><th>layer</th><th>+</th><th>−</th></tr></thead><tbody>
-      ${(r.files||[]).map(f=>`<tr><td class="path">${escapeHtml(f.path)}</td><td>${escapeHtml(f.layer||"")}</td><td>${f.a??""}</td><td>${f.d??""}</td></tr>`).join("")}
+      <table><thead><tr><th>file</th><th>layer</th><th>status</th><th>+</th><th>−</th></tr></thead><tbody>
+      ${(r.files||[]).map(f=>`<tr><td class="path">${escapeHtml(f.path)}</td><td>${escapeHtml(f.layer||"")}</td><td>${escapeHtml(f.status||"")}</td><td>${f.a??""}</td><td>${f.d??""}</td></tr>`).join("")}
       </tbody></table>
-      ${(r.commits||[]).length ? `<ul class="commits">${r.commits.map(c=>`<li>${escapeHtml(c)}</li>`).join("")}</ul>` : ""}
+      ${(r.commit_messages||[]).length ? `<ul class="commits">${r.commit_messages.map(c=>`<li>${escapeHtml(c)}</li>`).join("")}</ul>` : ""}
+    </details>
+    <details class="evidence">
+      <summary>Diff excerpt (first 7 KB, embedded)</summary>
+      ${r.patch ? `<pre class="diff">${escapeHtml(r.patch)}</pre>` : `<p class="note">No diff cached for this record; use the GitHub link. Mark it unreviewable if the page is gone.</p>`}
     </details>
     <div class="q"><h3>1. Identity check</h3>
       <div class="opts">Title matches ${opt("title_matches","Y","yes",s.title_matches)}${opt("title_matches","N","no",s.title_matches)}</div>
@@ -385,6 +432,7 @@ function render(){
         <select id="conf">${[1,2,3,4,5].map(v=>`<option value="${v}" ${String(s.confidence_1_5)===String(v)?"selected":""}>${v}</option>`).join("")}</select>
       </div>
       <div style="margin-top:8px"><textarea id="notes" placeholder="optional: why the rule is wrong, or what is ambiguous">${escapeHtml(s.notes||"")}</textarea></div>
+      <label class="counter" style="display:block;margin-top:8px"><input type="checkbox" id="unrev" ${s.unreviewable==="Y"?"checked":""}> unreviewable (deleted repo, empty diff, or impossible to judge)</label>
     </div>
     <div class="foot">
       <button id="prev" ${idx===0?"disabled":""}>← Previous</button>
@@ -399,16 +447,17 @@ function render(){
       get(r.id)[name]=val;
       document.querySelectorAll(`.opt[data-name="${name}"]`).forEach(x=>x.classList.remove("sel-yes","sel-no"));
       el.classList.add(val==="Y"?"sel-yes":"sel-no");
-      updateCounter();
+      updateCounter(); save();
     });
   });
-  $("#tier_fix").addEventListener("change", e=>{get(r.id).tier_corrected=e.target.value;});
-  $("#layer_fix").addEventListener("change", e=>{get(r.id).layer_corrected=e.target.value;});
-  $("#ct_fix").addEventListener("change", e=>{get(r.id).change_type_corrected=e.target.value;});
-  $("#conf").addEventListener("change", e=>{get(r.id).confidence_1_5=e.target.value;});
-  $("#notes").addEventListener("input", e=>{get(r.id).notes=e.target.value;});
-  $("#prev").addEventListener("click", ()=>{ if(idx>0){idx--; render();} });
-  $("#next").addEventListener("click", ()=>{ if(idx<DATA.length-1){idx++; render();} else { updateCounter(); alert("All records visited. Export the CSV now."); } });
+  $("#tier_fix").addEventListener("change", e=>{get(r.id).tier_corrected=e.target.value; save();});
+  $("#layer_fix").addEventListener("change", e=>{get(r.id).layer_corrected=e.target.value; save();});
+  $("#ct_fix").addEventListener("change", e=>{get(r.id).change_type_corrected=e.target.value; save();});
+  $("#conf").addEventListener("change", e=>{get(r.id).confidence_1_5=e.target.value; save();});
+  $("#notes").addEventListener("input", e=>{get(r.id).notes=e.target.value; save();});
+  $("#unrev").addEventListener("change", e=>{get(r.id).unreviewable=e.target.checked?"Y":""; updateCounter(); save();});
+  $("#prev").addEventListener("click", ()=>{ if(idx>0){idx--; save(); render();} });
+  $("#next").addEventListener("click", ()=>{ if(idx<DATA.length-1){idx++; save(); render();} else { updateCounter(); alert("All records visited. Export the CSV now."); } });
   updateCounter();
 }
 
@@ -486,6 +535,7 @@ $("#export").addEventListener("click", ()=>{
   URL.revokeObjectURL(a.href);
 });
 
+if(restore()){ document.querySelector(".warn").textContent = "Restored your previous answers from this browser. They autosave as you work; you can refresh safely. Export when done."; }
 render();
 </script>
 </body>

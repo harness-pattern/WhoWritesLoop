@@ -1,0 +1,524 @@
+diff --git a/packages/core/src/config/plugin/agent.ts b/packages/core/src/config/plugin/agent.ts
+index 8ec2c15a635a..9355ff716700 100644
+--- a/packages/core/src/config/plugin/agent.ts
++++ b/packages/core/src/config/plugin/agent.ts
+@@ -12,6 +12,7 @@ import { ConfigAgentV1 } from "../../v1/config/agent"
+ import { ConfigMigrateV1 } from "../../v1/config/migrate"
+ import { Global } from "../../global"
+ import { PermissionV2 } from "../../permission"
++import { SHELL_OUTPUT_GLOB } from "../../permission/defaults"
+ import type { LocationMutation } from "../../location-mutation"
+ import type { ReadTool } from "../../tool/read"
+ import type { EditTool } from "../../tool/edit"
+@@ -112,6 +113,23 @@ export const Plugin = define({
+           })
+         }
+       }
++
++      // Internal shell output remains readable through broad external-directory denials.
++      // An exact deny still lets users explicitly revoke access to these files.
++      for (const current of draft.list()) {
++        draft.update(current.id, (agent) => {
++          const denied = agent.permissions.some(
++            (rule) =>
++              rule.action === "external_directory" && rule.resource === SHELL_OUTPUT_GLOB && rule.effect === "deny",
++          )
++          if (
++            denied ||
++            PermissionV2.evaluate("external_directory", SHELL_OUTPUT_GLOB, agent.permissions).effect === "allow"
++          )
++            return
++          agent.permissions.push({ action: "external_directory", resource: SHELL_OUTPUT_GLOB, effect: "allow" })
++        })
++      }
+     })
+     yield* ctx.event.subscribe().pipe(
+       Stream.filter((event) => event.type === "config.updated"),
+diff --git a/packages/core/src/config/plugin/reference.ts b/packages/core/src/config/plugin/reference.ts
+index 75e0cc10e419..adc21367cee6 100644
+--- a/packages/core/src/config/plugin/reference.ts
++++ b/packages/core/src/config/plugin/reference.ts
+@@ -9,6 +9,8 @@ import { Reference } from "../../reference"
+ import { AbsolutePath } from "../../schema"
+ import { Global } from "../../global"
+ import { Location } from "../../location"
++import { allowExternalDirectories } from "../../permission/defaults"
++import { Repository } from "../../repository"
+ 
+ export const Plugin = define({
+   id: "opencode.config.reference",
+@@ -18,35 +20,20 @@ export const Plugin = define({
+     const global = yield* Global.Service
+     const loaded = { entries: yield* config.entries() }
+     yield* ctx.reference.transform((draft) => {
+-      const entries = new Map<string, Reference.Source>()
+-      for (const doc of loaded.entries.filter((entry): entry is Config.Document => entry.type === "document")) {
+-        const directory = doc.path ? path.dirname(doc.path) : location.directory
+-        for (const [name, entry] of Object.entries(doc.info.references ?? {})) {
+-          if (!validAlias(name)) continue
+-          const description = typeof entry === "string" ? undefined : entry.description
+-          const hidden = typeof entry === "string" ? undefined : entry.hidden
+-          entries.set(
+-            name,
+-            local(entry)
+-              ? Reference.LocalSource.make({
+-                  type: "local",
+-                  path: AbsolutePath.make(
+-                    localPath(directory, global.home, typeof entry === "string" ? entry : entry.path),
+-                  ),
+-                  ...(description === undefined ? {} : { description }),
+-                  ...(hidden === undefined ? {} : { hidden }),
+-                })
+-              : Reference.GitSource.make({
+-                  type: "git",
+-                  repository: typeof entry === "string" ? entry : entry.repository,
+-                  ...(entry.branch === undefined ? {} : { branch: entry.branch }),
+-                  ...(description === undefined ? {} : { description }),
+-                  ...(hidden === undefined ? {} : { hidden }),
+-                }),
+-          )
+-        }
++      for (const [name, source] of sources(loaded.entries, location.directory, global.home)) draft.add(name, source)
++    })
++    yield* ctx.agent.transform((draft) => {
++      const permissions = allowExternalDirectories(
++        Array.from(sources(loaded.entries, location.directory, global.home)).flatMap(([, source]) => {
++          if (source.type === "local") return [path.join(source.path, "*")]
++          const repository = Repository.parse(source.repository)
++          if (!repository || !Repository.isRemote(repository)) return []
++          return [path.join(Repository.cachePath(global.repos, repository), "*")]
++        }),
++      )
++      for (const current of draft.list()) {
++        draft.update(current.id, (agent) => agent.permissions.push(...permissions))
+       }
+-      for (const [name, source] of entries) draft.add(name, source)
+     })
+     yield* ctx.event.subscribe().pipe(
+       Stream.filter((event) => event.type === "config.updated"),
+@@ -54,6 +41,7 @@ export const Plugin = define({
+         config.entries().pipe(
+           Effect.tap((entries) => Effect.sync(() => (loaded.entries = entries))),
+           Effect.andThen(ctx.reference.reload()),
++          Effect.andThen(ctx.agent.reload()),
+         ),
+       ),
+       Effect.forkScoped({ startImmediately: true }),
+@@ -61,6 +49,36 @@ export const Plugin = define({
+   }),
+ })
+ 
++function sources(entries: readonly Config.Entry[], location: string, home: string) {
++  const result = new Map<string, Reference.Source>()
++  for (const doc of entries.filter((entry): entry is Config.Document => entry.type === "document")) {
++    const directory = doc.path ? path.dirname(doc.path) : location
++    for (const [name, entry] of Object.entries(doc.info.references ?? {})) {
++      if (!validAlias(name)) continue
++      const description = typeof entry === "string" ? undefined : entry.description
++      const hidden = typeof entry === "string" ? undefined : entry.hidden
++      result.set(
++        name,
++        local(entry)
++          ? Reference.LocalSource.make({
++              type: "local",
++              path: AbsolutePath.make(localPath(directory, home, typeof entry === "string" ? entry : entry.path)),
++              ...(description === undefined ? {} : { description }),
++              ...(hidden === undefined ? {} : { hidden }),
++            })
++          : Reference.GitSource.make({
++              type: "git",
++              repository: typeof entry === "string" ? entry : entry.repository,
++              ...(entry.branch === undefined ? {} : { branch: entry.branch }),
++              ...(description === undefined ? {} : { description }),
++              ...(hidden === undefined ? {} : { hidden }),
++            }),
++      )
++    }
++  }
++  return result
++}
++
+ function validAlias(name: string) {
+   return name.length > 0 && !/[\/\s`,]/.test(name)
+ }
+diff --git a/packages/core/src/config/plugin/skill.ts b/packages/core/src/config/plugin/skill.ts
+index de2f28ac9cd8..ef171c70c7b0 100644
+--- a/packages/core/src/config/plugin/skill.ts
++++ b/packages/core/src/config/plugin/skill.ts
+@@ -8,6 +8,8 @@ import { AbsolutePath } from "../../schema"
+ import { SkillV2 } from "../../skill"
+ import { Global } from "../../global"
+ import { Location } from "../../location"
++import { SkillDiscovery } from "../../skill/discovery"
++import { allowExternalDirectories } from "../../permission/defaults"
+ 
+ export const Plugin = define({
+   id: "opencode.config.skill",
+@@ -17,41 +19,19 @@ export const Plugin = define({
+     const location = yield* Location.Service
+     const loaded = { entries: yield* config.entries() }
+     yield* ctx.skill.transform((draft) => {
+-      const claude = loaded.entries.flatMap((entry) => (entry.type === "claude" ? [entry.path] : []))
+-      const agents = loaded.entries.flatMap((entry) => (entry.type === "agents" ? [entry.path] : []))
+-      const directories = loaded.entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : []))
+-      const items = loaded.entries.flatMap((entry) => (entry.type === "document" ? (entry.info.skills ?? []) : []))
+-      for (const directory of [...claude, ...agents]) {
+-        draft.source(
+-          SkillV2.DirectorySource.make({
+-            type: "directory",
+-            path: AbsolutePath.make(path.join(directory, "skills")),
+-          }),
+-        )
+-      }
+-      for (const directory of directories) {
+-        draft.source(
+-          SkillV2.DirectorySource.make({ type: "directory", path: AbsolutePath.make(path.join(directory, "skill")) }),
+-        )
+-        draft.source(
+-          SkillV2.DirectorySource.make({
+-            type: "directory",
+-            path: AbsolutePath.make(path.join(directory, "skills")),
+-          }),
+-        )
+-      }
+-      for (const item of items) {
+-        if (URL.canParse(item) && /^(https?:)$/.test(new URL(item).protocol)) {
+-          draft.source(SkillV2.UrlSource.make({ type: "url", url: item }))
+-          continue
+-        }
+-        const expanded = item.startsWith("~/") ? path.join(global.home, item.slice(2)) : item
+-        draft.source(
+-          SkillV2.DirectorySource.make({
+-            type: "directory",
+-            path: AbsolutePath.make(path.isAbsolute(expanded) ? expanded : path.join(location.directory, expanded)),
+-          }),
+-        )
++      for (const source of sources(loaded.entries, global.home, location.directory)) draft.source(source)
++    })
++    yield* ctx.agent.transform((draft) => {
++      const permissions = allowExternalDirectories(
++        sources(loaded.entries, global.home, location.directory).map((source) =>
++          path.join(
++            source.type === "directory" ? source.path : SkillDiscovery.cachePath(global.cache, source.url),
++            "*",
++          ),
++        ),
++      )
++      for (const current of draft.list()) {
++        draft.update(current.id, (agent) => agent.permissions.push(...permissions))
+       }
+     })
+     yield* ctx.event.subscribe().pipe(
+@@ -60,9 +40,44 @@ export const Plugin = define({
+         config.entries().pipe(
+           Effect.tap((entries) => Effect.sync(() => (loaded.entries = entries))),
+           Effect.andThen(ctx.skill.reload()),
++          Effect.andThen(ctx.agent.reload()),
+         ),
+       ),
+       Effect.forkScoped({ startImmediately: true }),
+     )
+   }),
+ })
++
++function sources(entries: readonly Config.Entry[], home: string, directory: string) {
++  const result: Array<SkillV2.DirectorySource | SkillV2.UrlSource> = []
++  for (const entry of entries) {
++    if (entry.type === "claude" || entry.type === "agents") {
++      result.push(
++        SkillV2.DirectorySource.make({ type: "directory", path: AbsolutePath.make(path.join(entry.path, "skills")) }),
++      )
++      continue
++    }
++    if (entry.type === "directory") {
++      result.push(
++        SkillV2.DirectorySource.make({ type: "directory", path: AbsolutePath.make(path.join(entry.path, "skill")) }),
++        SkillV2.DirectorySource.make({ type: "directory", path: AbsolutePath.make(path.join(entry.path, "skills")) }),
++      )
++      continue
++    }
++    if (entry.type !== "document") continue
++    for (const item of entry.info.skills ?? []) {
++      if (URL.canParse(item) && /^(https?:)$/.test(new URL(item).protocol)) {
++        result.push(SkillV2.UrlSource.make({ type: "url", url: item }))
++        continue
++      }
++      const expanded = item.startsWith("~/") ? path.join(home, item.slice(2)) : item
++      result.push(
++        SkillV2.DirectorySource.make({
++          type: "directory",
++          path: AbsolutePath.make(path.isAbsolute(expanded) ? expanded : path.join(directory, expanded)),
++        }),
++      )
++    }
++  }
++  return result
++}
+diff --git a/packages/core/src/permission/defaults.ts b/packages/core/src/permission/defaults.ts
+new file mode 100644
+index 000000000000..fef161170783
+--- /dev/null
++++ b/packages/core/src/permission/defaults.ts
+@@ -0,0 +1,10 @@
++import path from "path"
++import { Global } from "../global"
++import { PermissionV2 } from "../permission"
++
++// Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
++export const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
++
++export function allowExternalDirectories(resources: readonly string[]): PermissionV2.Ruleset {
++  return resources.map((resource): PermissionV2.Rule => ({ action: "external_directory", resource, effect: "allow" }))
++}
+diff --git a/packages/core/src/plugin/agent.ts b/packages/core/src/plugin/agent.ts
+index 8b94e219aeaf..4f568060e471 100644
+--- a/packages/core/src/plugin/agent.ts
++++ b/packages/core/src/plugin/agent.ts
+@@ -7,10 +7,8 @@ import { AgentV2 } from "../agent"
+ import { Global } from "../global"
+ import { Location } from "../location"
+ import { PermissionV2 } from "../permission"
++import { SHELL_OUTPUT_GLOB } from "../permission/defaults"
+ 
+-// Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
+-// Whitelisted so agents can read a command's full captured output without an external-directory prompt.
+-const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
+ const BUILD_SYSTEM =
+   "You are an AI coding agent. Help the user accomplish software engineering tasks by inspecting the workspace, making targeted changes, and using tools according to the configured permissions."
+ 
+diff --git a/packages/core/src/plugin/internal.ts b/packages/core/src/plugin/internal.ts
+index 69725e2c2424..8dadefe7307d 100644
+--- a/packages/core/src/plugin/internal.ts
++++ b/packages/core/src/plugin/internal.ts
+@@ -147,9 +147,9 @@ const pre = [
+ 
+ const post = [
+   ConfigReferencePlugin.Plugin,
++  ConfigSkillPlugin.Plugin,
+   ConfigAgentPlugin.Plugin,
+   ConfigCommandPlugin.Plugin,
+-  ConfigSkillPlugin.Plugin,
+   ConfigProviderPlugin.Plugin,
+   VariantPlugin.Plugin,
+   ConfigPolicyPlugin.Plugin,
+diff --git a/packages/core/src/skill/discovery.ts b/packages/core/src/skill/discovery.ts
+index feb06a34d022..6df06757221b 100644
+--- a/packages/core/src/skill/discovery.ts
++++ b/packages/core/src/skill/discovery.ts
+@@ -69,6 +69,10 @@ export interface Interface {
+ 
+ export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SkillDiscovery") {}
+ 
++export function cachePath(cache: string, url: string) {
++  return path.resolve(cache, "skills", Hash.fast(url.endsWith("/") ? url : `${url}/`))
++}
++
+ const layer = Layer.effect(
+   Service,
+   Effect.gen(function* () {
+@@ -111,7 +115,7 @@ const layer = Layer.effect(
+         )
+         if (!data) return []
+ 
+-        const sourceRoot = path.resolve(global.cache, "skills", Hash.fast(base))
++        const sourceRoot = cachePath(global.cache, base)
+         return yield* Effect.forEach(
+           data.skills.flatMap((skill) => {
+             if (!isSafeSegment(skill.name)) {
+diff --git a/packages/core/test/config/agent.test.ts b/packages/core/test/config/agent.test.ts
+index 4579b1151f76..965f7446136f 100644
+--- a/packages/core/test/config/agent.test.ts
++++ b/packages/core/test/config/agent.test.ts
+@@ -10,6 +10,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+ import { FSUtil } from "@opencode-ai/core/fs-util"
+ import { Global } from "@opencode-ai/core/global"
+ import { PermissionV2 } from "@opencode-ai/core/permission"
++import { SHELL_OUTPUT_GLOB } from "@opencode-ai/core/permission/defaults"
+ import { AbsolutePath } from "@opencode-ai/core/schema"
+ import { ConfigMigrateV1 } from "@opencode-ai/core/v1/config/migrate"
+ import { tmpdir } from "../fixture/tmpdir"
+@@ -22,6 +23,11 @@ const defaultPermissions = [
+   { action: "*", resource: "*", effect: "allow" },
+   { action: "external_directory", resource: "*", effect: "ask" },
+ ] satisfies PermissionV2.Ruleset
++const shellOutputPermission = {
++  action: "external_directory",
++  resource: SHELL_OUTPUT_GLOB,
++  effect: "allow",
++} satisfies PermissionV2.Rule
+ 
+ describe("ConfigAgentPlugin.Plugin", () => {
+   it.effect("matches POSIX paths against home-relative permissions", () =>
+@@ -114,6 +120,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
+         { action: "bash", resource: "*", effect: "ask" },
+         { action: "read", resource: "*", effect: "allow" },
+         { action: "bash", resource: "git *", effect: "allow" },
++        shellOutputPermission,
+       ])
+       expect(PermissionV2.evaluate("bash", "git status", buildAgent.permissions).effect).toBe("allow")
+       expect(PermissionV2.evaluate("bash", "bun test", buildAgent.permissions).effect).toBe("ask")
+@@ -132,6 +139,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
+         { action: "read", resource: "*", effect: "allow" },
+         { action: "edit", resource: "*", effect: "deny" },
+         { action: "read", resource: "*", effect: "deny" },
++        shellOutputPermission,
+       ])
+       expect(PermissionV2.evaluate("read", "README.md", reviewer.permissions).effect).toBe("deny")
+       expect((yield* agents.get(AgentV2.ID.make("late")))?.permissions).toEqual([
+@@ -139,11 +147,31 @@ describe("ConfigAgentPlugin.Plugin", () => {
+         { action: "bash", resource: "*", effect: "ask" },
+         { action: "read", resource: "*", effect: "allow" },
+         { action: "edit", resource: "*", effect: "allow" },
++        shellOutputPermission,
+       ])
+       expect(yield* agents.get(AgentV2.ID.make("removed"))).toBeUndefined()
+     }),
+   )
+ 
++  it.effect("keeps shell output readable through a broad external-directory deny", () =>
++    Effect.gen(function* () {
++      const permissions = yield* loadConfiguredPermissions([
++        { action: "external_directory", resource: "*", effect: "deny" },
++      ])
++      expect(PermissionV2.evaluate("external_directory", SHELL_OUTPUT_GLOB, permissions).effect).toBe("allow")
++    }),
++  )
++
++  it.effect("respects an exact shell output deny", () =>
++    Effect.gen(function* () {
++      const permissions = yield* loadConfiguredPermissions([
++        { action: "external_directory", resource: "*", effect: "deny" },
++        { action: "external_directory", resource: SHELL_OUTPUT_GLOB, effect: "deny" },
++      ])
++      expect(PermissionV2.evaluate("external_directory", SHELL_OUTPUT_GLOB, permissions).effect).toBe("deny")
++    }),
++  )
++
+   it.effect("maps configured agent fields and preserves an unspecified model variant", () =>
+     Effect.gen(function* () {
+       const agents = yield* AgentV2.Service
+@@ -294,13 +322,21 @@ Use native v2 fields.`,
+             system: "Review carefully.",
+             description: "Markdown description",
+             request: { body: { temperature: 0.5 } },
+-            permissions: [...defaultPermissions, { action: "edit", resource: "*", effect: "deny" }],
++            permissions: [
++              ...defaultPermissions,
++              { action: "edit", resource: "*", effect: "deny" },
++              shellOutputPermission,
++            ],
+           })
+           expect(yield* agents.get(AgentV2.ID.make("team/helper"))).toMatchObject({ system: "Help the team." })
+           expect(yield* agents.get(AgentV2.ID.make("native"))).toMatchObject({
+             system: "Use native v2 fields.",
+             request: { headers: { "x-agent": "native" }, body: { effort: "high" } },
+-            permissions: [...defaultPermissions, { action: "edit", resource: "*", effect: "deny" }],
++            permissions: [
++              ...defaultPermissions,
++              { action: "edit", resource: "*", effect: "deny" },
++              shellOutputPermission,
++            ],
+           })
+           expect(yield* agents.get(AgentV2.ID.make("disabled"))).toBeUndefined()
+           expect(yield* agents.get(AgentV2.ID.make("plan"))).toMatchObject({ system: "Make a plan.", mode: "primary" })
+@@ -357,3 +393,26 @@ function loadHomePermissions(home: string) {
+     return agent.permissions
+   })
+ }
++
++function loadConfiguredPermissions(permissions: PermissionV2.Ruleset) {
++  return Effect.gen(function* () {
++    const agents = yield* AgentV2.Service
++    const build = AgentV2.ID.make("build")
++    yield* agents.transform((draft) => draft.update(build, () => {}))
++    const config = Config.Service.of({
++      entries: () =>
++        Effect.succeed([
++          new Config.Document({
++            type: "document",
++            info: decode({ permissions }),
++          }),
++        ]),
++    })
++    yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
++      Effect.provideService(Config.Service, config),
++    )
++    const agent = yield* agents.get(build)
++    if (!agent) throw new Error("expected configured build agent")
++    return agent.permissions
++  })
++}
+diff --git a/packages/core/test/config/skill.test.ts b/packages/core/test/config/skill.test.ts
+index 8b5b0bdf6276..1b1161cd8c3f 100644
+--- a/packages/core/test/config/skill.test.ts
++++ b/packages/core/test/config/skill.test.ts
+@@ -34,8 +34,10 @@ describe("ConfigSkillPlugin.Plugin", () => {
+         return { dispose }
+       })
+ 
++      const agent = host().agent
+       yield* ConfigSkillPlugin.Plugin.effect(
+         host({
++          agent: { ...agent, transform: () => Effect.succeed({ dispose: Effect.void }) },
+           skill: { list: () => Effect.die("unused skill.list"), transform, reload: () => Effect.void },
+         }),
+       ).pipe(
+diff --git a/packages/core/test/location-layer.test.ts b/packages/core/test/location-layer.test.ts
+index ec84b3b8ad01..5cea69db5a96 100644
+--- a/packages/core/test/location-layer.test.ts
++++ b/packages/core/test/location-layer.test.ts
+@@ -18,6 +18,7 @@ import { PluginSupervisor } from "@opencode-ai/core/plugin/supervisor"
+ import { ModelV2 } from "@opencode-ai/core/model"
+ import { ProjectV2 } from "@opencode-ai/core/project"
+ import { ProviderV2 } from "@opencode-ai/core/provider"
++import { PermissionV2 } from "@opencode-ai/core/permission"
+ import { AbsolutePath } from "@opencode-ai/core/schema"
+ import { SessionV2 } from "@opencode-ai/core/session"
+ import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
+@@ -112,6 +113,70 @@ describe("LocationServiceMap", () => {
+     ),
+   )
+ 
++  it.live("allows external skill and reference directories by default", () =>
++    Effect.acquireRelease(
++      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
++      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
++    ).pipe(
++      Effect.flatMap(([project, external]) =>
++        Effect.gen(function* () {
++          const skill = path.join(external.path, "skills", "example")
++          const reference = path.join(external.path, "reference")
++          yield* Effect.promise(() =>
++            Promise.all([
++              fs.mkdir(skill, { recursive: true }),
++              fs.mkdir(reference, { recursive: true }),
++              fs.writeFile(
++                path.join(project.path, "opencode.json"),
++                JSON.stringify({
++                  skills: [path.join(external.path, "skills")],
++                  references: { docs: reference },
++                }),
++              ),
++            ]),
++          )
++          yield* Effect.promise(() =>
++            fs.writeFile(
++              path.join(skill, "SKILL.md"),
++              "---\nname: example\ndescription: Example skill.\n---\n\n# Example\n",
++            ),
++          )
++
++          const locations = yield* LocationServiceMap.Service
++          const context = locations.get(Location.Ref.make({ directory: AbsolutePath.make(project.path) }))
++          const permissions = yield* Effect.gen(function* () {
++            const supervisor = yield* PluginSupervisor.Service
++            const agents = yield* AgentV2.Service
++            yield* supervisor.flush
++            for (let attempt = 0; attempt < 100; attempt++) {
++              const build = yield* agents.resolve("build")
++              if (
++                build &&
++                PermissionV2.evaluate(
++                  "external_directory",
++                  path.join(skill, "reference", "notes.md"),
++                  bu

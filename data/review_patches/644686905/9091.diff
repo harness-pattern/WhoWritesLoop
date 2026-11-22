@@ -1,0 +1,130 @@
+diff --git a/package-lock.json b/package-lock.json
+index a4b2f971428..fa5611dbe04 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -380,7 +380,6 @@
+       "integrity": "sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "bin": {
+         "acorn": "bin/acorn"
+       },
+@@ -1260,7 +1259,6 @@
+       "deprecated": "This version is no longer supported. Please see https://eslint.org/version-support for other options.",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@eslint-community/eslint-utils": "^4.2.0",
+         "@eslint-community/regexpp": "^4.6.1",
+@@ -3472,7 +3470,6 @@
+       "integrity": "sha512-QQtaxnoDJeAkDvDKWCLiwIXkTgRhwYDEQCghU9Z6q03iyek/rxRh/2lC3HB7P8sWT2xC/y5JDctPLBIGzHKbhw==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "bin": {
+         "prettier": "bin/prettier.cjs"
+       },
+@@ -4412,7 +4409,6 @@
+       "integrity": "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ==",
+       "dev": true,
+       "license": "Apache-2.0",
+-      "peer": true,
+       "bin": {
+         "tsc": "bin/tsc",
+         "tsserver": "bin/tsserver"
+diff --git a/packages/openai-adapters/src/apis/Anthropic.ts b/packages/openai-adapters/src/apis/Anthropic.ts
+index f0efcb9c6b8..45e98746070 100644
+--- a/packages/openai-adapters/src/apis/Anthropic.ts
++++ b/packages/openai-adapters/src/apis/Anthropic.ts
+@@ -427,7 +427,11 @@ export class AnthropicApi implements BaseLlmApi {
+       temperature: body.temperature ?? undefined,
+       maxTokens: body.max_tokens ?? undefined,
+       topP: body.top_p ?? undefined,
+-      stopSequences: body.stop as string[] | undefined,
++      stopSequences: body.stop
++        ? Array.isArray(body.stop)
++          ? body.stop
++          : [body.stop]
++        : undefined,
+       tools: vercelTools,
+       toolChoice: body.tool_choice as any,
+       abortSignal: signal,
+@@ -625,7 +629,11 @@ export class AnthropicApi implements BaseLlmApi {
+       temperature: body.temperature ?? undefined,
+       maxTokens: body.max_tokens ?? undefined,
+       topP: body.top_p ?? undefined,
+-      stopSequences: body.stop as string[] | undefined,
++      stopSequences: body.stop
++        ? Array.isArray(body.stop)
++          ? body.stop
++          : [body.stop]
++        : undefined,
+       tools: vercelTools,
+       toolChoice: body.tool_choice as any,
+       abortSignal: signal,
+diff --git a/packages/openai-adapters/src/apis/OpenAI.ts b/packages/openai-adapters/src/apis/OpenAI.ts
+index 1e8944e408c..88667ea3148 100644
+--- a/packages/openai-adapters/src/apis/OpenAI.ts
++++ b/packages/openai-adapters/src/apis/OpenAI.ts
+@@ -217,7 +217,7 @@ export class OpenAIApi implements BaseLlmApi {
+     return {
+       id: result.response?.id ?? "",
+       object: "chat.completion",
+-      created: Date.now(),
++      created: Math.floor(Date.now() / 1000),
+       model: modifiedBody.model,
+       choices: [
+         {
+diff --git a/packages/openai-adapters/src/convertToolsToVercel.ts b/packages/openai-adapters/src/convertToolsToVercel.ts
+index 3f1e97455bc..a3f529da9a9 100644
+--- a/packages/openai-adapters/src/convertToolsToVercel.ts
++++ b/packages/openai-adapters/src/convertToolsToVercel.ts
+@@ -26,7 +26,9 @@ export function convertToolsToVercelFormat(
+     if (tool.type === "function") {
+       vercelTools[tool.function.name] = {
+         description: tool.function.description,
+-        parameters: aiJsonSchema(tool.function.parameters as any),
++        parameters: aiJsonSchema(
++          tool.function.parameters ?? { type: "object", properties: {} },
++        ),
+       };
+     }
+   }
+diff --git a/packages/openai-adapters/src/test/vercel-sdk.test.ts b/packages/openai-adapters/src/test/vercel-sdk.test.ts
+index b70f0d8b6ea..aa844a71e9e 100644
+--- a/packages/openai-adapters/src/test/vercel-sdk.test.ts
++++ b/packages/openai-adapters/src/test/vercel-sdk.test.ts
+@@ -29,22 +29,23 @@ function testVercelProvider(config: VercelTestConfig, featureFlag: string) {
+   describe(`${config.provider}/${config.model} (Vercel SDK)`, () => {
+     vi.setConfig({ testTimeout: 30000 });
+ 
+-    // Set feature flag for this test suite
++    let api: ReturnType<typeof getLlmApi>;
++
++    // Set feature flag and create API instance in beforeAll
+     beforeAll(() => {
+       process.env[featureFlag] = "true";
++      api = getLlmApi({
++        provider: config.provider as any,
++        apiKey: config.apiKey,
++        apiBase: config.apiBase,
++        env: config.env,
++      });
+     });
+ 
+     afterAll(() => {
+       delete process.env[featureFlag];
+     });
+ 
+-    const api = getLlmApi({
+-      provider: config.provider as any,
+-      apiKey: config.apiKey,
+-      apiBase: config.apiBase,
+-      env: config.env,
+-    });
+-
+     testChat(api, model, {
+       skipTools: skipTools ?? false,
+       expectUsage: expectUsage ?? true,

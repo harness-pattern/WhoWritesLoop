@@ -1,0 +1,584 @@
+diff --git a/packages/types/src/experiment.ts b/packages/types/src/experiment.ts
+index 37c6eecee75..f78d12ddf8d 100644
+--- a/packages/types/src/experiment.ts
++++ b/packages/types/src/experiment.ts
+@@ -12,6 +12,7 @@ export const experimentIds = [
+ 	"preventFocusDisruption",
+ 	"imageGeneration",
+ 	"runSlashCommand",
++	"filesChangedOverview",
+ ] as const
+ 
+ export const experimentIdsSchema = z.enum(experimentIds)
+@@ -28,6 +29,7 @@ export const experimentsSchema = z.object({
+ 	preventFocusDisruption: z.boolean().optional(),
+ 	imageGeneration: z.boolean().optional(),
+ 	runSlashCommand: z.boolean().optional(),
++	filesChangedOverview: z.boolean().optional(),
+ })
+ 
+ export type Experiments = z.infer<typeof experimentsSchema>
+diff --git a/packages/types/src/file-changes.ts b/packages/types/src/file-changes.ts
+new file mode 100644
+index 00000000000..b9f8d4e481e
+--- /dev/null
++++ b/packages/types/src/file-changes.ts
+@@ -0,0 +1,21 @@
++export type FileChangeType = "create" | "delete" | "edit"
++
++export interface FileChange {
++	uri: string
++	type: FileChangeType
++	// Note: Checkpoint hashes are for backend use, but can be included
++	fromCheckpoint: string
++	toCheckpoint: string
++	// Line count information for display
++	linesAdded?: number
++	linesRemoved?: number
++}
++
++/**
++ * Represents the set of file changes for the webview.
++ * The `files` property is an array for easy serialization.
++ */
++export interface FileChangeset {
++	baseCheckpoint: string
++	files: FileChange[]
++}
+diff --git a/packages/types/src/index.ts b/packages/types/src/index.ts
+index 7a7d5059eb0..7acc5990f21 100644
+--- a/packages/types/src/index.ts
++++ b/packages/types/src/index.ts
+@@ -24,3 +24,4 @@ export * from "./type-fu.js"
+ export * from "./vscode.js"
+ 
+ export * from "./providers/index.js"
++export * from "./file-changes.js"
+diff --git a/src/__tests__/extension.spec.ts b/src/__tests__/extension.spec.ts
+index c39854f697c..8efb21acf7c 100644
+--- a/src/__tests__/extension.spec.ts
++++ b/src/__tests__/extension.spec.ts
+@@ -27,6 +27,9 @@ vi.mock("vscode", () => ({
+ 			dispose: vi.fn(),
+ 		}),
+ 		onDidChangeWorkspaceFolders: vi.fn(),
++		onDidCloseTextDocument: vi.fn().mockReturnValue({
++			dispose: vi.fn(),
++		}),
+ 	},
+ 	languages: {
+ 		registerCodeActionsProvider: vi.fn(),
+diff --git a/src/core/context-tracking/FileContextTracker.ts b/src/core/context-tracking/FileContextTracker.ts
+index 5741b62cfc2..26a112c1121 100644
+--- a/src/core/context-tracking/FileContextTracker.ts
++++ b/src/core/context-tracking/FileContextTracker.ts
+@@ -8,6 +8,7 @@ import fs from "fs/promises"
+ import { ContextProxy } from "../config/ContextProxy"
+ import type { FileMetadataEntry, RecordSource, TaskMetadata } from "./FileContextTrackerTypes"
+ import { ClineProvider } from "../webview/ClineProvider"
++import { EventEmitter } from "events"
+ 
+ // This class is responsible for tracking file operations that may result in stale context.
+ // If a user modifies a file outside of Roo, the context may become stale and need to be updated.
+@@ -20,7 +21,7 @@ import { ClineProvider } from "../webview/ClineProvider"
+ // This class is responsible for tracking file operations.
+ // If the full contents of a file are passed to Roo via a tool, mention, or edit, the file is marked as active.
+ // If a file is modified outside of Roo, we detect and track this change to prevent stale context.
+-export class FileContextTracker {
++export class FileContextTracker extends EventEmitter {
+ 	readonly taskId: string
+ 	private providerRef: WeakRef<ClineProvider>
+ 
+@@ -31,6 +32,7 @@ export class FileContextTracker {
+ 	private checkpointPossibleFiles = new Set<string>()
+ 
+ 	constructor(provider: ClineProvider, taskId: string) {
++		super()
+ 		this.providerRef = new WeakRef(provider)
+ 		this.taskId = taskId
+ 	}
+@@ -183,6 +185,8 @@ export class FileContextTracker {
+ 					newEntry.roo_edit_date = now
+ 					this.checkpointPossibleFiles.add(filePath)
+ 					this.markFileAsEditedByRoo(filePath)
++					// Emit event for Files Changed Overview
++					this.emit("roo_edited", filePath)
+ 					break
+ 
+ 				// read_tool/file_mentioned: Roo has read the file via a tool or file mention
+diff --git a/src/core/task/Task.ts b/src/core/task/Task.ts
+index 2dd9e55c0bc..437990dfc94 100644
+--- a/src/core/task/Task.ts
++++ b/src/core/task/Task.ts
+@@ -112,6 +112,7 @@ import { processUserContentMentions } from "../mentions/processUserContentMentio
+ import { getMessagesSinceLastSummary, summarizeConversation } from "../condense"
+ import { Gpt5Metadata, ClineMessageWithMetadata } from "./types"
+ import { MessageQueueService } from "../message-queue/MessageQueueService"
++import { TaskFilesChangedState } from "../../services/files-changed/TaskFilesChangedState"
+ 
+ import { AutoApprovalHandler } from "./AutoApprovalHandler"
+ 
+@@ -277,6 +278,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
+ 	public readonly messageQueueService: MessageQueueService
+ 	private messageQueueStateChangedHandler: (() => void) | undefined
+ 
++	// Files Changed Overview state
++	private filesChangedState?: TaskFilesChangedState
++
+ 	// Streaming
+ 	isWaitingForFirstChunk = false
+ 	isStreaming = false
+@@ -1598,6 +1602,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
+ 			console.error("Error disposing file context tracker:", error)
+ 		}
+ 
++		try {
++			this.disposeFilesChangedState()
++		} catch (error) {
++			console.error("Error disposing Files Changed state:", error)
++		}
++
+ 		try {
+ 			// If we're not streaming then `abortStream` won't be called.
+ 			if (this.isStreaming && this.diffViewProvider.isEditing) {
+@@ -2936,4 +2946,22 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
+ 			console.error(`[Task] Queue processing error:`, e)
+ 		}
+ 	}
++
++	// Files Changed Overview helpers
++
++	public ensureFilesChangedState(): TaskFilesChangedState {
++		if (!this.filesChangedState) {
++			this.filesChangedState = new TaskFilesChangedState()
++		}
++		return this.filesChangedState
++	}
++
++	public getFilesChangedState(): TaskFilesChangedState | undefined {
++		return this.filesChangedState
++	}
++
++	public disposeFilesChangedState(): void {
++		this.filesChangedState?.dispose()
++		this.filesChangedState = undefined
++	}
+ }
+diff --git a/src/core/webview/ClineProvider.ts b/src/core/webview/ClineProvider.ts
+index 2c20d0939c2..25819ed3b5d 100644
+--- a/src/core/webview/ClineProvider.ts
++++ b/src/core/webview/ClineProvider.ts
+@@ -51,7 +51,7 @@ import { supportPrompt } from "../../shared/support-prompt"
+ import { GlobalFileNames } from "../../shared/globalFileNames"
+ import type { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata } from "../../shared/ExtensionMessage"
+ import { Mode, defaultModeSlug, getModeBySlug } from "../../shared/modes"
+-import { experimentDefault } from "../../shared/experiments"
++import { experimentDefault, EXPERIMENT_IDS } from "../../shared/experiments"
+ import { formatLanguage } from "../../shared/language"
+ import { WebviewMessage } from "../../shared/WebviewMessage"
+ import { EMBEDDING_MODEL_PROFILES } from "../../shared/embeddingModels"
+@@ -94,6 +94,7 @@ import type { ClineMessage } from "@roo-code/types"
+ import { readApiMessages, saveApiMessages, saveTaskMessages } from "../task-persistence"
+ import { getNonce } from "./getNonce"
+ import { getUri } from "./getUri"
++import { FilesChangedMessageHandler } from "../../services/files-changed/FilesChangedMessageHandler"
+ 
+ /**
+  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
+@@ -137,6 +138,9 @@ export class ClineProvider
+ 	private taskCreationCallback: (task: Task) => void
+ 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
+ 	private currentWorkspacePath: string | undefined
++	private lastCheckpointByTaskId: Map<string, string> = new Map()
++	// Files Changed handler
++	private filesChangedHandler: FilesChangedMessageHandler
+ 
+ 	private recentTasksCache?: string[]
+ 	private pendingOperations: Map<string, PendingEditOperation> = new Map()
+@@ -178,6 +182,9 @@ export class ClineProvider
+ 			await this.postStateToWebview()
+ 		})
+ 
++		// Initialize Files Changed handler
++		this.filesChangedHandler = new FilesChangedMessageHandler(this)
++
+ 		// Initialize MCP Hub through the singleton manager
+ 		McpServerManager.getInstance(this.context, this)
+ 			.then((hub) => {
+@@ -482,12 +489,16 @@ export class ClineProvider
+ 	// This is used when a subtask is finished and the parent task needs to be
+ 	// resumed.
+ 	async finishSubTask(lastMessage: string) {
+-		// Remove the last cline instance from the stack (this is the finished
+-		// subtask).
++		const childTask = this.getCurrentTask()
++		const parentFromStack = this.clineStack.length > 1 ? this.clineStack[this.clineStack.length - 2] : undefined
++		await this.filesChangedHandler.handleChildTaskCompletion(childTask, parentFromStack)
++
++		const previousTask = this.getCurrentTask()
+ 		await this.removeClineFromStack()
+-		// Resume the last cline instance in the stack (if it exists - this is
+-		// the 'parent' calling task).
+-		await this.getCurrentTask()?.completeSubtask(lastMessage)
++		const parentTask = this.getCurrentTask()
++
++		await parentTask?.completeSubtask(lastMessage)
++		await this.filesChangedHandler.applyExperimentsToTask(parentTask)
+ 	}
+ 	// Pending Edit Operations Management
+ 
+@@ -589,6 +600,7 @@ export class ClineProvider
+ 		}
+ 
+ 		this.clearWebviewResources()
++		this.filesChangedHandler?.dispose(this.getCurrentTask())
+ 
+ 		// Clean up cloud service event listener
+ 		if (CloudService.hasInstance()) {
+@@ -846,6 +858,8 @@ export class ClineProvider
+ 	}
+ 
+ 	public async createTaskWithHistoryItem(historyItem: HistoryItem & { rootTask?: Task; parentTask?: Task }) {
++		// Capture current task before removal for potential FCO state transfer
++		const previousTask = this.getCurrentTask()
+ 		await this.removeClineFromStack()
+ 
+ 		// If the history item has a saved mode, restore it and its associated API configuration.
+@@ -920,10 +934,17 @@ export class ClineProvider
+ 
+ 		await this.addClineToStack(task)
+ 
++		if (previousTask && previousTask.taskId === task.taskId) {
++			this.filesChangedHandler.transferStateBetweenTasks(previousTask, task)
++		}
++
+ 		this.log(
+ 			`[createTaskWithHistoryItem] ${task.parentTask ? "child" : "parent"} task ${task.taskId}.${task.instanceId} instantiated`,
+ 		)
+ 
++		// Initialize Files Changed state for this task if setting is enabled
++		await this.filesChangedHandler.applyExperimentsToTask(task)
++
+ 		// Check if there's a pending edit after checkpoint restoration
+ 		const operationId = `task-${task.taskId}`
+ 		const pendingEdit = this.getPendingEditOperation(operationId)
+@@ -1150,8 +1171,14 @@ export class ClineProvider
+ 	 * @param webview A reference to the extension webview
+ 	 */
+ 	private setWebviewMessageListener(webview: vscode.Webview) {
+-		const onReceiveMessage = async (message: WebviewMessage) =>
+-			webviewMessageHandler(this, message, this.marketplaceManager)
++		const onReceiveMessage = async (message: WebviewMessage) => {
++			// Route Files Changed Overview messages first
++			if (this.filesChangedHandler.shouldHandleMessage(message)) {
++				await this.filesChangedHandler.handleMessage(message)
++				return
++			}
++			await webviewMessageHandler(this, message, this.marketplaceManager)
++		}
+ 
+ 		const messageDisposable = webview.onDidReceiveMessage(onReceiveMessage)
+ 		this.webviewDisposables.push(messageDisposable)
+@@ -2226,6 +2253,23 @@ export class ClineProvider
+ 		return this.contextProxy.getValue(key)
+ 	}
+ 
++	// FilesChanged Message Handler access
++	public getFilesChangedHandler(): FilesChangedMessageHandler {
++		return this.filesChangedHandler
++	}
++
++	// Track last checkpoint per task for delta-based FilesChanged updates
++	public setLastCheckpointForTask(taskId: string, commitHash: string) {
++		this.lastCheckpointByTaskId.set(taskId, commitHash)
++	}
++
++	/**
++	 * Check if a message should be handled by Files Changed service
++	 */
++	public getLastCheckpointForTask(taskId: string): string | undefined {
++		return this.lastCheckpointByTaskId.get(taskId)
++	}
++
+ 	public async setValue<K extends keyof RooCodeSettings>(key: K, value: RooCodeSettings[K]) {
+ 		await this.contextProxy.setValue(key, value)
+ 	}
+@@ -2570,6 +2614,9 @@ export class ClineProvider
+ 			`[createTask] ${task.parentTask ? "child" : "parent"} task ${task.taskId}.${task.instanceId} instantiated`,
+ 		)
+ 
++		// Initialize Files Changed state for this task if setting is enabled
++		await this.filesChangedHandler.applyExperimentsToTask(task)
++
+ 		return task
+ 	}
+ 
+@@ -2594,6 +2641,9 @@ export class ClineProvider
+ 		// Capture the current instance to detect if rehydrate already occurred elsewhere
+ 		const originalInstanceId = task.instanceId
+ 
++		// Capture FCO state before task disposal (task.abortTask() will dispose it)
++		const fcoState = task.getFilesChangedState()
++
+ 		// Begin abort (non-blocking)
+ 		task.abortTask()
+ 
+@@ -2638,6 +2688,20 @@ export class ClineProvider
+ 
+ 		// Clears task again, so we need to abortTask manually above.
+ 		await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask })
++
++		// Restore FCO state to the new task if we captured it
++		if (fcoState) {
++			const newTask = this.getCurrentTask()
++			if (newTask && newTask.taskId === task.taskId) {
++				const newTaskState = newTask.ensureFilesChangedState()
++				newTaskState.cloneFrom(fcoState)
++				// Ensure the restored task is not waiting (prevents clearFilesChangedDisplay)
++				newTaskState.setWaiting(false)
++				console.log(`[cancelTask] restored FCO state to recreated task ${newTask.taskId}.${newTask.instanceId}`)
++				// Re-trigger FCO display since applyExperimentsToTask may have cleared it
++				await this.filesChangedHandler.applyExperimentsToTask(newTask)
++			}
++		}
+ 	}
+ 
+ 	// Clear the current task without treating it as a subtask.
+diff --git a/src/core/webview/__tests__/ClineProvider.spec.ts b/src/core/webview/__tests__/ClineProvider.spec.ts
+index bcc9d544c29..b456b4d0708 100644
+--- a/src/core/webview/__tests__/ClineProvider.spec.ts
++++ b/src/core/webview/__tests__/ClineProvider.spec.ts
+@@ -152,6 +152,7 @@ vi.mock("vscode", () => ({
+ 		showWarningMessage: vi.fn(),
+ 		showErrorMessage: vi.fn(),
+ 		onDidChangeActiveTextEditor: vi.fn(() => ({ dispose: vi.fn() })),
++		createTextEditorDecorationType: vi.fn(() => ({ dispose: vi.fn() })),
+ 	},
+ 	workspace: {
+ 		getConfiguration: vi.fn().mockReturnValue({
+@@ -188,6 +189,10 @@ vi.mock("../../../api", () => ({
+ 	buildApiHandler: vi.fn(),
+ }))
+ 
++vi.mock("../../checkpoints", () => ({
++	getCheckpointService: vi.fn(async () => ({})),
++}))
++
+ vi.mock("../../prompts/system", () => ({
+ 	SYSTEM_PROMPT: vi.fn().mockImplementation(async () => "mocked system prompt"),
+ 	codeMode: "code",
+diff --git a/src/core/webview/__tests__/ClineProvider.sticky-mode.spec.ts b/src/core/webview/__tests__/ClineProvider.sticky-mode.spec.ts
+index 29aefcaeba4..ab0ba8213e3 100644
+--- a/src/core/webview/__tests__/ClineProvider.sticky-mode.spec.ts
++++ b/src/core/webview/__tests__/ClineProvider.sticky-mode.spec.ts
+@@ -27,6 +27,7 @@ vi.mock("vscode", () => ({
+ 		showWarningMessage: vi.fn(),
+ 		showErrorMessage: vi.fn(),
+ 		onDidChangeActiveTextEditor: vi.fn(() => ({ dispose: vi.fn() })),
++		createTextEditorDecorationType: vi.fn(() => ({ dispose: vi.fn() })),
+ 	},
+ 	workspace: {
+ 		getConfiguration: vi.fn().mockReturnValue({
+@@ -148,6 +149,10 @@ vi.mock("../../prompts/system", () => ({
+ 	codeMode: "code",
+ }))
+ 
++vi.mock("../../checkpoints", () => ({
++	getCheckpointService: vi.fn(async () => ({})),
++}))
++
+ vi.mock("../../../api/providers/fetchers/modelCache", () => ({
+ 	getModels: vi.fn().mockResolvedValue({}),
+ 	flushModels: vi.fn(),
+diff --git a/src/core/webview/webviewMessageHandler.ts b/src/core/webview/webviewMessageHandler.ts
+index af5f9925c35..323ffae1ba6 100644
+--- a/src/core/webview/webviewMessageHandler.ts
++++ b/src/core/webview/webviewMessageHandler.ts
+@@ -33,7 +33,7 @@ import {
+ 	checkoutRestorePayloadSchema,
+ } from "../../shared/WebviewMessage"
+ import { checkExistKey } from "../../shared/checkExistApiConfig"
+-import { experimentDefault } from "../../shared/experiments"
++import { experimentDefault, EXPERIMENT_IDS, experiments } from "../../shared/experiments"
+ import { Terminal } from "../../integrations/terminal/Terminal"
+ import { openFile } from "../../integrations/misc/open-file"
+ import { openImage, saveImage } from "../../integrations/misc/image-handler"
+@@ -1958,6 +1958,21 @@ export const webviewMessageHandler = async (
+ 
+ 			await updateGlobalState("experiments", updatedExperiments)
+ 
++			// Simple delegation to FilesChanged handler for universal baseline management
++			try {
++				const currentTask = provider.getCurrentTask()
++				if (currentTask?.taskId) {
++					await provider
++						.getFilesChangedHandler()
++						.handleExperimentToggle(
++							experiments.isEnabled(updatedExperiments, EXPERIMENT_IDS.FILES_CHANGED_OVERVIEW),
++							currentTask,
++						)
++				}
++			} catch (error) {
++				provider.log(`FilesChanged: Error handling experiment toggle: ${error}`)
++			}
++
+ 			await provider.postStateToWebview()
+ 			break
+ 		}
+diff --git a/src/extension.ts b/src/extension.ts
+index 5db0996ad65..e3048947d52 100644
+--- a/src/extension.ts
++++ b/src/extension.ts
+@@ -28,6 +28,7 @@ import { TerminalRegistry } from "./integrations/terminal/TerminalRegistry"
+ import { McpServerManager } from "./services/mcp/McpServerManager"
+ import { CodeIndexManager } from "./services/code-index/manager"
+ import { MdmService } from "./services/mdm/MdmService"
++import { FcoTextDocumentContentProvider } from "./services/files-changed/FcoTextDocumentContentProvider"
+ import { migrateSettings } from "./utils/migrateSettings"
+ import { autoImportSettings } from "./utils/autoImportSettings"
+ import { API } from "./extension/api"
+@@ -253,6 +254,13 @@ export async function activate(context: vscode.ExtensionContext) {
+ 		vscode.workspace.registerTextDocumentContentProvider(DIFF_VIEW_URI_SCHEME, diffContentProvider),
+ 	)
+ 
++	// Register FCO (Files Changed Overview) diff content provider for performance optimization
++	const fcoContentProvider = FcoTextDocumentContentProvider.getInstance()
++	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider("fco-diff", fcoContentProvider))
++
++	// Register automatic cleanup listener for when diff documents are closed
++	context.subscriptions.push(fcoContentProvider.registerCloseListener())
++
+ 	context.subscriptions.push(vscode.window.registerUriHandler({ handleUri }))
+ 
+ 	// Register code actions provider.
+diff --git a/src/services/checkpoints/ShadowCheckpointService.ts b/src/services/checkpoints/ShadowCheckpointService.ts
+index e68a7cfea10..dee1cab3166 100644
+--- a/src/services/checkpoints/ShadowCheckpointService.ts
++++ b/src/services/checkpoints/ShadowCheckpointService.ts
+@@ -44,6 +44,11 @@ export abstract class ShadowCheckpointService extends EventEmitter {
+ 		return this._checkpoints.slice()
+ 	}
+ 
++	// Provide current checkpoint for consumers (e.g., FilesChanged enable flow)
++	public getCurrentCheckpoint(): string | undefined {
++		return this._checkpoints.length > 0 ? this._checkpoints[this._checkpoints.length - 1] : this.baseHash
++	}
++
+ 	constructor(taskId: string, checkpointsDir: string, workspaceDir: string, log: (message: string) => void) {
+ 		super()
+ 
+@@ -338,6 +343,73 @@ export abstract class ShadowCheckpointService extends EventEmitter {
+ 		return result
+ 	}
+ 
++	public async getDiffStats({
++		from,
++		to,
++	}: {
++		from?: string
++		to?: string
++	}): Promise<Record<string, { insertions: number; deletions: number }>> {
++		if (!this.git) {
++			throw new Error("Shadow git repo not initialized")
++		}
++
++		if (!from) {
++			from = (await this.git.raw(["rev-list", "--max-parents=0", "HEAD"])).trim()
++		}
++
++		const summary = to ? await this.git.diffSummary([`${from}..${to}`]) : await this.git.diffSummary([from])
++
++		const map: Record<string, { insertions: number; deletions: number }> = {}
++		for (const f of summary.files) {
++			const anyFile = f as any
++			const name: string = anyFile.file ?? anyFile.path ?? ""
++			const insertions: number = typeof anyFile.insertions === "number" ? anyFile.insertions : 0
++			const deletions: number = typeof anyFile.deletions === "number" ? anyFile.deletions : 0
++			if (name) {
++				map[name] = { insertions, deletions }
++			}
++		}
++
++		return map
++	}
++
++	/** Restore a single file from a specific checkpoint using git */
++	public async restoreFileFromCheckpoint(commitHash: string, relativePath: string): Promise<void> {
++		if (!this.git) {
++			throw new Error("Shadow git repo not initialized")
++		}
++
++		// Normalize path for git usage
++		const rel = relativePath.replace(/\\/g, "/")
++		try {
++			await this.git.raw(["checkout", commitHash, "--", rel])
++		} catch (error) {
++			const message = error instanceof Error ? error.message : String(error)
++			// If the file did not exist at this commit, delete it from workspace
++			if (/did not match any file|unknown path/i.test(message)) {
++				const abs = path.join(this.workspaceDir, relativePath)
++				try {
++					await fs.unlink(abs)
++				} catch (e: any) {
++					if (e?.code !== "ENOENT") throw e
++				}
++			} else {
++				throw error
++			}
++		}
++	}
++
++	// Minimal helper used by Files Changed Overview to fetch file content
++	public async getContent(commitHash: string, filePath: string): Promise<string> {
++		if (!this.git) {
++			throw new Error("Shadow git repo not initialized")
++		}
++
++		const relPath = path.relative(this.workspaceDir, filePath)
++		return this.git.show([`${commitHash}:${relPath}`])
++	}
++
+ 	/**
+ 	 * EventEmitter
+ 	 */
+diff --git a/src/services/checkpoints/__tests__/ShadowCheckpointService.spec.ts b/src/services/checkpoints/__tests__/ShadowCheckpointService.spec.ts
+index 622a90f39ab..ec64e2bb1cd 100644
+--- a/src/services/checkpoints/__tests__/ShadowCheckpointService.spec.ts
++++ b/src/services/checkpoints/__tests__/ShadowCheckpointService.spec.ts
+@@ -824,5 +824,108 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
+ 				expect(await fs.readFile(testFile, "utf-8")).toBe("Hello, world!")
+ 			})
+ 		})
++
++		describe(`${klass.name}#getContent and file rejection workflow`, () => {
++			it("should delete newly created files when getContent throws 'does not exist' error", async () => {
++				// Test the complete workflow: create file -> checkpoint -> reject file -> verify deletion
++				// This tests the integration between ShadowCheckpointService and FilesChanged file rejection
++
++				// 1. Create a new file that didn't exist in the base checkpoint
++				const newFile = path.join(service.workspaceDir, "newly-created.txt")
++				await fs.writeFile(newFile, "This file was created by LLM")
++
++				// Verify file exists
++				expect(await fs.readFile(newFile, "utf-8")).toBe("This file was created by LLM")
++
++				// 2. Save a checkpoint containing the new file
++				const commit = await service.saveCheckpoint("Add newly created file")
++				expect(commit?.commit).toBeTruthy()
++
++				// 3. Verify the diff shows the new file
++				const changes = await service.getDiff({ to: commit!.commit })
++				const newFileChange = changes.find((c) => c.paths.relative === "newly-created.txt")
++				expect(newFileChange).toBeDefined()
++				expect(newFileChange?.content.before).toBe("")
++				expect(newFileChange?.content.after).toBe("This file was created by LLM")
++
++				// 4. Simulate FilesChanged file rejection: try to get content from baseHash (should throw)
++				// This simulates what FilesChangedMessageHandler.revertFileToCheckpoint() does
++				await expect(service.getContent(service.baseHash!, newFile)).rejects.toThrow(
++					/does not exist|exists on disk, but not in/,
++				)
++
++				// 5. Since getContent threw an error, simulate the deletion logic from FilesChangedMessageHandler
++				// In real FilesChanged, this would be handled by FilesChangedMessageHandler.revertFileToCheckpoint()
++	

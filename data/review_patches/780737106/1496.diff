@@ -1,0 +1,517 @@
+diff --git a/SWE-agent__test-repo b/SWE-agent__test-repo
+new file mode 160000
+index 0000000000..7bef0c62cc
+--- /dev/null
++++ b/SWE-agent__test-repo
+@@ -0,0 +1 @@
++Subproject commit 7bef0c62cce60a2cb6df0c80f18b3054e1c23630
+diff --git a/config/default.yaml b/config/default.yaml
+index fb79208113..b262280eea 100644
+--- a/config/default.yaml
++++ b/config/default.yaml
+@@ -2,6 +2,8 @@
+ # This template is heavily inspired by anthropic's computer use demo, but you can use
+ # it with any LM.
+ agent:
++  model:
++    name: claude-sonnet-4-20250514
+   templates:
+     system_template: |-
+       You are a helpful assistant that can interact with a computer to solve tasks.
+@@ -31,39 +33,48 @@ agent:
+     next_step_no_output_template: |-
+       Your command ran successfully and did not produce any output.
+   tools:
++    parse_function:
++      type: function_calling
+     env_variables:
+       PAGER: cat
+       MANPAGER: cat
+       LESS: -R
+-      PIP_PROGRESS_BAR: 'off'
+-      TQDM_DISABLE: '1'
++      PIP_PROGRESS_BAR: "off"
++      TQDM_DISABLE: "1"
+       GIT_PAGER: cat
+     bundles:
+       - path: tools/registry
+       - path: tools/edit_anthropic
+       - path: tools/review_on_submit_m
+     registry_variables:
+-      USE_FILEMAP: 'true'
++      USE_FILEMAP: "true"
+       SUBMIT_REVIEW_MESSAGES:
+         - |
+-          Thank you for your work on this issue. Please carefully follow the steps below to help review your changes.
++            Thank you for your work on this issue. Please carefully follow the steps below to help review your changes.
+ 
+-          1. If you made any changes to your code after running the reproduction script, please run the reproduction script again.
+-            If the reproduction script is failing, please revisit your changes and make sure they are correct.
+-            If you have already removed your reproduction script, please ignore this step.
+-          2. Remove your reproduction script (if you haven't done so already).
+-          3. If you have modified any TEST files, please revert them to the state they had before you started fixing the issue.
+-            You can do this with `git checkout -- /path/to/test/file.py`. Use below <diff> to find the files you need to revert.
+-          4. Run the submit command again to confirm.
++            1. If you made any changes to your code after running the reproduction script, please run the reproduction script again.
++              If the reproduction script is failing, please revisit your changes and make sure they are correct.
++              If you have already removed your reproduction script, please ignore this step.
++            2. Remove your reproduction script (if you haven't done so already).
++            3. If you have modified any TEST files, please revert them to the state they had before you started fixing the issue.
++              You can do this with `git checkout -- /path/to/test/file.py`. Use below <diff> to find the files you need to revert.
++            4. Run the submit command again to confirm.
+ 
+-          Here is a list of all of your changes:
++            Here is a list of all of your changes:
+ 
+-          <diff>
+-          {{diff}}
+-          </diff>
++            <diff>
++            {{diff}}
++            </diff>
+     enable_bash_tool: true
+-    parse_function:
+-      type: function_calling
+   history_processors:
+     - type: cache_control
+       last_n_messages: 2
++
++env:
++  repo:
++    path: /path/to/your/local/repo # Replace this with the path to the repo you want to work on
++  deployment:
++    image: python:3.11
++# Example problem statement config (override this when you run the agent):
++# problem_statement:
++#   path: /path/to/your/local/repo/problem_statements/1.md
+diff --git a/sweagent/agent/agents.py b/sweagent/agent/agents.py
+index 4844aeb7c4..4cd042886e 100644
+--- a/sweagent/agent/agents.py
++++ b/sweagent/agent/agents.py
+@@ -12,6 +12,7 @@
+ from jinja2 import Template
+ from pydantic import BaseModel, ConfigDict, Field, model_validator
+ from simple_parsing.helpers.fields import field
++from swerex.deployment.local import LocalDeployment
+ from swerex.exceptions import BashIncorrectSyntaxError, CommandTimeoutError, SwerexException
+ from tenacity import RetryError
+ from typing_extensions import Self
+@@ -853,14 +854,13 @@ def attempt_autosubmission_after_error(self, step: StepOutput) -> StepOutput:
+         repo_name = "/"
+         if self._env.repo is not None:
+             repo_name = f"/{self._env.repo.repo_name}"
+-        submission_command = "git add -A && git diff --cached > /root/model.patch"
++        submission_command = "git add -A && git diff --cached > model.patch"
+         self.logger.info("Executing submission command %s in %s", submission_command, repo_name)
+         try:
+             self._env.execute_command(submission_command, check=True, cwd=repo_name)
+         except Exception as e:
+             self.logger.error("Failed to execute submission command, got %s", e)
+-        # There's still hope for the submission, because the `/root/model.patch` file might have been
+-        # generated by the state command
++        # There's still hope for the submission, because the state command may have written model.patch
+         step = self.handle_submission(step, observation="", force_submission=True)
+         if step.submission:
+             self.logger.info("Exiting with autosubmission")
+@@ -883,8 +883,13 @@ def handle_submission(self, step: StepOutput, *, observation="", force_submissio
+         is_submission = self.tools.check_for_submission_cmd(observation or step.observation)
+         if is_submission or force_submission:
+             assert self._env is not None
++            model_patch_path = (
++                str(self._env.root_path / "model.patch")
++                if isinstance(self._env.deployment, LocalDeployment)
++                else "/root/model.patch"
++            )
+             try:
+-                submission = self._env.read_file("/root/model.patch", encoding="utf-8", errors="backslashreplace")
++                submission = self._env.read_file(model_patch_path, encoding="utf-8", errors="backslashreplace")
+             except FileNotFoundError:
+                 self.logger.warning("Submission file not found, no submission was made")
+                 return step
+diff --git a/sweagent/environment/repo.py b/sweagent/environment/repo.py
+index 655db8dd9d..35561db109 100644
+--- a/sweagent/environment/repo.py
++++ b/sweagent/environment/repo.py
+@@ -8,6 +8,7 @@
+ from git import Repo as GitRepo
+ from pydantic import BaseModel, ConfigDict, Field
+ from swerex.deployment.abstract import AbstractDeployment
++from swerex.deployment.local import LocalDeployment
+ from swerex.runtime.abstract import Command, UploadRequest
+ from typing_extensions import Self
+ 
+@@ -27,6 +28,8 @@ def copy(self, deployment: AbstractDeployment): ...
+ 
+     def get_reset_commands(self) -> list[str]: ...
+ 
++    def get_repo_root(self, deployment: AbstractDeployment) -> str: ...
++
+ 
+ def _get_git_reset_commands(base_commit: str) -> list[str]:
+     return [
+@@ -67,6 +70,11 @@ def copy(self, deployment: AbstractDeployment):
+         """Does nothing."""
+         pass
+ 
++    def get_repo_root(self, deployment: AbstractDeployment) -> str:
++        if isinstance(deployment, LocalDeployment):
++            return str(Path.cwd() / self.repo_name)
++        return f"/{self.repo_name}"
++
+     def get_reset_commands(self) -> list[str]:
+         """Issued after the copy operation or when the environment is reset."""
+         if self.reset:
+@@ -108,15 +116,22 @@ def check_valid_repo(self) -> Self:
+ 
+     def copy(self, deployment: AbstractDeployment):
+         self.check_valid_repo()
+-        asyncio.run(
+-            deployment.runtime.upload(UploadRequest(source_path=str(self.path), target_path=f"/{self.repo_name}"))
+-        )
+-        r = asyncio.run(
+-            deployment.runtime.execute(Command(command=f"chown -R root:root /{self.repo_name}", shell=True))
+-        )
+-        if r.exit_code != 0:
+-            msg = f"Failed to change permissions on copied repository (exit code: {r.exit_code}, stdout: {r.stdout}, stderr: {r.stderr})"
+-            raise RuntimeError(msg)
++        target_path = self.get_repo_root(deployment)
++        asyncio.run(deployment.runtime.upload(UploadRequest(source_path=str(self.path), target_path=target_path)))
++        if not isinstance(deployment, LocalDeployment):
++            r = asyncio.run(
++                deployment.runtime.execute(
++                    Command(command=f"chown -R root:root {shlex.quote(target_path)}", shell=True)
++                )
++            )
++            if r.exit_code != 0:
++                msg = f"Failed to change permissions on copied repository (exit code: {r.exit_code}, stdout: {r.stdout}, stderr: {r.stderr})"
++                raise RuntimeError(msg)
++
++    def get_repo_root(self, deployment: AbstractDeployment) -> str:
++        if isinstance(deployment, LocalDeployment):
++            return str(Path.cwd() / self.repo_name)
++        return f"/{self.repo_name}"
+ 
+     def get_reset_commands(self) -> list[str]:
+         """Issued after the copy operation or when the environment is reset."""
+@@ -165,18 +180,18 @@ def copy(self, deployment: AbstractDeployment):
+         base_commit = self.base_commit
+         github_token = os.getenv("GITHUB_TOKEN", "")
+         url = self._get_url_with_token(github_token)
++        repo_root = self.get_repo_root(deployment)
+         asyncio.run(
+             deployment.runtime.execute(
+                 Command(
+                     command=" && ".join(
+                         (
+-                            f"mkdir /{self.repo_name}",
+-                            f"cd /{self.repo_name}",
++                            f"mkdir -p {shlex.quote(repo_root)}",
++                            f"cd {shlex.quote(repo_root)}",
+                             "git init",
+                             f"git remote add origin {shlex.quote(url)}",
+                             f"git fetch --depth 1 origin {shlex.quote(base_commit)}",
+                             "git checkout FETCH_HEAD",
+-                            "cd ..",
+                         )
+                     ),
+                     timeout=self.clone_timeout,
+@@ -186,6 +201,11 @@ def copy(self, deployment: AbstractDeployment):
+             ),
+         )
+ 
++    def get_repo_root(self, deployment: AbstractDeployment) -> str:
++        if isinstance(deployment, LocalDeployment):
++            return str(Path.cwd() / self.repo_name)
++        return f"/{self.repo_name}"
++
+     def get_reset_commands(self) -> list[str]:
+         """Issued after the copy operation or when the environment is reset."""
+         return _get_git_reset_commands(self.base_commit)
+diff --git a/sweagent/environment/swe_env.py b/sweagent/environment/swe_env.py
+index cbe0195264..11774c50f9 100644
+--- a/sweagent/environment/swe_env.py
++++ b/sweagent/environment/swe_env.py
+@@ -1,17 +1,24 @@
+ import asyncio
+ import logging
++import os
+ import shlex
+-from pathlib import PurePath
++import shutil
++import sys
++import tempfile
++from pathlib import Path, PurePath
+ from typing import Literal, Self
+ 
+ from pydantic import BaseModel, ConfigDict, Field
+ from swerex.deployment.abstract import AbstractDeployment
+-from swerex.deployment.config import DeploymentConfig, DockerDeploymentConfig, get_deployment
++from swerex.deployment.config import DeploymentConfig, DockerDeploymentConfig, LocalDeploymentConfig, get_deployment
++from swerex.deployment.docker import DockerDeployment
++from swerex.deployment.local import LocalDeployment
+ from swerex.runtime.abstract import (
+     BashAction,
+     BashInterruptAction,
+     CreateBashSessionRequest,
+     ReadFileRequest,
++    UploadRequest,
+     WriteFileRequest,
+ )
+ from swerex.runtime.abstract import Command as RexCommand
+@@ -77,7 +84,11 @@ def __init__(
+         self.logger = get_logger("swea-env", emoji="🪴")
+         self.name = name
+         self.clean_multi_line_functions = lambda x: x
++        self._local_root_dir: Path | None = None
++        self.root_path = self._create_local_root_path() if isinstance(deployment, LocalDeployment) else Path("/root")
+         self._chook = CombinedEnvHooks()
++        if isinstance(deployment, LocalDeployment):
++            self._setup_local_deployment_environment()
+         for hook in hooks or []:
+             self.add_hook(hook)
+ 
+@@ -118,8 +129,11 @@ def _copy_repo(self) -> None:
+         if self.repo is None:
+             return
+ 
+-        folders = self.communicate(input="ls", check="raise").split("\n")
+-        if self.repo.repo_name in folders:
++        repo_root = self.repo.get_repo_root(self.deployment)
++        exists = (
++            self.communicate(input=f"test -d {shlex.quote(repo_root)} && echo yes", check="ignore").strip() == "yes"
++        )
++        if exists:
+             return
+ 
+         self._chook.on_copy_repo_started(repo=self.repo)
+@@ -149,11 +163,12 @@ def reset(self):
+     def _reset_repository(self) -> None:
+         """Clean repository of any modifications + Checkout base commit"""
+         if self.repo is not None:
++            repo_root = self.repo.get_repo_root(self.deployment)
+             self.logger.debug("Resetting repository %s to commit %s", self.repo.repo_name, self.repo.base_commit)
+             # todo: Currently has swe-ft specific change: The original repo.copy isn't called, because the repo is already
+             # present. However, reset --hard <BRANCH> also doesn't work. So modified it here to do a checkout instead.
+             startup_commands = [
+-                f"cd /{self.repo.repo_name}",
++                f"cd {shlex.quote(repo_root)}",
+                 "export ROOT=$(pwd -P)",
+                 *self.repo.get_reset_commands(),
+             ]
+@@ -169,6 +184,9 @@ def close(self) -> None:
+         """Shutdown SWE-ReX deployment etc."""
+         self.logger.info("Beginning environment shutdown...")
+         asyncio.run(self.deployment.stop())
++        if self._local_root_dir is not None:
++            shutil.rmtree(self._local_root_dir, ignore_errors=True)
++            self._local_root_dir = None
+         self._chook.on_close()
+ 
+     # MARK: Helper functions #
+@@ -180,19 +198,98 @@ def _init_deployment(
+         If cached_image is provided, it will use that image name instead of the default.
+         """
+         self._chook.on_start_deployment()
+-        asyncio.run(self.deployment.start())
++        try:
++            asyncio.run(self.deployment.start())
++        except FileNotFoundError as exc:
++            if isinstance(self.deployment, DockerDeployment):
++                self.logger.warning(
++                    "Docker executable not found (%s). Falling back to local deployment.",
++                    exc,
++                )
++                self.deployment = LocalDeployment.from_config(LocalDeploymentConfig())
++                self.root_path = self._create_local_root_path()
++                self._setup_local_deployment_environment()
++                asyncio.run(self.deployment.start())
++            else:
++                raise
++        startup_source = [str(self.root_path / ".bashrc")] if (self.root_path / ".bashrc").exists() else []
+         asyncio.run(
+             self.deployment.runtime.create_session(
+-                CreateBashSessionRequest(startup_source=["/root/.bashrc"], startup_timeout=10)
++                CreateBashSessionRequest(startup_source=startup_source, startup_timeout=10)
+             )
+         )
+-        self.set_env_variables({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PIP_PROGRESS_BAR": "off", "PAGER": "cat"})
++        env_vars = {
++            "LANG": "C.UTF-8",
++            "LC_ALL": "C.UTF-8",
++            "PIP_PROGRESS_BAR": "off",
++            "PAGER": "cat",
++        }
++        if isinstance(self.deployment, LocalDeployment):
++            self._setup_local_deployment_environment()
++            env_vars["PATH"] = self._get_local_path_env()
++            env_vars["SWE_AGENT_ENV_FILE"] = str(self.root_path / ".swe-agent-env")
++            env_vars["SWE_AGENT_STATE_FILE"] = str(self.root_path / "state.json")
++            env_vars["SWE_AGENT_ROOT_PATH"] = str(self.root_path)
++            env_vars["ROOT"] = str(self.root_path)
++            env_vars["SWE_AGENT_MODEL_PATCH_FILE"] = str(self.root_path / "model.patch")
++        self.set_env_variables(env_vars)
+         self.logger.info("Environment Initialized")
+ 
+     def interrupt_session(self):
+         self.logger.info("Interrupting session")
+         asyncio.run(self.deployment.runtime.run_in_session(BashInterruptAction()))
+ 
++    def _normalize_path(self, path: str | PurePath | None) -> str:
++        if path is None:
++            return ""
++        path_str = str(path)
++        if isinstance(self.deployment, LocalDeployment) and path_str.startswith("/root"):
++            if path_str == "/root":
++                return str(self.root_path)
++            return str(self.root_path / path_str[len("/root/") :])
++        return path_str
++
++    def _normalize_command(self, command: str) -> str:
++        if isinstance(self.deployment, LocalDeployment):
++            return command.replace("/root", str(self.root_path))
++        return command
++
++    def _create_local_root_path(self) -> Path:
++        if self._local_root_dir is None:
++            self._local_root_dir = Path(tempfile.mkdtemp(prefix="swe-agent-"))
++        return self._local_root_dir
++
++    def _get_local_path_env(self) -> str:
++        local_bin = self.root_path / "bin"
++        return ":".join(
++            filter(
++                None,
++                [
++                    str(local_bin),
++                    str(Path(sys.executable).parent),
++                    os.getenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"),
++                ],
++            )
++        )
++
++    def _setup_local_deployment_environment(self) -> None:
++        local_bin = self.root_path / "bin"
++        local_bin.mkdir(parents=True, exist_ok=True)
++        for name in ["python", "python3"]:
++            symlink_target = local_bin / name
++            if not symlink_target.exists():
++                try:
++                    os.symlink(sys.executable, symlink_target)
++                except FileExistsError:
++                    pass
++        (self.root_path / ".swe-agent-env").write_text("{}")
++        (self.root_path / "state.json").write_text("{}")
++        (self.root_path / "tools").mkdir(exist_ok=True)
++
++    def upload(self, source_path: str, target_path: str):
++        request = UploadRequest(source_path=source_path, target_path=self._normalize_path(target_path))
++        return self.deployment.runtime.upload(request)
++
+     # todo: return exit code?
+     def communicate(
+         self,
+@@ -215,6 +312,7 @@ def communicate(
+         Returns:
+             output: output from container
+         """
++        input = self._normalize_command(input)
+         self.logger.log(logging.TRACE, "Input:\n%s", input)  # type: ignore
+         rex_check = "silent" if check else "ignore"
+         r = asyncio.run(
+@@ -245,13 +343,17 @@ def read_file(self, path: str | PurePath, encoding: str | None = None, errors: s
+             file_contents: Contents of file as string
+         """
+         r = asyncio.run(
+-            self.deployment.runtime.read_file(ReadFileRequest(path=str(path), encoding=encoding, errors=errors))
++            self.deployment.runtime.read_file(
++                ReadFileRequest(path=self._normalize_path(path), encoding=encoding, errors=errors)
++            )
+         )
+         return r.content
+ 
+     def write_file(self, path: str | PurePath, content: str) -> None:
+         """Write content to file in container"""
+-        asyncio.run(self.deployment.runtime.write_file(WriteFileRequest(path=str(path), content=content)))
++        asyncio.run(
++            self.deployment.runtime.write_file(WriteFileRequest(path=self._normalize_path(path), content=content))
++        )
+ 
+     def set_env_variables(self, env_variables: dict[str, str]) -> None:
+         """Set environment variables in the environment."""
+@@ -271,6 +373,10 @@ def execute_command(
+         cwd: str | None = None,
+     ) -> None:
+         """Execute a command in the environment independent of the session (i.e., as a subprocess)"""
++        command = self._normalize_command(command)
++        normalized_cwd = self._normalize_path(cwd) if cwd is not None else None
+         asyncio.run(
+-            self.deployment.runtime.execute(RexCommand(command=command, shell=shell, check=check, env=env, cwd=cwd))
++            self.deployment.runtime.execute(
++                RexCommand(command=command, shell=shell, check=check, env=env, cwd=normalized_cwd)
++            )
+         )
+diff --git a/sweagent/run/common.py b/sweagent/run/common.py
+index 37d7e1edea..f577302f8d 100644
+--- a/sweagent/run/common.py
++++ b/sweagent/run/common.py
+@@ -319,8 +319,15 @@ def get_config(self, args: list[str] | None = None) -> BaseSettings:
+         # >>> Step 4: Bring together remaining arguments and the merged config to initialize the config object
+         # This is done by CliApp.run from pydantic-settings
+ 
++        # Merge file config and CLI options, but filter out top-level keys that are
++        # not part of the target config type. This avoids ValidationError caused by
++        # unrelated default config keys (e.g., `env`) when running a specific
++        # subcommand that doesn't accept them.
++        merged_total = merge_nested_dicts(config_merged, cl_options_dict)
++        allowed_top_level = set(self.arg_type.model_fields.keys()) if hasattr(self.arg_type, "model_fields") else set()
++        filtered_merged = {k: v for k, v in merged_total.items() if k in allowed_top_level}
+         try:
+-            config: BaseSettings = CliApp.run(self.arg_type, remaining_args, **config_merged, cli_exit_on_error=False)  # type: ignore
++            config: BaseSettings = CliApp.run(self.arg_type, remaining_args, **filtered_merged, cli_exit_on_error=False)  # type: ignore
+         except ValidationError as e:
+             rich_print(
+                 Panel.fit(
+diff --git a/sweagent/tools/tools.py b/sweagent/tools/tools.py
+index 13047c56b7..52146094c3 100644
+--- a/sweagent/tools/tools.py
++++ b/sweagent/tools/tools.py
+@@ -9,13 +9,14 @@
+ import json
+ import os
+ import re
++import shlex
+ from functools import cached_property
+ from pathlib import Path
+ from typing import Any
+ 
+ from pydantic import BaseModel, Field
++from swerex.deployment.local import LocalDeployment
+ from swerex.runtime.abstract import Command as RexCommand
+-from swerex.runtime.abstract import UploadRequest
+ from typing_extensions import Self
+ 
+ from sweagent.environment.swe_env import SWEEnv
+@@ -259,15 +260,25 @@ def reset(self, env: SWEEnv) -> None:
+             var: os.getenv(var) for var in self.config.propagate_env_variables
+         }
+         env.set_env_variables(env_variables)
+-        env.write_file("/root/.swe-agent-env", json.dumps(self.config.registry_variables))
+-        env.write_file("/root/state.json", "{}")
++        env_file = (
++            str(env.root_path / ".swe-agent-env")
++            if isinstance(env.deployment, LocalDeployment)
++            else "/root/.swe-agent-env"
++        )
++        state_file = (
++            str(env.root_path / "state.json") if isinstance(env.deployment, LocalDeployment) else "/root/state.json"
++        )
++        env.write_file(env_file, json.dumps(self.config.registry_variables))
++        env.write_file(state_file, "{}")
+         env.communicate(" && ".join(self._reset_commands), check="raise", timeout=self.config.install_timeout)
+ 
+     async def _upload_bundles(self, env: SWEEnv) -> None:
++        target_dir = env.root_path / "tools" if isinstance(env.deployment, LocalDeployment) else Path("/root/tools")
+         await asyncio.gather(
+             *(
+-                env.deployment.runtime.upload(
+-                    UploadRequest(source_path=bundle.path.as_posix(), target_path=f"/root/tools/{bundle.pa

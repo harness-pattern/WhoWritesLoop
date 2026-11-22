@@ -1,0 +1,46 @@
+diff --git a/enterprise/storage/base.py b/enterprise/storage/base.py
+index f462e837e536..306cb94a93df 100644
+--- a/enterprise/storage/base.py
++++ b/enterprise/storage/base.py
+@@ -1,5 +1,13 @@
+ """
+ Unified SQLAlchemy declarative base for all models.
++
++Re-exports the core Base to ensure enterprise and core models share the same
++metadata registry. This allows foreign key relationships between enterprise
++models (e.g., ConversationCallback) and core models (e.g., StoredConversationMetadata).
++
++The core Base now uses SQLAlchemy 2.0 DeclarativeBase for proper type inference
++with Mapped types, while remaining backward compatible with existing Column()
++definitions.
+ """
+ 
+ from openhands.app_server.utils.sql_utils import Base
+diff --git a/openhands/app_server/utils/sql_utils.py b/openhands/app_server/utils/sql_utils.py
+index 7be0c27fae00..5f8e8209e2bb 100644
+--- a/openhands/app_server/utils/sql_utils.py
++++ b/openhands/app_server/utils/sql_utils.py
+@@ -4,9 +4,21 @@
+ 
+ from pydantic import SecretStr, TypeAdapter
+ from sqlalchemy import JSON, DateTime, String, TypeDecorator
+-from sqlalchemy.orm import declarative_base
++from sqlalchemy.orm import DeclarativeBase
++
++
++class Base(DeclarativeBase):
++    """
++    Base class for all SQLAlchemy models.
++
++    Uses SQLAlchemy 2.0 DeclarativeBase for proper type inference with Mapped types.
++    This is backward compatible with existing Column() definitions while enabling
++    gradual migration to mapped_column() with Mapped[T] type annotations.
++    """
++
++    pass
++
+ 
+-Base = declarative_base()
+ T = TypeVar('T', bound=Enum)
+ 
+ 

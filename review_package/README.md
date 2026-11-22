@@ -20,8 +20,9 @@ The paper reports 135,331 retained PRs, 7,205 detail records, and a 120-record m
 | `compute_agreement.py` | Reads a filled form and writes `agreement_report.md` with accuracy, Cohen's κ, error breakdown, and count deviations. |
 | `manifest.json` | Seed, sample size, tier counts, and SHA-256 of every generated file. |
 | `generate.py` | Reproduces the package from the database with seed 20261121. |
+| `fetch_patches.py` | Downloads the 120 `.diff` excerpts into `../data/review_patches/`; run once before `generate.py`. |
 
-**Self-contained mode.** `review.html` embeds all 120 records, each PR's file list with assigned layers, commit subjects, body excerpt, the full codebook, and a browser-side Cohen's κ calculator. A reviewer only needs this one file plus the GitHub links they choose to open. The CSV files exist for spreadsheet workflows and for the formal agreement script.
+**Self-contained mode.** `review.html` embeds all 120 records, each PR's metadata, file list with assigned layers and status, commit subjects, body excerpt, a 7 KB diff excerpt, the rule's evidence string, the full codebook, and a browser-side Cohen's κ calculator. Answers autosave in the browser, so a reviewer can refresh safely; **Export CSV** writes the form. A reviewer only needs this one file plus the GitHub links they choose to open. The CSV files exist for spreadsheet workflows and for the formal agreement script.
 
 ---
 
@@ -43,8 +44,8 @@ Budget about **2–3 minutes per PR**, so 4–6 hours for the 120 records. Split
 
 ### Step 0 — Prepare
 
-1. Open `review.html` in a browser. The codebook and evidence are embedded; `codebook.md` is the same text outside the app.
-2. Do not refresh after starting; answers are in memory only.
+1. Open `review.html` in a browser. Metadata, file list, commits, body, diff excerpt, rule evidence, and the codebook are embedded; `codebook.md` is the same text outside the app.
+2. Answers autosave in `localStorage`; you can refresh, close the tab, and resume. Use **Export CSV** when done.
 3. Enter your reviewer name at export time. Use one form per reviewer.
 4. When all records are complete, click **Agreement** to see browser-side κ before exporting.
 

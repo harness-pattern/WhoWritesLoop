@@ -1,0 +1,639 @@
+diff --git a/openhands/core/config/offload_config.py b/openhands/core/config/offload_config.py
+new file mode 100644
+index 000000000000..acb4bd7b97bd
+--- /dev/null
++++ b/openhands/core/config/offload_config.py
+@@ -0,0 +1,125 @@
++"""Configuration for context offloading.
++
++Context offloading saves large tool outputs to the filesystem and returns
++references with previews, enabling lossless context management while reducing
++token usage.
++"""
++
++from __future__ import annotations
++
++from pydantic import BaseModel, ConfigDict, Field
++
++
++class OffloadConfig(BaseModel):
++    """Configuration for context offloading.
++
++    Context offloading saves large tool outputs to filesystem and returns
++    references with previews, preserving full content while reducing context
++    window usage.
++
++    Attributes:
++        enabled: Whether context offloading is enabled.
++        max_output_chars: Maximum output size (in chars) before offloading.
++            Should be less than max_message_chars to ensure offload happens
++            before truncation.
++        offload_dir: Directory for offloaded files, relative to workspace.
++        preview_head_lines: Number of lines from the start to include in preview.
++        preview_tail_lines: Number of lines from the end to include in preview.
++        preview_max_line_chars: Maximum characters per line in preview.
++        cleanup_on_session_end: Whether to remove offloaded files when session ends.
++        retention_hours: Hours to retain offloaded files if cleanup is disabled.
++        max_total_size_mb: Maximum total size of offloaded files (0 = unlimited).
++        offload_browser_dom: Whether to offload browser DOM objects.
++        offload_browser_axtree: Whether to offload browser accessibility tree.
++        browser_screenshot_thumbnail_width: Width of thumbnail for screenshots.
++    """
++
++    enabled: bool = Field(
++        default=False,
++        description='Whether context offloading is enabled (opt-in).',
++    )
++
++    max_output_chars: int = Field(
++        default=25000,
++        description='Offload outputs exceeding this size (in chars). '
++        'Should be <= max_message_chars (30000) to ensure offload happens before truncation.',
++        ge=1000,
++    )
++
++    offload_dir: str = Field(
++        default='.openhands/context_offload',
++        description='Directory for offloaded files, relative to workspace.',
++    )
++
++    preview_head_lines: int = Field(
++        default=15,
++        description='Number of lines from the start to include in preview.',
++        ge=1,
++    )
++
++    preview_tail_lines: int = Field(
++        default=5,
++        description='Number of lines from the end to include in preview.',
++        ge=0,
++    )
++
++    preview_max_line_chars: int = Field(
++        default=200,
++        description='Maximum characters per line in preview.',
++        ge=50,
++    )
++
++    cleanup_on_session_end: bool = Field(
++        default=True,
++        description='Remove offloaded files when session ends.',
++    )
++
++    retention_hours: int = Field(
++        default=24,
++        description='Hours to retain offloaded files if cleanup is disabled.',
++        ge=1,
++    )
++
++    max_total_size_mb: int = Field(
++        default=500,
++        description='Maximum total size of offloaded files in MB (0 = unlimited).',
++        ge=0,
++    )
++
++    offload_browser_dom: bool = Field(
++        default=True,
++        description='Whether to offload browser DOM objects to files.',
++    )
++
++    offload_browser_axtree: bool = Field(
++        default=True,
++        description='Whether to offload browser accessibility tree to files.',
++    )
++
++    browser_screenshot_thumbnail_width: int = Field(
++        default=400,
++        description='Width of thumbnail for browser screenshots (height auto-scaled).',
++        ge=100,
++    )
++
++    model_config = ConfigDict(extra='forbid')
++
++
++def offload_config_from_toml_section(data: dict) -> dict[str, OffloadConfig]:
++    """Create an OffloadConfig instance from a toml dictionary.
++
++    Args:
++        data: The TOML dictionary representing the [offload] section.
++
++    Returns:
++        dict[str, OffloadConfig]: A mapping where 'offload' is the key.
++    """
++    try:
++        config = OffloadConfig(**data)
++    except Exception as e:
++        from openhands.core.logger import openhands_logger as logger
++
++        logger.warning(f'Invalid offload configuration: {e}. Using defaults.')
++        config = OffloadConfig()
++
++    return {'offload': config}
+diff --git a/openhands/core/config/openhands_config.py b/openhands/core/config/openhands_config.py
+index 82834aac3505..d1f6faf34c6e 100644
+--- a/openhands/core/config/openhands_config.py
++++ b/openhands/core/config/openhands_config.py
+@@ -22,6 +22,7 @@
+ from openhands.core.config.kubernetes_config import KubernetesConfig
+ from openhands.core.config.llm_config import LLMConfig
+ from openhands.core.config.mcp_config import MCPConfig
++from openhands.core.config.offload_config import OffloadConfig
+ from openhands.core.config.sandbox_config import SandboxConfig
+ from openhands.core.config.security_config import SecurityConfig
+ 
+@@ -125,6 +126,7 @@ class OpenHandsConfig(BaseModel):
+     mcp_host: str = Field(default=f'localhost:{os.getenv("port", 3000)}')
+     mcp: MCPConfig = Field(default_factory=MCPConfig)
+     kubernetes: KubernetesConfig = Field(default_factory=KubernetesConfig)
++    offload: OffloadConfig = Field(default_factory=OffloadConfig)
+     git_user_name: str = Field(
+         default='openhands', description='Git user name for commits made by the agent'
+     )
+diff --git a/openhands/core/config/utils.py b/openhands/core/config/utils.py
+index 3953f2a5133b..a1fc62c90daf 100644
+--- a/openhands/core/config/utils.py
++++ b/openhands/core/config/utils.py
+@@ -32,6 +32,9 @@
+ from openhands.core.config.llm_config import LLMConfig
+ from openhands.core.config.mcp_config import MCPConfig
+ from openhands.core.config.model_routing_config import ModelRoutingConfig
++from openhands.core.config.offload_config import (
++    offload_config_from_toml_section,
++)
+ from openhands.core.config.openhands_config import OpenHandsConfig
+ from openhands.core.config.sandbox_config import SandboxConfig
+ from openhands.core.config.security_config import SecurityConfig
+@@ -307,6 +310,20 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
+                 f'Cannot parse [kubernetes] config from toml, values have not been applied.\nError: {e}'
+             )
+ 
++    # Process offload section if present
++    if 'offload' in toml_config:
++        try:
++            offload_mapping = offload_config_from_toml_section(toml_config['offload'])
++            if 'offload' in offload_mapping:
++                cfg.offload = offload_mapping['offload']
++                logger.openhands_logger.debug(
++                    f'Context offloading configuration loaded from config toml (enabled={cfg.offload.enabled})'
++                )
++        except (TypeError, KeyError, ValidationError) as e:
++            logger.openhands_logger.warning(
++                f'Cannot parse [offload] config from toml, values have not been applied.\nError: {e}'
++            )
++
+     # Process condenser section if present
+     if 'condenser' in toml_config:
+         try:
+@@ -367,6 +384,7 @@ def load_from_toml(cfg: OpenHandsConfig, toml_file: str = 'config.toml') -> None
+         'mcp',
+         'kubernetes',
+         'model_routing',
++        'offload',
+     }
+     for key in toml_config:
+         if key.lower() not in known_sections:
+diff --git a/openhands/events/observation/browse.py b/openhands/events/observation/browse.py
+index 9a565767ace2..d506fe240b5a 100644
+--- a/openhands/events/observation/browse.py
++++ b/openhands/events/observation/browse.py
+@@ -1,9 +1,15 @@
++from __future__ import annotations
++
+ from dataclasses import dataclass, field
+-from typing import Any
++from typing import TYPE_CHECKING, Any
+ 
++from openhands.core.logger import openhands_logger as logger
+ from openhands.core.schema import ObservationType
+ from openhands.events.observation.observation import Observation
+ 
++if TYPE_CHECKING:
++    from openhands.memory.offloader import ContextOffloader
++
+ 
+ @dataclass
+ class BrowserOutputObservation(Observation):
+@@ -34,10 +40,91 @@ class BrowserOutputObservation(Observation):
+     focused_element_bid: str = ''
+     filter_visible_only: bool = False
+ 
++    # Context offloading fields
++    dom_offloaded_path: str | None = field(default=None)
++    axtree_offloaded_path: str | None = field(default=None)
++    screenshot_thumbnail: str = field(default='', repr=False)  # thumbnail data-URL
++
+     @property
+     def message(self) -> str:
+         return 'Visited ' + self.url
+ 
++    def offload_large_content(self, offloader: ContextOffloader) -> None:
++        """Offload large browser content to filesystem.
++
++        This method should be called after the observation is created
++        but before it's added to the event stream. It offloads:
++        - DOM object to JSON file
++        - AXTree object to JSON file
++        - Screenshot to PNG file (keeps thumbnail for LLM vision)
++
++        IMPORTANT: Even if offloading fails, large objects are cleared from
++        memory to prevent memory issues. A warning is logged in this case.
++
++        Args:
++            offloader: The context offloader instance.
++        """
++        if not offloader.enabled:
++            return
++
++        # Offload DOM object
++        if offloader.config.offload_browser_dom and self.dom_object:
++            # Estimate size to determine if we should attempt offload and clear
++            # Use repr length as a quick heuristic (faster than json.dumps for size check)
++            estimated_size = len(repr(self.dom_object))
++            should_clear = estimated_size > offloader.config.max_output_chars
++
++            if should_clear:
++                try:
++                    result = offloader.offload_json(
++                        data=self.dom_object,
++                        source_type='browser_dom',
++                        type_name='DOM Object',
++                    )
++                    self.dom_offloaded_path = result.file_path
++                    logger.debug(f'Offloaded DOM to {result.file_path}')
++                except Exception as e:
++                    logger.warning(f'Failed to offload DOM: {e}')
++                finally:
++                    # Always clear DOM object when it's large, even if offload failed
++                    self.dom_object = {}
++
++        # Offload AXTree object
++        if offloader.config.offload_browser_axtree and self.axtree_object:
++            # Estimate size to determine if we should attempt offload and clear
++            estimated_size = len(repr(self.axtree_object))
++            should_clear = estimated_size > offloader.config.max_output_chars
++
++            if should_clear:
++                try:
++                    result = offloader.offload_json(
++                        data=self.axtree_object,
++                        source_type='browser_axtree',
++                        type_name='Accessibility Tree',
++                    )
++                    self.axtree_offloaded_path = result.file_path
++                    logger.debug(f'Offloaded AXTree to {result.file_path}')
++                except Exception as e:
++                    logger.warning(f'Failed to offload AXTree: {e}')
++                finally:
++                    # Always clear AXTree object when it's large, even if offload failed
++                    self.axtree_object = {}
++
++        # Offload screenshot (keep thumbnail for LLM vision)
++        if self.screenshot and offloader.should_offload_bytes(len(self.screenshot)):
++            try:
++                file_path, thumbnail = offloader.offload_image(
++                    base64_data=self.screenshot,
++                    source_type='screenshot',
++                )
++                if file_path:
++                    self.screenshot_path = file_path
++                    self.screenshot_thumbnail = thumbnail
++                    self.screenshot = ''  # Clear full base64
++                    logger.debug(f'Offloaded screenshot to {file_path}')
++            except Exception as e:
++                logger.warning(f'Failed to offload screenshot: {e}')
++
+     def __str__(self) -> str:
+         ret = (
+             '**BrowserOutputObservation**\n'
+@@ -51,6 +138,10 @@ def __str__(self) -> str:
+         )
+         if self.screenshot_path:
+             ret += f'Screenshot saved to: {self.screenshot_path}\n'
++        if self.dom_offloaded_path:
++            ret += f'DOM offloaded to: {self.dom_offloaded_path}\n'
++        if self.axtree_offloaded_path:
++            ret += f'AXTree offloaded to: {self.axtree_offloaded_path}\n'
+         ret += '--- Agent Observation ---\n'
+         ret += self.content
+         return ret
+diff --git a/openhands/events/observation/commands.py b/openhands/events/observation/commands.py
+index da49ef641ac8..e1747af76a94 100644
+--- a/openhands/events/observation/commands.py
++++ b/openhands/events/observation/commands.py
+@@ -1,7 +1,9 @@
++from __future__ import annotations
++
+ import json
+ import re
+ from dataclasses import dataclass, field
+-from typing import Any, Self
++from typing import TYPE_CHECKING, Any, Self
+ 
+ from pydantic import BaseModel
+ 
+@@ -9,6 +11,9 @@
+ from openhands.core.schema import ObservationType
+ from openhands.events.observation.observation import Observation
+ 
++if TYPE_CHECKING:
++    from openhands.memory.offloader import ContextOffloader
++
+ CMD_OUTPUT_PS1_BEGIN = '\n###PS1JSON###\n'
+ CMD_OUTPUT_PS1_END = '\n###PS1END###'
+ CMD_OUTPUT_METADATA_PS1_REGEX = re.compile(
+@@ -103,6 +108,9 @@ class CmdOutputObservation(Observation):
+     metadata: CmdOutputMetadata = field(default_factory=CmdOutputMetadata)
+     # Whether the command output should be hidden from the user
+     hidden: bool = False
++    # Context offloading fields
++    offloaded_path: str | None = field(default=None)
++    original_size: int | None = field(default=None)
+ 
+     def __init__(
+         self,
+@@ -111,13 +119,17 @@ def __init__(
+         observation: str = ObservationType.RUN,
+         metadata: dict[str, Any] | CmdOutputMetadata | None = None,
+         hidden: bool = False,
++        offloader: ContextOffloader | None = None,
+         **kwargs: Any,
+     ) -> None:
+-        # Truncate content before passing it to parent
+-        # Hidden commands don't go through LLM/event stream, so no need to truncate
+-        truncate = not hidden
+-        if truncate:
+-            content = self._maybe_truncate(content)
++        # Initialize offload fields
++        self.offloaded_path = kwargs.pop('offloaded_path', None)
++        self.original_size = kwargs.pop('original_size', None)
++
++        # Process content: try offload first, then truncate as fallback
++        # Hidden commands don't go through LLM/event stream, so no need to process
++        if not hidden:
++            content = self._process_content(content, offloader)
+ 
+         super().__init__(content)
+ 
+@@ -135,6 +147,37 @@ def __init__(
+         if 'command_id' in kwargs:
+             self.metadata.pid = kwargs['command_id']
+ 
++    def _process_content(
++        self,
++        content: str,
++        offloader: ContextOffloader | None,
++    ) -> str:
++        """Process content: try offload first (lossless), then truncate (lossy).
++
++        Args:
++            content: The raw content to process.
++            offloader: Optional context offloader for saving large outputs.
++
++        Returns:
++            Processed content (either preview message or truncated content).
++        """
++        # Try offloading first (lossless - preserves full content in file)
++        if offloader is not None and offloader.should_offload(content):
++            try:
++                result = offloader.offload_text(
++                    content=content,
++                    source_type='cmd',
++                )
++                self.offloaded_path = result.file_path
++                self.original_size = result.original_size
++                return result.preview_message
++            except Exception as e:
++                # Offload failed, fall back to truncation
++                logger.warning(f'Offload failed, falling back to truncation: {e}')
++
++        # Fallback: truncate (lossy - loses middle content)
++        return self._maybe_truncate(content)
++
+     @staticmethod
+     def _maybe_truncate(content: str, max_size: int = MAX_CMD_OUTPUT_SIZE) -> str:
+         """Truncate the content if it's too large.
+@@ -211,6 +254,30 @@ class IPythonRunCellObservation(Observation):
+     code: str
+     observation: str = ObservationType.RUN_IPYTHON
+     image_urls: list[str] | None = None
++    # Context offloading fields
++    offloaded_path: str | None = field(default=None)
++    original_size: int | None = field(default=None)
++
++    def offload_content(self, offloader: ContextOffloader) -> None:
++        """Offload large content to filesystem if needed.
++
++        Args:
++            offloader: The context offloader instance.
++        """
++        if not offloader.enabled:
++            return
++
++        if offloader.should_offload(self.content):
++            try:
++                result = offloader.offload_text(
++                    content=self.content,
++                    source_type='ipython',
++                )
++                self.offloaded_path = result.file_path
++                self.original_size = result.original_size
++                self.content = result.preview_message
++            except Exception as e:
++                logger.warning(f'IPython offload failed: {e}')
+ 
+     @property
+     def error(self) -> bool:
+@@ -228,4 +295,6 @@ def __str__(self) -> str:
+         result = f'**IPythonRunCellObservation**\n{self.content}'
+         if self.image_urls:
+             result += f'\nImages: {len(self.image_urls)}'
++        if self.offloaded_path:
++            result += f'\nOffloaded to: {self.offloaded_path}'
+         return result
+diff --git a/openhands/events/serialization/event.py b/openhands/events/serialization/event.py
+index 1b144b9fd744..52813d69aa5c 100644
+--- a/openhands/events/serialization/event.py
++++ b/openhands/events/serialization/event.py
+@@ -41,6 +41,13 @@
+     'last_browser_action_error',
+     'focused_element_bid',
+     'extra_element_properties',
++    # Note: The following offload-related fields are intentionally NOT deleted
++    # to preserve references for replay/debugging:
++    # - offloaded_path (CmdOutputObservation)
++    # - original_size (CmdOutputObservation)
++    # - dom_offloaded_path (BrowserOutputObservation)
++    # - axtree_offloaded_path (BrowserOutputObservation)
++    # - screenshot_thumbnail (BrowserOutputObservation)
+ }
+ 
+ DELETE_FROM_TRAJECTORY_EXTRAS_AND_SCREENSHOTS = DELETE_FROM_TRAJECTORY_EXTRAS | {
+@@ -126,6 +133,20 @@ def event_to_dict(event: 'Event') -> dict:
+     # Remove task_completed from serialization when it's None (backward compatibility)
+     if 'task_completed' in props and props['task_completed'] is None:
+         props.pop('task_completed')
++
++    # Remove offload-related fields when None (backward compatibility)
++    # These fields are only populated when content offloading is enabled
++    offload_fields = [
++        'offloaded_path',
++        'original_size',
++        'dom_offloaded_path',
++        'axtree_offloaded_path',
++        'screenshot_thumbnail',
++        'screenshot_path',
++    ]
++    for field in offload_fields:
++        if field in props and (props[field] is None or props[field] == ''):
++            props.pop(field)
+     if 'action' in d:
+         # Handle security_risk for actions - include it in args
+         if 'security_risk' in props:
+diff --git a/openhands/memory/offloader.py b/openhands/memory/offloader.py
+new file mode 100644
+index 000000000000..0ee9c60eaf2b
+--- /dev/null
++++ b/openhands/memory/offloader.py
+@@ -0,0 +1,747 @@
++"""Context offloading for large tool outputs.
++
++This module provides the ContextOffloader class that saves large tool outputs
++to the filesystem and returns references with previews, enabling lossless
++context management while reducing token usage.
++
++Example:
++    >>> from openhands.memory.offloader import ContextOffloader
++    >>> from openhands.core.config.offload_config import OffloadConfig
++    >>>
++    >>> offloader = ContextOffloader(
++    ...     config=OffloadConfig(enabled=True),
++    ...     workspace_dir="/workspace",
++    ...     session_id="abc123"
++    ... )
++    >>> if offloader.should_offload(large_output):
++    ...     result = offloader.offload_text(large_output, "cmd")
++    ...     print(result.preview_message)
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++from dataclasses import dataclass
++from datetime import datetime
++from pathlib import Path
++from typing import TYPE_CHECKING
++
++from openhands.core.logger import openhands_logger as logger
++
++# Allowed source types for offloading (prevents path traversal via source_type)
++ALLOWED_SOURCE_TYPES = frozenset(
++    {
++        'cmd',
++        'ipython',
++        'browser_dom',
++        'browser_axtree',
++        'browser_html',
++        'screenshot',
++        'mcp',
++        'file',
++    }
++)
++
++# Regex for valid session_id (alphanumeric, hyphens, underscores only)
++SESSION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
++
++if TYPE_CHECKING:
++    from openhands.core.config.offload_config import OffloadConfig
++
++
++@dataclass
++class OffloadResult:
++    """Result of an offload operation.
++
++    Attributes:
++        file_path: Path to the offloaded file.
++        original_size: Original size of the content in bytes (UTF-8 encoded).
++        preview_message: Message containing preview and retrieval instructions.
++        offload_type: Type of offloaded content (e.g., "cmd", "browser_dom").
++    """
++
++    file_path: str
++    original_size: int
++    preview_message: str
++    offload_type: str
++
++
++class ContextOffloader:
++    """Offloads large content to filesystem, returns references with previews.
++
++    This class is responsible for:
++    1. Detecting when content exceeds the configured threshold
++    2. Saving full content to the filesystem
++    3. Generating preview messages with head/tail content
++    4. Tracking offloaded files for cleanup
++
++    Key design principles:
++    - Offload happens BEFORE truncation to preserve full content
++    - Uses chars (not tokens) to align with existing max_message_chars
++    - Provides actionable previews with head + tail
++    - Supports cleanup on session end
++    """
++
++    OFFLOAD_MESSAGE_TEMPLATE = """[Output offloaded to file - size: {size:,} chars]
++
++📁 Full content saved to: {file_path}
++
++Preview (first {head_lines} lines):
++{head_preview}
++
++... [{omitted_lines:,} lines omitted] ...
++
++(last {tail_lines} lines):
++{tail_preview}
++
++💡 To access full content:
++  • View: cat {file_path}
++  • Search: grep "pattern" {file_path}
++  • Head: head -n 100 {file_path}
++  • Tail: tail -n 100 {file_path}
++"""
++
++    OFFLOAD_MESSAGE_TEMPLATE_SHORT = """[Output offloaded - {size:,} chars]
++📁 Saved to: {file_path}
++
++Preview:
++{preview}
++
++💡 Use `cat {file_path}` to view full content.
++"""
++
++    OFFLOAD_JSON_TEMPLATE = """[{type_name} offloaded - {size:,} bytes]
++📁 Saved to: {file_path}
++
++Structure preview:
++{structure_preview}
++
++💡 View: cat {file_path} | jq '.'
++💡 Query: cat {file_path} | jq '.key'
++"""
++
++    def __init__(
++        self,
++        config: OffloadConfig,
++        workspace_dir: str,
++        session_id: str,
++    ) -> None:
++        """Initialize the context offloader.
++
++        Args:
++            config: Offload configuration.
++            workspace_dir: Base workspace directory path.
++            session_id: Unique session identifier for organizing files.
++
++        Raises:
++            ValueError: If session_id contains invalid characters (path traversal prevention).
++        """
++        self.config = config
++        self._

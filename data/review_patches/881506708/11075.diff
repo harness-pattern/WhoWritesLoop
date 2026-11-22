@@ -1,0 +1,363 @@
+diff --git a/packages/cloud/src/CloudAPI.ts b/packages/cloud/src/CloudAPI.ts
+index 239dc9b5648..76f2ec784bb 100644
+--- a/packages/cloud/src/CloudAPI.ts
++++ b/packages/cloud/src/CloudAPI.ts
+@@ -144,4 +144,45 @@ export class CloudAPI {
+ 			},
+ 		})
+ 	}
++
++	async webSearch(
++		query: string,
++		options?: { allowed_domains?: string[]; blocked_domains?: string[] },
++	): Promise<{ results: Array<{ title: string; url: string }> }> {
++		const requestBody: {
++			query: string
++			allowed_domains?: string[]
++			blocked_domains?: string[]
++		} = {
++			query,
++		}
++
++		if (options?.allowed_domains && options.allowed_domains.length > 0) {
++			requestBody.allowed_domains = options.allowed_domains
++		}
++		if (options?.blocked_domains && options.blocked_domains.length > 0) {
++			requestBody.blocked_domains = options.blocked_domains
++		}
++
++		return this.request("/api/v1/search/websearch", {
++			method: "POST",
++			body: JSON.stringify(requestBody),
++			timeout: 15000,
++			parseResponse: (data) => {
++				const result = z
++					.object({
++						data: z.object({
++							results: z.array(
++								z.object({
++									title: z.string(),
++									url: z.string(),
++								}),
++							),
++						}),
++					})
++					.parse(data)
++				return result.data
++			},
++		})
++	}
+ }
+diff --git a/packages/types/src/tool.ts b/packages/types/src/tool.ts
+index f90ef42ede4..4e3da8ef177 100644
+--- a/packages/types/src/tool.ts
++++ b/packages/types/src/tool.ts
+@@ -38,6 +38,7 @@ export const toolNames = [
+ 	"update_todo_list",
+ 	"run_slash_command",
+ 	"generate_image",
++	"web_search",
+ 	"custom_tool",
+ ] as const
+ 
+diff --git a/packages/types/src/vscode-extension-host.ts b/packages/types/src/vscode-extension-host.ts
+index d8c421f4b8d..c79517d2d2a 100644
+--- a/packages/types/src/vscode-extension-host.ts
++++ b/packages/types/src/vscode-extension-host.ts
+@@ -801,6 +801,7 @@ export interface ClineSayTool {
+ 		| "imageGenerated"
+ 		| "runSlashCommand"
+ 		| "updateTodoList"
++		| "webSearch"
+ 	path?: string
+ 	// For readCommandOutput
+ 	readStart?: number
+@@ -847,6 +848,8 @@ export interface ClineSayTool {
+ 	args?: string
+ 	source?: string
+ 	description?: string
++	// Properties indicating whether the operation is in the workspace
++	operationIsLocatedInWorkspace?: boolean
+ }
+ 
+ // Must keep in sync with system prompt.
+diff --git a/src/core/assistant-message/presentAssistantMessage.ts b/src/core/assistant-message/presentAssistantMessage.ts
+index f905600b9d0..4fa8954a96d 100644
+--- a/src/core/assistant-message/presentAssistantMessage.ts
++++ b/src/core/assistant-message/presentAssistantMessage.ts
+@@ -36,6 +36,7 @@ import { updateTodoListTool } from "../tools/UpdateTodoListTool"
+ import { runSlashCommandTool } from "../tools/RunSlashCommandTool"
+ import { generateImageTool } from "../tools/GenerateImageTool"
+ import { applyDiffTool as applyDiffToolClass } from "../tools/ApplyDiffTool"
++import { webSearchTool } from "../tools/WebSearchTool"
+ import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
+ import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
+ 
+@@ -396,6 +397,8 @@ export async function presentAssistantMessage(cline: Task) {
+ 						return `[${block.name} for '${block.params.command}'${block.params.args ? ` with args: ${block.params.args}` : ""}]`
+ 					case "generate_image":
+ 						return `[${block.name} for '${block.params.path}']`
++					case "web_search":
++						return `[${block.name} for '${block.params.query}']`
+ 					default:
+ 						return `[${block.name}]`
+ 				}
+@@ -878,6 +881,13 @@ export async function presentAssistantMessage(cline: Task) {
+ 						pushToolResult,
+ 					})
+ 					break
++				case "web_search":
++					await webSearchTool.handle(cline, block as ToolUse<"web_search">, {
++						askApproval,
++						handleError,
++						pushToolResult,
++					})
++					break
+ 				default: {
+ 					// Handle unknown/invalid tool names OR custom tools
+ 					// This is critical for native tool calling where every tool_use MUST have a tool_result
+diff --git a/src/core/prompts/tools/native-tools/index.ts b/src/core/prompts/tools/native-tools/index.ts
+index b6af18fa154..0a842288387 100644
+--- a/src/core/prompts/tools/native-tools/index.ts
++++ b/src/core/prompts/tools/native-tools/index.ts
+@@ -21,6 +21,7 @@ import searchFiles from "./search_files"
+ import switchMode from "./switch_mode"
+ import updateTodoList from "./update_todo_list"
+ import writeToFile from "./write_to_file"
++import webSearch from "./web_search"
+ 
+ export { getMcpServerTools } from "./mcp_server"
+ export { convertOpenAIToolToAnthropic, convertOpenAIToolsToAnthropic } from "./converters"
+@@ -75,6 +76,7 @@ export function getNativeTools(options: NativeToolsOptions = {}): OpenAI.Chat.Ch
+ 		searchFiles,
+ 		switchMode,
+ 		updateTodoList,
++		webSearch,
+ 		writeToFile,
+ 	] satisfies OpenAI.Chat.ChatCompletionTool[]
+ }
+diff --git a/src/core/prompts/tools/native-tools/web_search.ts b/src/core/prompts/tools/native-tools/web_search.ts
+new file mode 100644
+index 00000000000..e3eb2f2bb26
+--- /dev/null
++++ b/src/core/prompts/tools/native-tools/web_search.ts
+@@ -0,0 +1,51 @@
++import type OpenAI from "openai"
++
++const WEB_SEARCH_DESCRIPTION = `Performs a web search and returns relevant results with titles and URLs.
++
++Use this tool when you need to search the web for information. The search returns a list of results with titles and URLs that can help you find up-to-date information from the internet.
++
++Important notes:
++- If an MCP-provided web search tool is available, prefer using that tool instead, as it may have fewer restrictions
++- You can optionally filter results by allowed or blocked domains
++- You may provide either allowed_domains OR blocked_domains, but NOT both
++- This tool is read-only and does not modify any files`
++
++const QUERY_PARAMETER_DESCRIPTION = `The search query to use. Must be at least 2 characters.`
++
++const ALLOWED_DOMAINS_PARAMETER_DESCRIPTION = `Optional array of domains to restrict results to. Only results from these domains will be returned. Cannot be used with blocked_domains.`
++
++const BLOCKED_DOMAINS_PARAMETER_DESCRIPTION = `Optional array of domains to exclude from results. Results from these domains will be filtered out. Cannot be used with allowed_domains.`
++
++export default {
++	type: "function",
++	function: {
++		name: "web_search",
++		description: WEB_SEARCH_DESCRIPTION,
++		strict: false,
++		parameters: {
++			type: "object",
++			properties: {
++				query: {
++					type: "string",
++					description: QUERY_PARAMETER_DESCRIPTION,
++				},
++				allowed_domains: {
++					type: ["array", "null"],
++					description: ALLOWED_DOMAINS_PARAMETER_DESCRIPTION,
++					items: {
++						type: "string",
++					},
++				},
++				blocked_domains: {
++					type: ["array", "null"],
++					description: BLOCKED_DOMAINS_PARAMETER_DESCRIPTION,
++					items: {
++						type: "string",
++					},
++				},
++			},
++			required: ["query"],
++			additionalProperties: false,
++		},
++	},
++} satisfies OpenAI.Chat.ChatCompletionTool
+diff --git a/src/core/tools/WebSearchTool.ts b/src/core/tools/WebSearchTool.ts
+new file mode 100644
+index 00000000000..dd7c2a4c1f9
+--- /dev/null
++++ b/src/core/tools/WebSearchTool.ts
+@@ -0,0 +1,125 @@
++import { type ClineSayTool } from "@roo-code/types"
++
++import { Task } from "../task/Task"
++import { formatResponse } from "../prompts/responses"
++import type { ToolUse } from "../../shared/tools"
++
++import { BaseTool, ToolCallbacks } from "./BaseTool"
++
++interface WebSearchParams {
++	query: string
++	allowed_domains?: string[]
++	blocked_domains?: string[]
++}
++
++export class WebSearchTool extends BaseTool<"web_search"> {
++	readonly name = "web_search" as const
++
++	async execute(params: WebSearchParams, task: Task, callbacks: ToolCallbacks): Promise<void> {
++		const { handleError, pushToolResult, askApproval } = callbacks
++		const { query, allowed_domains, blocked_domains } = params
++
++		try {
++			// Validate required parameters
++			if (!query || query.trim().length < 2) {
++				task.consecutiveMistakeCount++
++				task.recordToolError("web_search")
++				task.didToolFailInCurrentTurn = true
++				pushToolResult(await task.sayAndCreateMissingParamError("web_search", "query"))
++				return
++			}
++
++			// Validate mutual exclusivity of domain filters
++			if (allowed_domains && allowed_domains.length > 0 && blocked_domains && blocked_domains.length > 0) {
++				task.consecutiveMistakeCount++
++				task.recordToolError("web_search")
++				task.didToolFailInCurrentTurn = true
++				pushToolResult(formatResponse.toolError("Cannot specify both allowed_domains and blocked_domains"))
++				return
++			}
++
++			task.consecutiveMistakeCount = 0
++
++			// Create message for approval
++			const completeMessage = JSON.stringify({
++				tool: "webSearch",
++				path: query,
++				content: `Searching for: ${query}`,
++				operationIsLocatedInWorkspace: false,
++			} satisfies ClineSayTool)
++
++			const didApprove = await askApproval("tool", completeMessage)
++
++			if (!didApprove) {
++				return
++			}
++
++			// Get CloudService and perform search
++			const { CloudService } = await import("@roo-code/cloud")
++
++			if (!CloudService.hasInstance()) {
++				task.consecutiveMistakeCount++
++				task.recordToolError("web_search")
++				task.didToolFailInCurrentTurn = true
++				pushToolResult(formatResponse.toolError("Cloud service not available"))
++				return
++			}
++
++			const cloudAPI = CloudService.instance.cloudAPI
++			if (!cloudAPI) {
++				task.consecutiveMistakeCount++
++				task.recordToolError("web_search")
++				task.didToolFailInCurrentTurn = true
++				pushToolResult(formatResponse.toolError("Cloud API not available"))
++				return
++			}
++
++			// Execute the actual search
++			const options: { allowed_domains?: string[]; blocked_domains?: string[] } = {}
++			if (allowed_domains && allowed_domains.length > 0) {
++				options.allowed_domains = allowed_domains
++			}
++			if (blocked_domains && blocked_domains.length > 0) {
++				options.blocked_domains = blocked_domains
++			}
++
++			const searchResult = await cloudAPI.webSearch(query, options)
++
++			// Format results for display
++			const results = searchResult.results || []
++			const resultCount = results.length
++
++			let resultText = `Search completed (${resultCount} results found)`
++			if (results.length > 0) {
++				resultText += ":\n\n"
++				results.forEach((result: { title: string; url: string }, index: number) => {
++					resultText += `${index + 1}. ${result.title}\n   ${result.url}\n\n`
++				})
++			}
++
++			pushToolResult(formatResponse.toolResult(resultText))
++		} catch (error) {
++			await handleError(
++				"web search",
++				error instanceof Error ? error : new Error(`Error performing web search: ${String(error)}`),
++			)
++		} finally {
++			this.resetPartialState()
++		}
++	}
++
++	override async handlePartial(task: Task, block: ToolUse<"web_search">): Promise<void> {
++		const query: string | undefined = block.params.query
++		const sharedMessageProps: ClineSayTool = {
++			tool: "webSearch",
++			path: query ?? "",
++			content: `Searching for: ${query ?? ""}`,
++			operationIsLocatedInWorkspace: false,
++		}
++
++		const partialMessage = JSON.stringify(sharedMessageProps)
++		await task.ask("tool", partialMessage, block.partial).catch(() => {})
++	}
++}
++
++export const webSearchTool = new WebSearchTool()
+diff --git a/src/shared/tools.ts b/src/shared/tools.ts
+index dc1615c0654..6c8b5384f24 100644
+--- a/src/shared/tools.ts
++++ b/src/shared/tools.ts
+@@ -76,6 +76,8 @@ export const toolParamNames = [
+ 	"search", // read_command_output parameter for grep-like search
+ 	"offset", // read_command_output parameter for pagination
+ 	"limit", // read_command_output parameter for max bytes to return
++	"allowed_domains", // web_search parameter for domain filtering
++	"blocked_domains", // web_search parameter for domain filtering
+ ] as const
+ 
+ export type ToolParamName = (typeof toolParamNames)[number]
+@@ -111,6 +113,7 @@ export type NativeToolArgs = {
+ 	update_todo_list: { todos: string }
+ 	use_mcp_tool: { server_name: string; tool_name: string; arguments?: Record<string, unknown> }
+ 	write_to_file: { path: string; content: string }
++	web_search: { query: string; allowed_domains?: string[]; blocked_domains?: string[] }
+ 	// Add more tools as they are migrated to native protocol
+ }
+ 
+@@ -268,13 +271,14 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
+ 	update_todo_list: "update todo list",
+ 	run_slash_command: "run slash command",
+ 	generate_image: "generate images",
++	web_search: "search the web",
+ 	custom_tool: "use custom tools",
+ } as const
+ 
+ // Define available tool groups.
+ export const TOOL_GROUPS: Record<ToolGroup, ToolGroupConfig> = {
+ 	read: {
+-		tools: ["read_file", "fetch_instructions", "search_files", "list_files", "codebase_search"],
++		tools: ["read_file", "fetch_instructions", "search_files", "list_files", "codebase_search", "web_search"],
+ 	},
+ 	edit: {
+ 		tools: ["apply_diff", "write_to_file", "generate_image"],

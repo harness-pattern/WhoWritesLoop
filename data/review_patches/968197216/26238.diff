@@ -1,0 +1,61 @@
+diff --git a/packages/core/src/prompts/promptProvider.test.ts b/packages/core/src/prompts/promptProvider.test.ts
+index e01e8bcba11..6fcfd685fde 100644
+--- a/packages/core/src/prompts/promptProvider.test.ts
++++ b/packages/core/src/prompts/promptProvider.test.ts
+@@ -358,7 +358,7 @@ describe('PromptProvider', () => {
+       const provider = new PromptProvider();
+       const prompt = provider.getCoreSystemPrompt(mockConfig);
+ 
+-      expect(prompt).toContain('[Active Topic: Active Chapter]');
++      expect(prompt).toContain('<active_topic>\nActive Chapter\n</active_topic>');
+     });
+ 
+     it('should NOT include active topic context when narration is disabled', () => {
+@@ -369,7 +369,7 @@ describe('PromptProvider', () => {
+       const provider = new PromptProvider();
+       const prompt = provider.getCoreSystemPrompt(mockConfig);
+ 
+-      expect(prompt).not.toContain('[Active Topic: Active Chapter]');
++      expect(prompt).not.toContain('<active_topic>\nActive Chapter\n</active_topic>');
+     });
+ 
+     it('should filter out update_topic tool when narration is disabled', () => {
+diff --git a/packages/core/src/prompts/promptProvider.ts b/packages/core/src/prompts/promptProvider.ts
+index fac9085392b..0d6a32980f0 100644
+--- a/packages/core/src/prompts/promptProvider.ts
++++ b/packages/core/src/prompts/promptProvider.ts
+@@ -280,8 +280,8 @@ export class PromptProvider {
+       if (activeTopic) {
+         const sanitizedTopic = activeTopic
+           .replace(/\n/g, ' ')
+-          .replace(/\]/g, '');
+-        sanitizedPrompt += `\n\n[Active Topic: ${sanitizedTopic}]`;
++          .replace(/[\[\]<>]/g, '');
++        sanitizedPrompt += `\n\n<active_topic>\n${sanitizedTopic}\n</active_topic>`;
+       }
+     }
+ 
+diff --git a/packages/core/src/prompts/snippets.legacy.ts b/packages/core/src/prompts/snippets.legacy.ts
+index f2c8bb2b33e..1bec30db9f7 100644
+--- a/packages/core/src/prompts/snippets.legacy.ts
++++ b/packages/core/src/prompts/snippets.legacy.ts
+@@ -527,6 +527,7 @@ function mandateTopicUpdateModel(): string {
+ ## Topic Updates
+ As you work, the user follows along by reading topic updates that you publish with ${UPDATE_TOPIC_TOOL_NAME}. Keep them informed by doing the following:
+ 
++- **No topic markers in chat:** Never include topic markers, title text, or the active topic marker (e.g. \`[active topic]\` or \`<active_topic>\`) in your chat responses. All topic and progress updates MUST be communicated exclusively via the ${UPDATE_TOPIC_TOOL_NAME} tool.
+ - Usage Exception: NEVER use ${UPDATE_TOPIC_TOOL_NAME} for answering questions, providing explanations, or performing isolated lookup tasks (e.g. reading a single file, running a quick search, or checking a version). It is STRICTLY for orchestrating multi-step codebase modifications or complex investigations involving 3 or more tool calls.
+ - Always call ${UPDATE_TOPIC_TOOL_NAME} in your first turn.
+ - For tasks taking multiple turns, also call ${UPDATE_TOPIC_TOOL_NAME} in your last turn to recap what was done.
+diff --git a/packages/core/src/prompts/snippets.ts b/packages/core/src/prompts/snippets.ts
+index 385e8ffb222..e619a18a414 100644
+--- a/packages/core/src/prompts/snippets.ts
++++ b/packages/core/src/prompts/snippets.ts
+@@ -656,6 +656,7 @@ function mandateTopicUpdateModel(): string {
+ ## Topic Updates
+ As you work, the user follows along by reading topic updates that you publish with ${UPDATE_TOPIC_TOOL_NAME}. Keep them informed by doing the following:
+ 
++- **No topic markers in chat:** Never include topic markers, title text, or the active topic marker (e.g. \`[active topic]\` or \`<active_topic>\`) in your chat responses. All topic and progress updates MUST be communicated exclusively via the ${UPDATE_TOPIC_TOOL_NAME} tool.
+ - Usage Exception: NEVER use ${UPDATE_TOPIC_TOOL_NAME} for answering questions, providing explanations, or performing isolated lookup tasks (e.g. reading a single file, running a quick search, or checking a version). It is STRICTLY for orchestrating multi-step codebase modifications or complex investigations involving 3 or more tool calls.
+ - Always call ${UPDATE_TOPIC_TOOL_NAME} in your first turn.
+ - For tasks taking multiple turns, also call ${UPDATE_TOPIC_TOOL_NAME} in your last turn to recap what was done.

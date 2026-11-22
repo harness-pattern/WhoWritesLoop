@@ -1,0 +1,46 @@
+diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
+index d781e05649b4..48857b3a453d 100644
+--- a/packages/app/src/session/timeline/message-timeline.tsx
++++ b/packages/app/src/session/timeline/message-timeline.tsx
+@@ -480,6 +480,7 @@ function MessageTimelineView(
+   const backgroundHintPresence = createAnimatedPresence(backgroundHintPartID, () => backgroundHintRef() ?? null)
+   return (
+     <VirtualizedTimeline
++      workspaceSession={workspaceSession}
+       bottomSpacer={
+         <Show when={backgroundHintPresence.present()}>
+           <div
+diff --git a/packages/app/src/session/timeline/virtualizer.tsx b/packages/app/src/session/timeline/virtualizer.tsx
+index 5fff7876e260..ba310a6d3139 100644
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -62,6 +62,7 @@ type Input = {
+ type ViewProps = {
+   header: JSX.Element
+   bottomSpacer?: JSX.Element
++  workspaceSession: Accessor<boolean>
+   deferred: (row: TimelineRow.TimelineRow) => boolean
+   renderRow: (row: Accessor<TimelineRow.TimelineRow>, onSizeChange?: () => void) => JSX.Element
+ }
+@@ -400,7 +401,7 @@ export function createTimelineVirtualizer(input: Input) {
+     }
+ 
+     return (
+-      <div class="relative w-full h-full min-w-0">
++      <div class="relative w-full h-full min-w-0" data-workspace-session={props.workspaceSession() ? "" : undefined}>
+         <div
+           class="absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-all duration-200 ease-out"
+           classList={{
+diff --git a/packages/session-ui/src/components/message-part.css b/packages/session-ui/src/components/message-part.css
+index 4d5ea35a3637..da20e98e1bec 100644
+--- a/packages/session-ui/src/components/message-part.css
++++ b/packages/session-ui/src/components/message-part.css
+@@ -1516,3 +1516,8 @@
+ :root[data-color-scheme="light"] body [data-component="user-message"] [data-slot="user-message-text"] {
+   background: var(--v2-background-bg-layer-02);
+ }
++
++:root body [data-workspace-session] [data-component="user-message"] [data-slot="user-message-text"] {
++  background: var(--v2-background-bg-accent);
++  color: var(--v2-text-text-contrast);
++}

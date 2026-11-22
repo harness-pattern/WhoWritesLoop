@@ -1,0 +1,79 @@
+diff --git a/openhands-sdk/openhands/sdk/llm/llm.py b/openhands-sdk/openhands/sdk/llm/llm.py
+index ecb5649e7dc..c4560e8930c 100644
+--- a/openhands-sdk/openhands/sdk/llm/llm.py
++++ b/openhands-sdk/openhands/sdk/llm/llm.py
+@@ -17,6 +17,7 @@
+     Field,
+     PrivateAttr,
+     SecretStr,
++    computed_field,
+     field_serializer,
+     field_validator,
+     model_validator,
+@@ -692,6 +693,14 @@ def telemetry(self) -> Telemetry:
+             )
+         return self._telemetry
+ 
++    @computed_field(
++        return_type=bool,
++        description=(
++            "Whether this LLM uses subscription-based authentication. "
++            "Serialized so that subscription-specific request handling "
++            "survives transport to a remote agent-server."
++        ),
++    )
+     @property
+     def is_subscription(self) -> bool:
+         """Check if this LLM uses subscription-based authentication.
+@@ -705,6 +714,24 @@ def is_subscription(self) -> bool:
+         """
+         return self._is_subscription
+ 
++    @model_validator(mode="wrap")
++    @classmethod
++    def _restore_is_subscription(cls, data, handler):
++        """Restore the subscription flag when validating serialized data.
++
++        ``is_subscription`` is a computed field backed by the private
++        ``_is_subscription`` attribute, so plain validation would drop it.
++        Without this, an LLM created via ``LLM.subscription_login()`` loses
++        its subscription-specific request handling (streaming exemption,
++        Codex system prompt transform, reasoning-item stripping) after a
++        dump/validate round trip - e.g. when shipped to a remote
++        agent-server.
++        """
++        llm = handler(data)
++        if isinstance(data, dict) and data.get("is_subscription"):
++            llm._is_subscription = True
++        return llm
++
+     def restore_metrics(self, metrics: Metrics) -> None:
+         # Only used by ConversationStats to seed metrics
+         self._metrics = metrics
+diff --git a/tests/sdk/llm/test_subscription_mode.py b/tests/sdk/llm/test_subscription_mode.py
+index 2b40419e828..42e3172769e 100644
+--- a/tests/sdk/llm/test_subscription_mode.py
++++ b/tests/sdk/llm/test_subscription_mode.py
+@@ -338,3 +338,22 @@ def test_format_messages_reasoning_item_handling(
+ 
+     serialized = json.dumps(input_items, default=str)
+     assert ("rs_should_be_stripped" in serialized) == reasoning_id_present
++
++
++def test_is_subscription_survives_serialization_round_trip():
++    """is_subscription must survive model_dump -> model_validate.
++
++    A RemoteConversation serializes the LLM and the agent-server rebuilds it;
++    if the flag is lost, all subscription-specific request handling (streaming
++    exemption, system prompt transform, reasoning item stripping) silently
++    stops applying on the server side.
++    """
++    llm = _make_subscription_llm()
++    restored = LLM.model_validate(llm.model_dump(context={"expose_secrets": True}))
++    assert restored.is_subscription is True
++
++    plain = LLM(model="gpt-4o")
++    restored_plain = LLM.model_validate(
++        plain.model_dump(context={"expose_secrets": True})
++    )
++    assert restored_plain.is_subscription is False

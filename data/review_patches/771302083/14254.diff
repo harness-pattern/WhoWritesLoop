@@ -1,0 +1,549 @@
+diff --git a/enterprise/integrations/bitbucket/bitbucket_manager.py b/enterprise/integrations/bitbucket/bitbucket_manager.py
+index c1ffe11b4fb9..479c7ed98b4e 100644
+--- a/enterprise/integrations/bitbucket/bitbucket_manager.py
++++ b/enterprise/integrations/bitbucket/bitbucket_manager.py
+@@ -25,12 +25,12 @@
+ 
+ from openhands.app_server.integrations.provider import ProviderToken, ProviderType
+ from openhands.app_server.secrets.secrets_models import Secrets
+-from openhands.app_server.utils.logger import openhands_logger as logger
+-from openhands.server.types import (
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+ )
++from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+ class BitbucketManager(Manager[BitbucketViewType]):
+diff --git a/enterprise/integrations/bitbucket_data_center/bitbucket_dc_manager.py b/enterprise/integrations/bitbucket_data_center/bitbucket_dc_manager.py
+index a3d6497f638d..964ec97fcaca 100644
+--- a/enterprise/integrations/bitbucket_data_center/bitbucket_dc_manager.py
++++ b/enterprise/integrations/bitbucket_data_center/bitbucket_dc_manager.py
+@@ -26,12 +26,12 @@
+ 
+ from openhands.app_server.integrations.provider import ProviderToken, ProviderType
+ from openhands.app_server.secrets.secrets_models import Secrets
+-from openhands.app_server.utils.logger import openhands_logger as logger
+-from openhands.server.types import (
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+ )
++from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+ class BitbucketDCManager(Manager[BitbucketDCViewType]):
+diff --git a/enterprise/integrations/github/github_manager.py b/enterprise/integrations/github/github_manager.py
+index 3c0f9f13cb35..9990766aabba 100644
+--- a/enterprise/integrations/github/github_manager.py
++++ b/enterprise/integrations/github/github_manager.py
+@@ -34,12 +34,12 @@
+ from openhands.app_server.integrations.provider import ProviderToken, ProviderType
+ from openhands.app_server.integrations.service_types import AuthenticationError
+ from openhands.app_server.secrets.secrets_models import Secrets
+-from openhands.app_server.utils.logger import openhands_logger as logger
+-from openhands.server.types import (
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+ )
++from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+ class GithubManager(Manager[GithubViewType]):
+diff --git a/enterprise/integrations/github/github_service.py b/enterprise/integrations/github/github_service.py
+index 7c58ef673208..336251876e7b 100644
+--- a/enterprise/integrations/github/github_service.py
++++ b/enterprise/integrations/github/github_service.py
+@@ -4,9 +4,9 @@
+ from pydantic import SecretStr
+ from server.auth.token_manager import TokenManager
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.github.github_service import GitHubService
+ from openhands.app_server.integrations.service_types import ProviderType, Repository
++from openhands.app_server.types import AppMode
+ from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+diff --git a/enterprise/integrations/gitlab/gitlab_manager.py b/enterprise/integrations/gitlab/gitlab_manager.py
+index f857ffb31cf2..0e515c8d349c 100644
+--- a/enterprise/integrations/gitlab/gitlab_manager.py
++++ b/enterprise/integrations/gitlab/gitlab_manager.py
+@@ -28,12 +28,12 @@
+ from openhands.app_server.integrations.gitlab.gitlab_service import GitLabServiceImpl
+ from openhands.app_server.integrations.provider import ProviderToken, ProviderType
+ from openhands.app_server.secrets.secrets_models import Secrets
+-from openhands.app_server.utils.logger import openhands_logger as logger
+-from openhands.server.types import (
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+ )
++from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+ class GitlabManager(Manager[GitlabViewType]):
+diff --git a/enterprise/integrations/gitlab/gitlab_service.py b/enterprise/integrations/gitlab/gitlab_service.py
+index 2f9e6c9187a7..d291627d326f 100644
+--- a/enterprise/integrations/gitlab/gitlab_service.py
++++ b/enterprise/integrations/gitlab/gitlab_service.py
+@@ -7,7 +7,6 @@
+ from storage.gitlab_webhook import GitlabWebhook, WebhookStatus
+ from storage.gitlab_webhook_store import GitlabWebhookStore
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.gitlab.gitlab_service import GitLabService
+ from openhands.app_server.integrations.service_types import (
+     ProviderType,
+@@ -15,6 +14,7 @@
+     Repository,
+     RequestMethod,
+ )
++from openhands.app_server.types import AppMode
+ from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+diff --git a/enterprise/integrations/jira/jira_manager.py b/enterprise/integrations/jira/jira_manager.py
+index 7c67fbcf7ed1..8aa5483dda2a 100644
+--- a/enterprise/integrations/jira/jira_manager.py
++++ b/enterprise/integrations/jira/jira_manager.py
+@@ -42,14 +42,14 @@
+ from storage.jira_user import JiraUser
+ from storage.jira_workspace import JiraWorkspace
+ 
+-from openhands.app_server.user_auth.user_auth import UserAuth
+-from openhands.app_server.utils.http_session import httpx_verify_option
+-from openhands.app_server.utils.logger import openhands_logger as logger
+-from openhands.server.types import (
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+ )
++from openhands.app_server.user_auth.user_auth import UserAuth
++from openhands.app_server.utils.http_session import httpx_verify_option
++from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ JIRA_CLOUD_API_URL = 'https://api.atlassian.com/ex/jira'
+ 
+diff --git a/enterprise/integrations/jira_dc/jira_dc_manager.py b/enterprise/integrations/jira_dc/jira_dc_manager.py
+index 1b2e135ac3cf..c9b31cdb351b 100644
+--- a/enterprise/integrations/jira_dc/jira_dc_manager.py
++++ b/enterprise/integrations/jira_dc/jira_dc_manager.py
+@@ -31,15 +31,15 @@
+ 
+ from openhands.app_server.integrations.provider import ProviderHandler
+ from openhands.app_server.integrations.service_types import Repository
+-from openhands.app_server.user_auth.user_auth import UserAuth
+-from openhands.app_server.utils.http_session import httpx_verify_option
+-from openhands.app_server.utils.logger import openhands_logger as logger
+-from openhands.server.shared import server_config
+-from openhands.server.types import (
++from openhands.app_server.shared import server_config
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+ )
++from openhands.app_server.user_auth.user_auth import UserAuth
++from openhands.app_server.utils.http_session import httpx_verify_option
++from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+ class JiraDcManager(Manager[JiraDcViewInterface]):
+diff --git a/enterprise/integrations/slack/slack_manager.py b/enterprise/integrations/slack/slack_manager.py
+index bea2ab3cc4c4..b461e72b453c 100644
+--- a/enterprise/integrations/slack/slack_manager.py
++++ b/enterprise/integrations/slack/slack_manager.py
+@@ -36,14 +36,14 @@
+     ProviderTimeoutError,
+     Repository,
+ )
+-from openhands.app_server.user_auth.user_auth import UserAuth
+-from openhands.app_server.utils.logger import openhands_logger as logger
+-from openhands.server.shared import server_config
+-from openhands.server.types import (
++from openhands.app_server.shared import server_config
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+ )
++from openhands.app_server.user_auth.user_auth import UserAuth
++from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ authorize_url_generator = AuthorizeUrlGenerator(
+     client_id=SLACK_CLIENT_ID,
+diff --git a/enterprise/saas_server.py b/enterprise/saas_server.py
+index 77080bf422ae..ea041d241295 100644
+--- a/enterprise/saas_server.py
++++ b/enterprise/saas_server.py
+@@ -57,11 +57,11 @@
+     api_router as verified_models_router,
+ )
+ 
+-from openhands.server.app import app as base_app  # noqa: E402
+-from openhands.server.middleware import (  # noqa: E402
++from openhands.app_server.app import app as base_app  # noqa: E402
++from openhands.app_server.middleware import (  # noqa: E402
+     CacheControlMiddleware,
+ )
+-from openhands.server.static import SPAStaticFiles  # noqa: E402
++from openhands.app_server.static import SPAStaticFiles  # noqa: E402
+ 
+ directory = os.getenv('FRONTEND_DIRECTORY', './frontend/build')
+ 
+diff --git a/enterprise/server/auth/gitlab_sync.py b/enterprise/server/auth/gitlab_sync.py
+index f03d6e289965..80c2ecc7da80 100644
+--- a/enterprise/server/auth/gitlab_sync.py
++++ b/enterprise/server/auth/gitlab_sync.py
+@@ -3,8 +3,8 @@
+ from pydantic import SecretStr
+ from sqlalchemy import select
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.service_types import ProviderType
++from openhands.app_server.types import AppMode
+ from openhands.app_server.utils.logger import openhands_logger as logger
+ 
+ 
+diff --git a/enterprise/server/auth/token_manager.py b/enterprise/server/auth/token_manager.py
+index 72473fc49f9d..8365eb698849 100644
+--- a/enterprise/server/auth/token_manager.py
++++ b/enterprise/server/auth/token_manager.py
+@@ -48,8 +48,8 @@
+ from tenacity import RetryCallState, retry, retry_if_exception_type, stop_after_attempt
+ 
+ from openhands.app_server.integrations.service_types import ProviderType
++from openhands.app_server.types import SessionExpiredError
+ from openhands.app_server.utils.http_session import httpx_verify_option
+-from openhands.server.types import SessionExpiredError
+ 
+ 
+ class KeycloakUserInfo(BaseModel):
+diff --git a/enterprise/server/config.py b/enterprise/server/config.py
+index c6da43523af2..0057d9575925 100644
+--- a/enterprise/server/config.py
++++ b/enterprise/server/config.py
+@@ -22,9 +22,9 @@
+ )
+ from server.constants import DEPLOYMENT_MODE
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.service_types import ProviderType
+-from openhands.server.config.server_config import ServerConfig
++from openhands.app_server.server_config.server_config import ServerConfig
++from openhands.app_server.types import AppMode
+ 
+ 
+ def sign_token(payload: dict[str, object], jwt_secret: str, algorithm='HS256') -> str:
+diff --git a/enterprise/tests/unit/integrations/jira/test_jira_manager.py b/enterprise/tests/unit/integrations/jira/test_jira_manager.py
+index ab25afa7ecca..e0c07f8af9f5 100644
+--- a/enterprise/tests/unit/integrations/jira/test_jira_manager.py
++++ b/enterprise/tests/unit/integrations/jira/test_jira_manager.py
+@@ -8,7 +8,7 @@
+ from integrations.jira.jira_manager import JiraManager
+ from integrations.jira.jira_payload import JiraEventType, JiraWebhookPayload
+ 
+-from openhands.server.types import (
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+diff --git a/enterprise/tests/unit/integrations/jira_dc/test_jira_dc_manager.py b/enterprise/tests/unit/integrations/jira_dc/test_jira_dc_manager.py
+index a6fb1f71a5d6..6ed8f9e6dc38 100644
+--- a/enterprise/tests/unit/integrations/jira_dc/test_jira_dc_manager.py
++++ b/enterprise/tests/unit/integrations/jira_dc/test_jira_dc_manager.py
+@@ -19,7 +19,7 @@
+ from integrations.models import Message, SourceType
+ 
+ from openhands.app_server.integrations.service_types import ProviderType, Repository
+-from openhands.server.types import (
++from openhands.app_server.types import (
+     LLMAuthenticationError,
+     MissingSettingsError,
+     SessionExpiredError,
+diff --git a/openhands/README.md b/openhands/README.md
+deleted file mode 100644
+index 85eefc48c0ce..000000000000
+--- a/openhands/README.md
++++ /dev/null
+@@ -1,60 +0,0 @@
+-
+-This directory contains the core components of OpenHands.
+-
+-## Documentation
+-
+-**[Architecture Documentation](./architecture/README.md)** with diagrams covering:
+-  - System Architecture Overview
+-  - Conversation Startup & WebSocket Flow
+-  - Agent Execution & LLM Flow
+-
+-- **[External Architecture Docs](https://docs.openhands.dev/usage/architecture/backend)** - Official documentation (v0 backend architecture)
+-
+-## Classes
+-
+-The key classes in OpenHands are:
+-
+-* LLM: brokers all interactions with large language models. Works with any underlying completion model, thanks to LiteLLM.
+-* Agent: responsible for looking at the current State, and producing an Action that moves one step closer toward the end-goal.
+-* AgentController: initializes the Agent, manages State, and drive the main loop that pushes the Agent forward, step by step
+-* State: represents the current state of the Agent's task. Includes things like the current step, a history of recent events, the Agent's long-term plan, etc
+-* EventStream: a central hub for Events, where any component can publish Events, or listen for Events published by other components
+-  * Event: an Action or Observeration
+-      * Action: represents a request to e.g. edit a file, run a command, or send a message
+-      * Observation: represents information collected from the environment, e.g. file contents or command output
+-* Runtime: responsible for performing Actions, and sending back Observations
+-    * Sandbox: the part of the runtime responsible for running commands, e.g. inside of Docker
+-* Server: brokers OpenHands sessions over HTTP, e.g. to drive the frontend
+-    * Session: holds a single EventStream, a single AgentController, and a single Runtime. Generally represents a single task (but potentially including several user prompts)
+-    * ConversationManager: keeps a list of active sessions, and ensures requests are routed to the correct Session
+-
+-## Control Flow
+-
+-Here's the basic loop (in pseudocode) that drives agents.
+-
+-```python
+-while True:
+-  prompt = agent.generate_prompt(state)
+-  response = llm.completion(prompt)
+-  action = agent.parse_response(response)
+-  observation = runtime.run(action)
+-  state = state.update(action, observation)
+-```
+-
+-In reality, most of this is achieved through message passing, via the EventStream.
+-The EventStream serves as the backbone for all communication in OpenHands.
+-
+-```mermaid
+-flowchart LR
+-  Agent--Actions-->AgentController
+-  AgentController--State-->Agent
+-  AgentController--Actions-->EventStream
+-  EventStream--Observations-->AgentController
+-  Runtime--Observations-->EventStream
+-  EventStream--Actions-->Runtime
+-  Frontend--Actions-->EventStream
+-```
+-
+-## Runtime
+-
+-Please refer to the [documentation](https://docs.openhands.dev/usage/architecture/runtime) to learn more about `Runtime`.
+diff --git a/openhands/__init__.py b/openhands/__init__.py
+index 5e86885fb071..840dae809173 100644
+--- a/openhands/__init__.py
++++ b/openhands/__init__.py
+@@ -4,6 +4,6 @@
+ __path__ = __import__('pkgutil').extend_path(__path__, __name__)
+ 
+ # Import version information for backward compatibility
+-from openhands.version import __version__, get_version
++from openhands.app_server.version import __version__, get_version
+ 
+ __all__ = ['__version__', 'get_version']
+diff --git a/openhands/app_server/app.py b/openhands/app_server/app.py
+new file mode 100644
+index 000000000000..0af980658c95
+--- /dev/null
++++ b/openhands/app_server/app.py
+@@ -0,0 +1,83 @@
++import contextlib
++import os
++import warnings
++
++from fastapi.routing import Mount
++
++with warnings.catch_warnings():
++    warnings.simplefilter('ignore')
++
++from fastapi import (
++    FastAPI,
++    Request,
++)
++from fastapi.responses import JSONResponse
++
++from openhands.app_server import v1_router
++from openhands.app_server.config import get_app_lifespan_service
++from openhands.app_server.integrations.service_types import AuthenticationError
++from openhands.app_server.mcp.mcp_router import mcp_server
++from openhands.app_server.middleware import (
++    CacheControlMiddleware,
++    InMemoryRateLimiter,
++    LocalhostCORSMiddleware,
++    RateLimitMiddleware,
++)
++from openhands.app_server.static import SPAStaticFiles
++from openhands.app_server.status.status_router import router as health_router
++from openhands.app_server.version import get_version
++
++mcp_app = mcp_server.http_app(path='/mcp', stateless_http=True)
++
++
++def combine_lifespans(*lifespans):
++    # Create a combined lifespan to manage multiple session managers
++    @contextlib.asynccontextmanager
++    async def combined_lifespan(app):
++        async with contextlib.AsyncExitStack() as stack:
++            for lifespan in lifespans:
++                await stack.enter_async_context(lifespan(app))
++            yield
++
++    return combined_lifespan
++
++
++lifespans = [mcp_app.lifespan]
++app_lifespan_ = get_app_lifespan_service()
++if app_lifespan_:
++    lifespans.append(app_lifespan_.lifespan)
++
++
++app = FastAPI(
++    title='OpenHands',
++    description='OpenHands: Code Less, Make More',
++    version=get_version(),
++    lifespan=combine_lifespans(*lifespans),
++    routes=[Mount(path='/mcp', app=mcp_app)],
++)
++
++
++@app.exception_handler(AuthenticationError)
++async def authentication_error_handler(request: Request, exc: AuthenticationError):
++    return JSONResponse(
++        status_code=401,
++        content=str(exc),
++    )
++
++
++app.include_router(v1_router.router)
++app.include_router(health_router)
++
++# Middleware and static file setup (merged from listen.py)
++if os.getenv('SERVE_FRONTEND', 'true').lower() == 'true':
++    if os.path.isdir('./frontend/build'):
++        app.mount(
++            '/', SPAStaticFiles(directory='./frontend/build', html=True), name='dist'
++        )
++
++app.add_middleware(LocalhostCORSMiddleware)
++app.add_middleware(CacheControlMiddleware)
++app.add_middleware(
++    RateLimitMiddleware,
++    rate_limiter=InMemoryRateLimiter(requests=10, seconds=1),
++)
+diff --git a/openhands/app_server/app_conversation/live_status_app_conversation_service.py b/openhands/app_server/app_conversation/live_status_app_conversation_service.py
+index bd43f5fe05db..d8c9e419be8f 100644
+--- a/openhands/app_server/app_conversation/live_status_app_conversation_service.py
++++ b/openhands/app_server/app_conversation/live_status_app_conversation_service.py
+@@ -2146,7 +2146,7 @@ async def inject(
+             # Get app_mode for SaaS mode
+             app_mode = None
+             try:
+-                from openhands.server.shared import server_config
++                from openhands.app_server.shared import server_config
+ 
+                 app_mode = (
+                     server_config.app_mode.value if server_config.app_mode else None
+diff --git a/openhands/app_server/integrations/azure_devops/service/repos.py b/openhands/app_server/integrations/azure_devops/service/repos.py
+index 11cd19e7d116..eb7793d169db 100644
+--- a/openhands/app_server/integrations/azure_devops/service/repos.py
++++ b/openhands/app_server/integrations/azure_devops/service/repos.py
+@@ -1,10 +1,10 @@
+ """Repository operations for Azure DevOps integration."""
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.azure_devops.service.base import (
+     AzureDevOpsMixinBase,
+ )
+ from openhands.app_server.integrations.service_types import ProviderType, Repository
++from openhands.app_server.types import AppMode
+ 
+ 
+ class AzureDevOpsReposMixin(AzureDevOpsMixinBase):
+diff --git a/openhands/app_server/integrations/bitbucket/bitbucket_service.py b/openhands/app_server/integrations/bitbucket/bitbucket_service.py
+index 90e25c02e8d7..b1a569e762cf 100644
+--- a/openhands/app_server/integrations/bitbucket/bitbucket_service.py
++++ b/openhands/app_server/integrations/bitbucket/bitbucket_service.py
+@@ -32,7 +32,7 @@ class BitBucketService(
+     2. Implementing all required methods
+     3. Setting server_config.bitbucket_service_class to the fully qualified name of the class
+ 
+-    The class is instantiated via get_impl() in openhands.server.shared.py.
++    The class is instantiated via get_impl() in openhands.app_server.shared.py.
+     """
+ 
+     def __init__(
+diff --git a/openhands/app_server/integrations/bitbucket/service/repos.py b/openhands/app_server/integrations/bitbucket/service/repos.py
+index 023bfdcadc63..46a64d5919dd 100644
+--- a/openhands/app_server/integrations/bitbucket/service/repos.py
++++ b/openhands/app_server/integrations/bitbucket/service/repos.py
+@@ -2,9 +2,9 @@
+ from typing import Any
+ from urllib.parse import urlparse
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.bitbucket.service.base import BitBucketMixinBase
+ from openhands.app_server.integrations.service_types import Repository, SuggestedTask
++from openhands.app_server.types import AppMode
+ 
+ 
+ class BitBucketReposMixin(BitBucketMixinBase):
+diff --git a/openhands/app_server/integrations/bitbucket_data_center/bitbucket_dc_service.py b/openhands/app_server/integrations/bitbucket_data_center/bitbucket_dc_service.py
+index 3559cd53f4d1..caa4c6c19e9f 100644
+--- a/openhands/app_server/integrations/bitbucket_data_center/bitbucket_dc_service.py
++++ b/openhands/app_server/integrations/bitbucket_data_center/bitbucket_dc_service.py
+@@ -32,7 +32,7 @@ class BitbucketDCService(
+     2. Implementing all required methods
+     3. Setting server_config.bitbucket_service_class to the fully qualified name of the class
+ 
+-    The class is instantiated via get_impl() in openhands.server.shared.py.
++    The class is instantiated via get_impl() in openhands.app_server.shared.py.
+     """
+ 
+     def __init__(
+diff --git a/openhands/app_server/integrations/bitbucket_data_center/service/repos.py b/openhands/app_server/integrations/bitbucket_data_center/service/repos.py
+index 7403d33afed5..09574ffffd6b 100644
+--- a/openhands/app_server/integrations/bitbucket_data_center/service/repos.py
++++ b/openhands/app_server/integrations/bitbucket_data_center/service/repos.py
+@@ -1,11 +1,11 @@
+ from typing import Any
+ from urllib.parse import urlparse
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.bitbucket_data_center.service.base import (
+     BitbucketDCMixinBase,
+ )
+ from openhands.app_server.integrations.service_types import Repository, SuggestedTask
++from openhands.app_server.types import AppMode
+ 
+ 
+ class BitbucketDCReposMixin(BitbucketDCMixinBase):
+diff --git a/openhands/app_server/integrations/forgejo/service/repos.py b/openhands/app_server/integrations/forgejo/service/repos.py
+index 463c83870463..364fae45be8c 100644
+--- a/openhands/app_server/integrations/forgejo/service/repos.py
++++ b/openhands/app_server/integrations/forgejo/service/repos.py
+@@ -1,8 +1,8 @@
+ from __future__ import annotations
+ 
+-from openhands.app_server.config_api.config_models import AppMode
+ from openhands.app_server.integrations.forgejo.service.base import ForgejoMixinBase
+ from openhands.app_server.integrations.service_types import Repository
++from openhands.app_server.types import AppMode
+ 
+ 
+ class ForgejoReposMixin(ForgejoMixinBase):
+diff --git a/openhands/app_server/integrations/github/github_service.py b/openhands/app_server/integrations/github/github_service.py
+index aead5fe1261a..7f85ac643711 100644
+--- a/openhands/app_server/integrations/github/github_service.py
++++ b/openhands/app_server/integrations/github/github_service.py
+@@ -38,7 +38,7 @@ class GitHubService(
+     2. Implementing all required methods
+     3. Setting server_config.github_service_class to the fully qualified name of the class
+ 
+-    The class is instantiated via get_impl() in openhands.server.shared.py.
++    The class is instantiated via get_impl() in open

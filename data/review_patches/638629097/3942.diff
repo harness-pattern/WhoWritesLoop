@@ -1,0 +1,483 @@
+diff --git a/aider/args.py b/aider/args.py
+index 6df19778b63..c4060174cd0 100644
+--- a/aider/args.py
++++ b/aider/args.py
+@@ -248,6 +248,21 @@ def get_parser(default_config_files, git_root):
+         help="Multiplier for map tokens when no files are specified (default: 2)",
+     )
+ 
++    ##########
++    group = parser.add_argument_group("Auto mode settings")
++    group.add_argument(
++        "--deep-context-search",
++        action=argparse.BooleanOptionalAction,
++        default=True,
++        help="Enable/disable enhanced context finding in auto mode (default: True)",
++    )
++    group.add_argument(
++        "--min-identifier-length",
++        type=int,
++        default=3,
++        help="Minimum length of identifiers to consider for context finding (default: 3)",
++    )
++
+     ##########
+     group = parser.add_argument_group("History Files")
+     default_input_history_file = (
+diff --git a/aider/coders/__init__.py b/aider/coders/__init__.py
+index 88bcddfaa00..69a2d40cb34 100644
+--- a/aider/coders/__init__.py
++++ b/aider/coders/__init__.py
+@@ -1,5 +1,6 @@
+ from .architect_coder import ArchitectCoder
+ from .ask_coder import AskCoder
++from .auto_coder import AutoCoder
+ from .base_coder import Coder
+ from .context_coder import ContextCoder
+ from .editblock_coder import EditBlockCoder
+@@ -31,4 +32,5 @@
+     EditorWholeFileCoder,
+     EditorDiffFencedCoder,
+     ContextCoder,
++    AutoCoder,
+ ]
+diff --git a/aider/coders/auto_coder.py b/aider/coders/auto_coder.py
+new file mode 100644
+index 00000000000..fbae89bb373
+--- /dev/null
++++ b/aider/coders/auto_coder.py
+@@ -0,0 +1,165 @@
++from .context_coder import ContextCoder
++from .auto_prompts import AutoPrompts
++import re
++from pathlib import Path
++
++
++class AutoCoder(ContextCoder):
++    """Automatically identify files and make changes without confirmation."""
++
++    edit_format = "auto"
++    gpt_prompts = AutoPrompts()
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++
++        # Set yes_to_all to bypass confirmations
++        self.io.yes = True
++
++        # Ensure auto_accept_architect is True
++        self.auto_accept_architect = True
++
++        # Enable auto-linting and auto-testing if configured
++        self.auto_lint = kwargs.get('auto_lint', True)
++        self.auto_test = kwargs.get('auto_test', False)
++
++        # Enhanced context finding settings
++        self.deep_context_search = kwargs.get('deep_context_search', True)
++        self.min_identifier_length = kwargs.get('min_identifier_length', 3)  # Shorter than default (5)
++
++        # Increase repo map tokens for better context
++        if self.repo_map:
++            self.repo_map.max_map_tokens *= 1.5  # Increase token allocation for repo map
++            self.repo_map.refresh = "always"  # Always refresh the repo map
++
++    def get_enhanced_file_mentions(self, content):
++        """Enhanced method to find file mentions in content with better heuristics."""
++        # Get standard file mentions
++        standard_mentions = self.get_file_mentions(content, ignore_current=True)
++
++        # Get identifiers that might be related to files
++        identifiers = self.get_ident_mentions(content)
++
++        # Use a lower threshold for identifier length
++        all_fnames = {}
++        for fname in self.get_all_relative_files():
++            if not fname or fname == ".":
++                continue
++
++            try:
++                path = Path(fname)
++
++                # Add the file's stem (name without extension)
++                base = path.stem.lower()
++                if len(base) >= self.min_identifier_length:
++                    if base not in all_fnames:
++                        all_fnames[base] = set()
++                    all_fnames[base].add(fname)
++
++                # Add the file's parent directory name
++                if path.parent.name:
++                    parent = path.parent.name.lower()
++                    if len(parent) >= self.min_identifier_length:
++                        if parent not in all_fnames:
++                            all_fnames[parent] = set()
++                        all_fnames[parent].add(fname)
++
++                # Add the full path components
++                parts = [p.lower() for p in path.parts if p and len(p) >= self.min_identifier_length]
++                for part in parts:
++                    if part not in all_fnames:
++                        all_fnames[part] = set()
++                    all_fnames[part].add(fname)
++            except ValueError:
++                continue
++
++        # Match identifiers to files
++        identifier_matches = set()
++        for ident in identifiers:
++            ident_lower = ident.lower()
++            if len(ident_lower) >= self.min_identifier_length and ident_lower in all_fnames:
++                identifier_matches.update(all_fnames[ident_lower])
++
++        # Look for import statements and package references
++        import_pattern = re.compile(r'(?:import|from|require|include)\s+([a-zA-Z0-9_.]+)')
++        imports = import_pattern.findall(content)
++
++        import_matches = set()
++        for imp in imports:
++            parts = imp.split('.')
++            for i in range(len(parts)):
++                partial = '.'.join(parts[:i+1])
++                partial_lower = partial.lower()
++                if partial_lower in all_fnames:
++                    import_matches.update(all_fnames[partial_lower])
++
++                # Also check for file extensions
++                for ext in ['.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.hpp']:
++                    with_ext = partial + ext
++                    with_ext_lower = with_ext.lower()
++                    if with_ext_lower in all_fnames:
++                        import_matches.update(all_fnames[with_ext_lower])
++
++        # Combine all matches
++        all_matches = standard_mentions | identifier_matches | import_matches
++
++        return all_matches
++
++    def reply_completed(self):
++        # First use ContextCoder's functionality to identify relevant files
++        content = self.partial_response_content
++        if not content or not content.strip():
++            return True
++
++        # Get files mentioned in the response using enhanced methods
++        current_rel_fnames = set(self.get_inchat_relative_files())
++
++        if self.deep_context_search:
++            mentioned_rel_fnames = self.get_enhanced_file_mentions(content)
++        else:
++            mentioned_rel_fnames = set(self.get_file_mentions(content, ignore_current=True))
++
++        # If the files are different, automatically add the mentioned files
++        if mentioned_rel_fnames != current_rel_fnames:
++            self.abs_fnames = set()
++            for fname in mentioned_rel_fnames:
++                self.add_rel_fname(fname)
++
++            # Now that we've added the files, we need to get the content again
++            # and apply the changes automatically
++            self.io.tool_output(f"Automatically added files: {', '.join(mentioned_rel_fnames)}")
++
++            # Refresh the repository map if needed
++            if self.repo_map:
++                self.get_repo_map(force_refresh=True)
++
++            # Create a new message to apply the changes
++            self.reflected_message = "I've identified the relevant files. Now I'll make the requested changes."
++            return False
++
++        # If we already have all the files, apply the changes
++        edited = self.apply_updates()
++
++        if edited:
++            self.io.tool_output(f"Automatically applied changes to: {', '.join(edited)}")
++            self.aider_edited_files.update(edited)
++            saved_message = self.auto_commit(edited)
++
++            if saved_message:
++                self.move_back_cur_messages(saved_message)
++
++            # Run linting if enabled
++            if self.auto_lint:
++                lint_errors = self.lint_edited(edited)
++                if lint_errors:
++                    self.io.tool_output("Linting found errors. Attempting to fix...")
++                    self.reflected_message = lint_errors
++                    return False
++
++            # Run tests if enabled
++            if self.auto_test:
++                test_output = self.run_tests()
++                if test_output:
++                    self.io.tool_output(f"Test results: {test_output}")
++
++        return True
+diff --git a/aider/coders/auto_prompts.py b/aider/coders/auto_prompts.py
+new file mode 100644
+index 00000000000..ff822f50e1a
+--- /dev/null
++++ b/aider/coders/auto_prompts.py
+@@ -0,0 +1,52 @@
++# flake8: noqa: E501
++
++from .context_prompts import ContextPrompts
++
++
++class AutoPrompts(ContextPrompts):
++    main_system = """Act as an expert code analyst and developer with deep understanding of software architecture.
++First, thoroughly analyze the user's request to determine ALL existing source files which will need to be modified or referenced.
++Then, make the necessary changes to implement the requested feature or fix the issue.
++
++Your task has two phases:
++1. Identify all relevant files that need to be modified or referenced
++2. Make the necessary changes to implement the requested feature or fix
++
++For phase 1 (Context Discovery):
++- Perform a comprehensive analysis to identify ALL files that might be relevant
++- Consider not just files that need direct modification, but also:
++  * Files containing related classes, interfaces, or types
++  * Files with dependent functionality
++  * Configuration files that might affect the behavior
++  * Test files that will need to be updated
++- Return the *complete* list of files which will need to be modified or referenced
++- Explain why each file is needed, including names of key classes/functions/methods/variables
++- Be sure to include or omit the names of files already added to the chat, based on whether they are actually needed or not
++- Think about imports, inheritance hierarchies, and dependency relationships
++
++For phase 2 (Implementation):
++- Implement the requested changes in the identified files
++- Follow the codebase's style and conventions
++- Ensure your changes are complete and functional
++- Consider edge cases and error handling
++- Update any related tests
++- Explain the changes you've made and why they address the user's request
++
++The user will use every file you mention, regardless of your commentary.
++So *ONLY* mention the names of relevant files.
++If a file is not relevant DO NOT mention it.
++
++Remember to consider:
++- Class hierarchies and inheritance relationships
++- Interface implementations
++- Import dependencies
++- Configuration settings
++- Related test files
++"""
++
++    system_reminder = """Remember to:
++1. First identify ALL relevant files needed for the task
++2. Then implement the changes
++3. Only mention file names that are actually relevant
++4. Consider dependencies, imports, and inheritance relationships
++"""
+diff --git a/aider/coders/base_coder.py b/aider/coders/base_coder.py
+index 675570c606f..53ebac0f6fa 100755
+--- a/aider/coders/base_coder.py
++++ b/aider/coders/base_coder.py
+@@ -323,6 +323,8 @@ def __init__(
+         file_watcher=None,
+         auto_copy_context=False,
+         auto_accept_architect=True,
++        deep_context_search=True,
++        min_identifier_length=3,
+     ):
+         # Fill in a dummy Analytics if needed, but it is never .enable()'d
+         self.analytics = analytics if analytics is not None else Analytics()
+@@ -337,6 +339,10 @@ def __init__(
+         self.auto_copy_context = auto_copy_context
+         self.auto_accept_architect = auto_accept_architect
+ 
++        # Auto mode settings
++        self.deep_context_search = deep_context_search
++        self.min_identifier_length = min_identifier_length
++
+         self.ignore_mentions = ignore_mentions
+         if not self.ignore_mentions:
+             self.ignore_mentions = set()
+@@ -566,23 +572,34 @@ def show_pretty(self):
+ 
+     def get_abs_fnames_content(self):
+         for fname in list(self.abs_fnames):
+-            content = self.io.read_text(fname)
++            try:
++                content = self.io.read_text(fname)
+ 
+-            if content is None:
++                if content is None:
++                    relative_fname = self.get_rel_fname(fname)
++                    self.io.tool_warning(f"Dropping {relative_fname} from the chat.")
++                    self.abs_fnames.remove(fname)
++                else:
++                    yield fname, content
++            except UnicodeDecodeError:
++                # Skip binary files that can't be decoded as text
+                 relative_fname = self.get_rel_fname(fname)
+-                self.io.tool_warning(f"Dropping {relative_fname} from the chat.")
++                self.io.tool_warning(f"Dropping binary file {relative_fname} from the chat.")
+                 self.abs_fnames.remove(fname)
+-            else:
+-                yield fname, content
+ 
+     def choose_fence(self):
+         all_content = ""
+         for _fname, content in self.get_abs_fnames_content():
+             all_content += content + "\n"
+         for _fname in self.abs_read_only_fnames:
+-            content = self.io.read_text(_fname)
+-            if content is not None:
+-                all_content += content + "\n"
++            try:
++                content = self.io.read_text(_fname)
++                if content is not None:
++                    all_content += content + "\n"
++            except UnicodeDecodeError:
++                # Skip binary files that can't be decoded as text
++                relative_fname = self.get_rel_fname(_fname)
++                self.io.tool_warning(f"Skipping binary file {relative_fname} when choosing fence.")
+ 
+         lines = all_content.splitlines()
+         good = False
+@@ -628,14 +645,19 @@ def get_files_content(self, fnames=None):
+     def get_read_only_files_content(self):
+         prompt = ""
+         for fname in self.abs_read_only_fnames:
+-            content = self.io.read_text(fname)
+-            if content is not None and not is_image_file(fname):
++            try:
++                content = self.io.read_text(fname)
++                if content is not None and not is_image_file(fname):
++                    relative_fname = self.get_rel_fname(fname)
++                    prompt += "\n"
++                    prompt += relative_fname
++                    prompt += f"\n{self.fence[0]}\n"
++                    prompt += content
++                    prompt += f"{self.fence[1]}\n"
++            except UnicodeDecodeError:
++                # Skip binary files that can't be decoded as text
+                 relative_fname = self.get_rel_fname(fname)
+-                prompt += "\n"
+-                prompt += relative_fname
+-                prompt += f"\n{self.fence[0]}\n"
+-                prompt += content
+-                prompt += f"{self.fence[1]}\n"
++                self.io.tool_warning(f"Skipping binary file {relative_fname} from read-only files.")
+         return prompt
+ 
+     def get_cur_message_text(self):
+@@ -1606,6 +1628,11 @@ def add_assistant_reply_to_cur_messages(self):
+                 )
+             ]
+ 
++    def get_enhanced_file_mentions(self, content):
++        """Base implementation of enhanced file mentions - just returns standard file mentions.
++        This method is overridden in AutoCoder to provide more sophisticated context finding."""
++        return self.get_file_mentions(content, ignore_current=True)
++
+     def get_file_mentions(self, content, ignore_current=False):
+         words = set(word for word in content.split())
+ 
+diff --git a/aider/commands.py b/aider/commands.py
+index 81fc80093b4..84b01d6d94a 100644
+--- a/aider/commands.py
++++ b/aider/commands.py
+@@ -162,6 +162,10 @@ def cmd_chat_mode(self, args):
+                     "context",
+                     "Automatically identify which files will need to be edited.",
+                 ),
++                (
++                    "auto",
++                    "Automatically identify files and make changes without confirmation.",
++                ),
+             ]
+         )
+ 
+@@ -1150,6 +1154,9 @@ def completions_architect(self):
+     def completions_context(self):
+         raise CommandCompletionException()
+ 
++    def completions_auto(self):
++        raise CommandCompletionException()
++
+     def cmd_ask(self, args):
+         """Ask questions about the code base without editing any files. If no prompt provided, switches to ask mode."""  # noqa
+         return self._generic_chat_command(args, "ask")
+@@ -1162,6 +1169,10 @@ def cmd_architect(self, args):
+         """Enter architect/editor mode using 2 different models. If no prompt provided, switches to architect/editor mode."""  # noqa
+         return self._generic_chat_command(args, "architect")
+ 
++    def cmd_auto(self, args):
++        """Enter auto mode to automatically identify files and make changes without confirmation. If no prompt provided, switches to auto mode."""  # noqa
++        return self._generic_chat_command(args, "auto")
++
+     def cmd_context(self, args):
+         """Enter context mode to see surrounding code context. If no prompt provided, switches to context mode."""  # noqa
+         return self._generic_chat_command(args, "context", placeholder=args.strip() or None)
+diff --git a/aider/exceptions.py b/aider/exceptions.py
+index a81a058e038..dae3449c1c3 100644
+--- a/aider/exceptions.py
++++ b/aider/exceptions.py
+@@ -58,8 +58,10 @@ def __init__(self):
+         self._load()
+ 
+     def _load(self, strict=False):
++        # Import litellm - json.load is already patched in aider.llm
+         import litellm
+ 
++        # Load litellm exceptions
+         for var in dir(litellm):
+             if var.endswith("Error"):
+                 if var not in self.exception_info:
+diff --git a/aider/llm.py b/aider/llm.py
+index c57c274db09..0bc1f8adbc0 100644
+--- a/aider/llm.py
++++ b/aider/llm.py
+@@ -1,6 +1,8 @@
+ import importlib
++import json
+ import os
+ import warnings
++from pathlib import Path
+ 
+ from aider.dump import dump  # noqa: F401
+ 
+@@ -17,6 +19,27 @@
+ 
+ VERBOSE = False
+ 
++# Patch json.load to handle UTF-8 encoding for litellm
++original_json_load = json.load
++
++def patched_json_load(fp, *args, **kwargs):
++    try:
++        # First try the original method
++        return original_json_load(fp, *args, **kwargs)
++    except UnicodeDecodeError:
++        # If it fails with UnicodeDecodeError, try with UTF-8 encoding
++        try:
++            # Read the file content with UTF-8 encoding
++            content = Path(fp.name).read_text(encoding='utf-8')
++            # Parse the content as JSON
++            return json.loads(content, *args, **kwargs)
++        except Exception:
++            # If that also fails, re-raise the original exception
++            raise
++
++# Apply the monkey patch
++json.load = patched_json_load
++
+ 
+ class LazyLiteLLM:
+     _lazy_module = None
+diff --git a/aider/main.py b/aider/main.py
+index 89286e1deac..694c976d5f3 100644
+--- a/aider/main.py
++++ b/aider/main.py
+@@ -988,6 +988,8 @@ def get_io(pretty):
+             detect_urls=args.detect_urls,
+             auto_copy_context=args.copy_paste,
+             auto_accept_architect=args.auto_accept_architect,
++            deep_context_search=args.deep_context_search,
++            min_identifier_length=args.min_identifier_length,
+         )
+     except UnknownEditFormat as err:
+         io.tool_error(str(err))

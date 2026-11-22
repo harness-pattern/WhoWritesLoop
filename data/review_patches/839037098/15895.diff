@@ -1,0 +1,20 @@
+diff --git a/stores/clickhouse/src/storage/domains/background-tasks/index.ts b/stores/clickhouse/src/storage/domains/background-tasks/index.ts
+index fb7481db2c8a..5d7da288e164 100644
+--- a/stores/clickhouse/src/storage/domains/background-tasks/index.ts
++++ b/stores/clickhouse/src/storage/domains/background-tasks/index.ts
+@@ -205,6 +205,7 @@ export class BackgroundTasksStorageClickhouse extends BackgroundTasksStorage {
+     await this.client.query({
+       query: `ALTER TABLE ${TABLE_BACKGROUND_TASKS} DELETE WHERE id = {var_id:String}`,
+       query_params: { var_id: taskId },
++      clickhouse_settings: { mutations_sync: '1' },
+     });
+   }
+ 
+@@ -214,6 +215,7 @@ export class BackgroundTasksStorageClickhouse extends BackgroundTasksStorage {
+       await this.client.query({
+         query: `ALTER TABLE ${TABLE_BACKGROUND_TASKS} DELETE WHERE id = {var_id:String}`,
+         query_params: { var_id: task.id },
++        clickhouse_settings: { mutations_sync: '1' },
+       });
+     }
+   }

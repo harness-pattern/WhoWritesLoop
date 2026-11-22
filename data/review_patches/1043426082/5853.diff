@@ -1,0 +1,147 @@
+diff --git a/.agents/skills/verify-agent-server/references/feature-map/F14-files.md b/.agents/skills/verify-agent-server/references/feature-map/F14-files.md
+index 4701feec954..5a9c313d782 100644
+--- a/.agents/skills/verify-agent-server/references/feature-map/F14-files.md
++++ b/.agents/skills/verify-agent-server/references/feature-map/F14-files.md
+@@ -384,10 +384,10 @@ Preconditions:
+   control-agent-server api GET /api/file/search_subdirs --expect 422
+   ```
+   The statuses are 404, 400, 400 and 422.
+-- **Paging past a case-only twin (`F14.subdirs-case-pagination`), known bug.**
+-  `Foo` and `foo` with one entry per page. Which twin sorts first depends on
+-  the directory's order on disk, so the recipe reads page one and expects the
+-  other twin on page two.
++- **Paging past a case-only twin (`F14.subdirs-case-pagination`).**
++  `Foo` and `foo` with one entry per page. Ties sort by the exact name, so
++  `Foo` comes first; the recipe still reads page one and expects the other
++  twin on page two.
+   ```sh
+   CASE_DIR="$F/case"
+   mkdir -p "$CASE_DIR/Foo" "$CASE_DIR/foo"
+@@ -399,13 +399,12 @@ Preconditions:
+   test "$CASE_FIRST" = Foo -o "$CASE_FIRST" = foo
+   control-agent-server api GET /api/file/search_subdirs --query path="$CASE_DIR" --query limit=1 --query page_id="$CASE_NEXT" \
+     --expect 200 --check items len-eq 1 --check items.0.name eq "$CASE_OTHER" --check next_page_id missing \
+-    --save F14.subdirs-case-pagination/page-2  # bug: status eq 200 && response.body.next_page_id eq foo && checks.1.ok eq false
++    --save F14.subdirs-case-pagination/page-2
+   ```
+-  Page one holds one twin and a cursor. Expected: page two holds exactly the
+-  other twin and no cursor. Actual: the cursor is `foo`, the lowercase name,
+-  and resuming picks the first entry whose lowercase name matches, which is
+-  the first page's entry again, with `next_page_id` `foo` again. A client
+-  that follows the cursor loops forever.
++  Page one holds one twin and a cursor. Page two holds exactly the other twin
++  and no cursor: ties in the case-insensitive order break by the exact name,
++  and the cursor is the exact name of the next entry, so it tells the twins
++  apart.
+ - **tar.gz archive (`F14.archive-tar`).** Archive the fixture repo, then a
+   plain tree whose symlinks point inside and outside it.
+ 
+@@ -877,8 +876,9 @@ Preconditions:
+ - Scoped path checks happen in a router dependency: relative and outside paths
+   are 422 there, while the same relative path on a global route is 400.
+   `home` and `search_subdirs` have no scoped variant.
+-- `search_subdirs`' cursor is the lowercase name of the next entry; an unknown
+-  `page_id` silently restarts at the first page, and case-only twins loop
++- `search_subdirs`' cursor is the exact name of the next entry (a lowercase
++  cursor still resumes case-insensitively); an unknown `page_id` silently
++  restarts at the first page. Case-only twins page apart
+   (`F14.subdirs-case-pagination`). `home` lists at most 50 favorites, with no
+   pagination. 403 (`Permission denied`) cannot be reproduced as root.
+ - `F14.home` counts favorites exactly: it relies on the launcher's private
+diff --git a/openhands-agent-server/openhands/agent_server/file_router.py b/openhands-agent-server/openhands/agent_server/file_router.py
+index 4ba5d567c2d..cc16faea2bb 100644
+--- a/openhands-agent-server/openhands/agent_server/file_router.py
++++ b/openhands-agent-server/openhands/agent_server/file_router.py
+@@ -851,9 +851,9 @@ async def search_subdirs(
+     True. Returns absolute paths so the GUI can use a result directly as
+     ``workspace.working_dir``.
+ 
+-    Results are sorted case-insensitively by name and paginated. ``page_id`` is
+-    the ``next_page_id`` returned by the previous page (the lowercase name of
+-    the first item to include on the next page).
++    Results are sorted case-insensitively by name (ties broken by the exact
++    name) and paginated. ``page_id`` is the ``next_page_id`` returned by the
++    previous page (the name of the first item to include on the next page).
+     """
+ 
+     target = Path(path)
+@@ -893,19 +893,26 @@ async def search_subdirs(
+             detail=f"Permission denied: {e}",
+         )
+ 
+-    entries.sort(key=lambda e: e.name.lower())
++    # Break case-insensitive ties by the exact name so that names differing
++    # only by case ("Foo", "foo") have a stable order and distinct cursors.
++    entries.sort(key=lambda e: (e.name.lower(), e.name))
+ 
+     start_index = 0
+     if page_id:
+-        for i, entry in enumerate(entries):
+-            if entry.name.lower() == page_id:
+-                start_index = i
+-                break
++        names = [entry.name for entry in entries]
++        if page_id in names:
++            start_index = names.index(page_id)
++        else:
++            # Lowercase cursors issued by older servers.
++            for i, name in enumerate(names):
++                if name.lower() == page_id:
++                    start_index = i
++                    break
+ 
+     page_items = entries[start_index : start_index + limit]
+     next_page_id: str | None = None
+     if start_index + limit < len(entries):
+-        next_page_id = entries[start_index + limit].name.lower()
++        next_page_id = entries[start_index + limit].name
+ 
+     return SubdirectoryPage(items=page_items, next_page_id=next_page_id)
+ 
+diff --git a/tests/agent_server/test_file_router.py b/tests/agent_server/test_file_router.py
+index d3f2738f582..646fbf5e497 100644
+--- a/tests/agent_server/test_file_router.py
++++ b/tests/agent_server/test_file_router.py
+@@ -839,6 +839,42 @@ def test_search_subdirs_paginates_with_limit_and_page_id(client, tmp_path):
+     assert third_body["next_page_id"] is None
+ 
+ 
++def test_search_subdirs_pages_past_case_only_twins(client, tmp_path):
++    """Following next_page_id reaches each of two names that differ by case."""
++    for name in ["foo", "Foo", "bar"]:
++        (tmp_path / name).mkdir()
++
++    seen: list[str] = []
++    page_id: str | None = None
++    for _ in range(5):
++        params: dict[str, str | int] = {"path": str(tmp_path), "limit": 1}
++        if page_id is not None:
++            params["page_id"] = page_id
++        response = client.get("/api/file/search_subdirs", params=params)
++        assert response.status_code == 200
++        body = response.json()
++        seen.extend(e["name"] for e in body["items"])
++        page_id = body["next_page_id"]
++        if page_id is None:
++            break
++
++    assert seen == ["bar", "Foo", "foo"]
++    assert page_id is None
++
++
++def test_search_subdirs_accepts_lowercase_cursor(client, tmp_path):
++    """A lowercase cursor from an older server still resumes at its entry."""
++    for name in ["Alpha", "Bravo"]:
++        (tmp_path / name).mkdir()
++
++    response = client.get(
++        "/api/file/search_subdirs",
++        params={"path": str(tmp_path), "limit": 1, "page_id": "bravo"},
++    )
++    assert response.status_code == 200
++    assert [e["name"] for e in response.json()["items"]] == ["Bravo"]
++
++
+ def test_search_subdirs_limit_too_low_returns_422(client, tmp_path):
+     response = client.get(
+         "/api/file/search_subdirs",

@@ -1,0 +1,272 @@
+diff --git a/packages/types/src/model.ts b/packages/types/src/model.ts
+index d2f88c0d8ae..df43de936b0 100644
+--- a/packages/types/src/model.ts
++++ b/packages/types/src/model.ts
+@@ -74,6 +74,10 @@ export const modelInfoSchema = z.object({
+ 	contextWindow: z.number(),
+ 	supportsImages: z.boolean().optional(),
+ 	supportsPromptCache: z.boolean(),
++	// Optional default prompt cache retention policy for providers that support it.
++	// When set to "24h", extended prompt caching will be requested; when omitted
++	// or set to "in_memory", the default in‑memory cache is used.
++	promptCacheRetention: z.enum(["in_memory", "24h"]).optional(),
+ 	// Capability flag to indicate whether the model supports an output verbosity parameter
+ 	supportsVerbosity: z.boolean().optional(),
+ 	supportsReasoningBudget: z.boolean().optional(),
+diff --git a/packages/types/src/providers/openai.ts b/packages/types/src/providers/openai.ts
+index 77cfaccaae7..76e81ef2dc5 100644
+--- a/packages/types/src/providers/openai.ts
++++ b/packages/types/src/providers/openai.ts
+@@ -11,6 +11,7 @@ export const openAiNativeModels = {
+ 		contextWindow: 400000,
+ 		supportsImages: true,
+ 		supportsPromptCache: true,
++		promptCacheRetention: "24h",
+ 		supportsReasoningEffort: ["none", "low", "medium", "high"],
+ 		reasoningEffort: "medium",
+ 		inputPrice: 1.25,
+@@ -29,6 +30,7 @@ export const openAiNativeModels = {
+ 		contextWindow: 400000,
+ 		supportsImages: true,
+ 		supportsPromptCache: true,
++		promptCacheRetention: "24h",
+ 		supportsReasoningEffort: ["low", "medium", "high"],
+ 		reasoningEffort: "medium",
+ 		inputPrice: 1.25,
+@@ -43,6 +45,7 @@ export const openAiNativeModels = {
+ 		contextWindow: 400000,
+ 		supportsImages: true,
+ 		supportsPromptCache: true,
++		promptCacheRetention: "24h",
+ 		supportsReasoningEffort: ["low", "medium", "high"],
+ 		reasoningEffort: "medium",
+ 		inputPrice: 0.25,
+diff --git a/src/api/providers/__tests__/openai-native-usage.spec.ts b/src/api/providers/__tests__/openai-native-usage.spec.ts
+index 74806b26ab2..48e1c26877b 100644
+--- a/src/api/providers/__tests__/openai-native-usage.spec.ts
++++ b/src/api/providers/__tests__/openai-native-usage.spec.ts
+@@ -344,6 +344,51 @@ describe("OpenAiNativeHandler - normalizeUsage", () => {
+ 		})
+ 	})
+ 
++	describe("OpenAiNativeHandler - prompt cache retention", () => {
++		let handler: OpenAiNativeHandler
++
++		beforeEach(() => {
++			handler = new OpenAiNativeHandler({
++				openAiNativeApiKey: "test-key",
++			})
++		})
++
++		const buildRequestBodyForModel = (modelId: string) => {
++			// Force the handler to use the requested model ID
++			;(handler as any).options.apiModelId = modelId
++			const model = handler.getModel()
++			// Minimal formatted input/systemPrompt/verbosity/metadata for building the body
++			return (handler as any).buildRequestBody(model, [], "", model.verbosity, undefined, undefined)
++		}
++
++		it("should set prompt_cache_retention=24h for gpt-5.1 models that support prompt caching", () => {
++			const body = buildRequestBodyForModel("gpt-5.1")
++			expect(body.prompt_cache_retention).toBe("24h")
++
++			const codexBody = buildRequestBodyForModel("gpt-5.1-codex")
++			expect(codexBody.prompt_cache_retention).toBe("24h")
++
++			const codexMiniBody = buildRequestBodyForModel("gpt-5.1-codex-mini")
++			expect(codexMiniBody.prompt_cache_retention).toBe("24h")
++		})
++
++		it("should not set prompt_cache_retention for non-gpt-5.1 models even if they support prompt caching", () => {
++			const body = buildRequestBodyForModel("gpt-5")
++			expect(body.prompt_cache_retention).toBeUndefined()
++
++			const fourOBody = buildRequestBodyForModel("gpt-4o")
++			expect(fourOBody.prompt_cache_retention).toBeUndefined()
++		})
++
++		it("should not set prompt_cache_retention when the model does not support prompt caching", () => {
++			const modelId = "codex-mini-latest"
++			expect(openAiNativeModels[modelId as keyof typeof openAiNativeModels].supportsPromptCache).toBe(false)
++
++			const body = buildRequestBodyForModel(modelId)
++			expect(body.prompt_cache_retention).toBeUndefined()
++		})
++	})
++
+ 	describe("cost calculation", () => {
+ 		it("should pass total input tokens to calculateApiCostOpenAI", () => {
+ 			const usage = {
+diff --git a/src/api/providers/openai-native.ts b/src/api/providers/openai-native.ts
+index 2d51c92a2b3..accae66f271 100644
+--- a/src/api/providers/openai-native.ts
++++ b/src/api/providers/openai-native.ts
+@@ -52,9 +52,10 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 	constructor(options: ApiHandlerOptions) {
+ 		super()
+ 		this.options = options
+-		// Default to including reasoning.summary: "auto" for GPT‑5 unless explicitly disabled
+-		if (this.options.enableGpt5ReasoningSummary === undefined) {
+-			this.options.enableGpt5ReasoningSummary = true
++		// Default to including reasoning.summary: "auto" for models that support Responses API
++		// reasoning summaries unless explicitly disabled.
++		if (this.options.enableResponsesReasoningSummary === undefined) {
++			this.options.enableResponsesReasoningSummary = true
+ 		}
+ 		const apiKey = this.options.openAiNativeApiKey ?? "not-provided"
+ 		this.client = new OpenAI({ baseURL: this.options.openAiNativeBaseUrl, apiKey })
+@@ -176,10 +177,10 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 		reasoningEffort: ReasoningEffortExtended | undefined,
+ 		metadata?: ApiHandlerCreateMessageMetadata,
+ 	): any {
+-		// Build a request body
+-		// Ensure we explicitly pass max_output_tokens for GPT‑5 based on Roo's reserved model response calculation
++		// Build a request body for the OpenAI Responses API.
++		// Ensure we explicitly pass max_output_tokens based on Roo's reserved model response calculation
+ 		// so requests do not default to very large limits (e.g., 120k).
+-		interface Gpt5RequestBody {
++		interface ResponsesRequestBody {
+ 			model: string
+ 			input: Array<{ role: "user" | "assistant"; content: any[] } | { type: string; content: string }>
+ 			stream: boolean
+@@ -191,13 +192,18 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 			instructions?: string
+ 			service_tier?: ServiceTier
+ 			include?: string[]
++			/** Prompt cache retention policy: "in_memory" (default) or "24h" for extended caching */
++			prompt_cache_retention?: "in_memory" | "24h"
+ 		}
+ 
+ 		// Validate requested tier against model support; if not supported, omit.
+ 		const requestedTier = (this.options.openAiNativeServiceTier as ServiceTier | undefined) || undefined
+ 		const allowedTierNames = new Set(model.info.tiers?.map((t) => t.name).filter(Boolean) || [])
+ 
+-		const body: Gpt5RequestBody = {
++		// Decide whether to enable extended prompt cache retention for this request
++		const promptCacheRetention = this.getPromptCacheRetention(model)
++
++		const body: ResponsesRequestBody = {
+ 			model: model.id,
+ 			input: formattedInput,
+ 			stream: true,
+@@ -213,7 +219,7 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 				? {
+ 						reasoning: {
+ 							...(reasoningEffort ? { effort: reasoningEffort } : {}),
+-							...(this.options.enableGpt5ReasoningSummary ? { summary: "auto" as const } : {}),
++							...(this.options.enableResponsesReasoningSummary ? { summary: "auto" as const } : {}),
+ 						},
+ 					}
+ 				: {}),
+@@ -229,6 +235,9 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 				(requestedTier === "default" || allowedTierNames.has(requestedTier)) && {
+ 					service_tier: requestedTier,
+ 				}),
++			// Enable extended prompt cache retention for models that support it.
++			// This uses the OpenAI Responses API `prompt_cache_retention` parameter.
++			...(promptCacheRetention ? { prompt_cache_retention: promptCacheRetention } : {}),
+ 		}
+ 
+ 		// Include text.verbosity only when the model explicitly supports it
+@@ -263,7 +272,7 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 			}
+ 		} catch (sdkErr: any) {
+ 			// For errors, fallback to manual SSE via fetch
+-			yield* this.makeGpt5ResponsesAPIRequest(requestBody, model, metadata, systemPrompt, messages)
++			yield* this.makeResponsesApiRequest(requestBody, model, metadata, systemPrompt, messages)
+ 		}
+ 	}
+ 
+@@ -322,7 +331,7 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 		return formattedMessages
+ 	}
+ 
+-	private async *makeGpt5ResponsesAPIRequest(
++	private async *makeResponsesApiRequest(
+ 		requestBody: any,
+ 		model: OpenAiNativeModel,
+ 		metadata?: ApiHandlerCreateMessageMetadata,
+@@ -347,7 +356,7 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 			if (!response.ok) {
+ 				const errorText = await response.text()
+ 
+-				let errorMessage = `GPT-5 API request failed (${response.status})`
++				let errorMessage = `OpenAI Responses API request failed (${response.status})`
+ 				let errorDetails = ""
+ 
+ 				// Try to parse error as JSON for better error messages
+@@ -803,7 +812,7 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 									}
+ 								}
+ 
+-								// Usage for done/completed is already handled by processGpt5Event in SDK path.
++								// Usage for done/completed is already handled by processEvent in the SDK path.
+ 								// For SSE path, usage often arrives separately; avoid double-emitting here.
+ 							}
+ 							// These are structural or status events, we can just log them at a lower level or ignore.
+@@ -977,6 +986,23 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 		return selected && selected !== "disable" ? (selected as any) : undefined
+ 	}
+ 
++	/**
++	 * Returns the appropriate prompt cache retention policy for the given model, if any.
++	 *
++	 * The policy is driven by ModelInfo.promptCacheRetention so that model-specific details
++	 * live in the shared types layer rather than this provider. When set to "24h" and the
++	 * model supports prompt caching, extended prompt cache retention is requested.
++	 */
++	private getPromptCacheRetention(model: OpenAiNativeModel): "24h" | undefined {
++		if (!model.info.supportsPromptCache) return undefined
++
++		if (model.info.promptCacheRetention === "24h") {
++			return "24h"
++		}
++
++		return undefined
++	}
++
+ 	/**
+ 	 * Returns a shallow-cloned ModelInfo with pricing overridden for the given tier, if available.
+ 	 * If no tier or no overrides exist, the original ModelInfo is returned.
+@@ -1083,7 +1109,7 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 			if (reasoningEffort) {
+ 				requestBody.reasoning = {
+ 					effort: reasoningEffort,
+-					...(this.options.enableGpt5ReasoningSummary ? { summary: "auto" as const } : {}),
++					...(this.options.enableResponsesReasoningSummary ? { summary: "auto" as const } : {}),
+ 				}
+ 			}
+ 
+@@ -1102,6 +1128,12 @@ export class OpenAiNativeHandler extends BaseProvider implements SingleCompletio
+ 				requestBody.text = { verbosity: (verbosity || "medium") as VerbosityLevel }
+ 			}
+ 
++			// Enable extended prompt cache retention for eligible models
++			const promptCacheRetention = this.getPromptCacheRetention(model)
++			if (promptCacheRetention) {
++				requestBody.prompt_cache_retention = promptCacheRetention
++			}
++
+ 			// Make the non-streaming request
+ 			const response = await (this.client as any).responses.create(requestBody)
+ 
+diff --git a/src/shared/api.ts b/src/shared/api.ts
+index 101d7f9b668..4f4c8a4ae9a 100644
+--- a/src/shared/api.ts
++++ b/src/shared/api.ts
+@@ -13,11 +13,11 @@ import {
+ // Extend ProviderSettings (minus apiProvider) with handler-specific toggles.
+ export type ApiHandlerOptions = Omit<ProviderSettings, "apiProvider"> & {
+ 	/**
+-	 * When true and using GPT‑5 Responses API, include reasoning.summary: "auto"
+-	 * so the API returns reasoning summaries (we already parse and surface them).
+-	 * Defaults to true; set to false to disable summaries.
++	 * When true and using OpenAI Responses API models that support reasoning summaries,
++	 * include reasoning.summary: "auto" so the API returns summaries (we already parse
++	 * and surface them). Defaults to true; set to false to disable summaries.
+ 	 */
+-	enableGpt5ReasoningSummary?: boolean
++	enableResponsesReasoningSummary?: boolean
+ 	/**
+ 	 * Optional override for Ollama's num_ctx parameter.
+ 	 * When set, this value will be used in Ollama chat requests.

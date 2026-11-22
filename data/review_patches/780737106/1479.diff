@@ -1,0 +1,57 @@
+diff --git a/tests/tools/test_edit_linting.py b/tests/tools/test_edit_linting.py
+new file mode 100644
+index 0000000000..681f308d9f
+--- /dev/null
++++ b/tests/tools/test_edit_linting.py
+@@ -0,0 +1,35 @@
++from __future__ import annotations
++
++import json
++from unittest import mock
++
++from sweagent import TOOLS_DIR
++from tests.utils import make_python_tool_importable
++
++make_python_tool_importable(TOOLS_DIR / "windowed_edit_linting" / "bin" / "edit", "windowed_edit_linting_edit")
++import windowed_edit_linting_edit  # type: ignore  # noqa: E402
++
++
++def _setup_file(env_file, content: str):
++    test_path = env_file.parent / "test.py"
++    test_path.write_text(content)
++    env_file.write_text(json.dumps({"CURRENT_FILE": str(test_path), "FIRST_LINE": "0", "WINDOW": "50"}))
++    return test_path
++
++
++def test_preexisting_error_above_edit_does_not_revert(with_tmp_env_file):
++    """Regression test: the flake8 filter window was passed 0-based while flake8
++    line numbers are 1-based, so a pre-existing error on the line directly above
++    the edited region was misclassified as newly introduced and the (valid) edit
++    was reverted."""
++    # 15-line file; the (mocked) pre-existing lint error lives on 1-based line 4,
++    # i.e. directly above the 1-based lines 5-10 that we edit.
++    path = _setup_file(with_tmp_env_file, "\n".join(f"line{i}" for i in range(1, 16)) + "\n")
++    preexisting = f"{path}:4:1: F821 undefined name 'x'"
++
++    # flake8 returns the same pre-existing error before and after the edit.
++    with mock.patch.object(windowed_edit_linting_edit, "flake8", return_value=preexisting):
++        windowed_edit_linting_edit.main("5:10", "REPLACED")
++
++    # The edit must have been applied rather than reverted by a bogus lint error.
++    assert "REPLACED" in path.read_text()
+diff --git a/tools/windowed_edit_linting/bin/edit b/tools/windowed_edit_linting/bin/edit
+index 2909209c4e..c7d5cfd399 100644
+--- a/tools/windowed_edit_linting/bin/edit
++++ b/tools/windowed_edit_linting/bin/edit
+@@ -102,7 +102,10 @@ def main(line_range: str, replacement_text: Union[str, None] = None):
+     new_flake8_output = format_flake8_output(
+         post_edit_lint,
+         previous_errors_string=pre_edit_lint,
+-        replacement_window=(start_line, end_line),
++        # `start_line`/`end_line` are 0-based, but `format_flake8_output` compares
++        # the window against flake8's 1-based line numbers. Pass a 1-based window
++        # so a pre-existing error just above the edit isn't misread as new.
++        replacement_window=(start_line + 1, end_line + 1),
+         replacement_n_lines=len(replacement_text.splitlines()),
+     )
+ 

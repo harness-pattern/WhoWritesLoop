@@ -1,0 +1,230 @@
+diff --git a/aider/scrape.py b/aider/scrape.py
+index 3d5cfa86f35..4cdfc17ce00 100755
+--- a/aider/scrape.py
++++ b/aider/scrape.py
+@@ -1,7 +1,10 @@
+ #!/usr/bin/env python
+ 
++import ipaddress
+ import re
++import socket
+ import sys
++from urllib.parse import urlparse
+ 
+ import pypandoc
+ 
+@@ -10,6 +13,44 @@
+ 
+ aider_user_agent = f"Aider/{__version__} +{urls.website}"
+ 
++
++def _validate_public_url(url):
++    """Reject local/reserved destinations before a scrape request is made."""
++    parsed = urlparse(url)
++    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
++        raise ValueError("Only http(s) URLs with a hostname can be scraped")
++
++    try:
++        parsed.port  # Validate malformed ports before doing DNS work.
++    except ValueError as exc:
++        raise ValueError("The scrape URL contains an invalid port") from exc
++
++    try:
++        addresses = [ipaddress.ip_address(parsed.hostname)]
++    except ValueError:
++        try:
++            addresses = [
++                ipaddress.ip_address(info[4][0])
++                for info in socket.getaddrinfo(
++                    parsed.hostname, parsed.port, type=socket.SOCK_STREAM
++                )
++            ]
++        except (OSError, ValueError) as exc:
++            raise ValueError("Could not resolve the scrape hostname") from exc
++
++    if not addresses or any(
++        address.is_private
++        or address.is_loopback
++        or address.is_link_local
++        or address.is_reserved
++        or address.is_multicast
++        or address.is_unspecified
++        for address in addresses
++    ):
++        raise ValueError("Refusing to scrape a private or reserved network address")
++
++    return url
++
+ # Playwright is nice because it has a simple way to install dependencies on most
+ # platforms.
+ 
+@@ -165,6 +206,22 @@ def scrape_with_playwright(self, url):
+ 
+                 page.set_extra_http_headers({"User-Agent": user_agent})
+ 
++                def guard_route(route, request):
++                    # Playwright follows redirects and loads subresources. Guard
++                    # every network request, not only the original URL.
++                    if request.url.startswith(("data:", "blob:", "about:")):
++                        route.continue_()
++                        return
++                    try:
++                        _validate_public_url(request.url)
++                    except ValueError:
++                        route.abort()
++                        return
++                    route.continue_()
++
++                page.route("**/*", guard_route)
++                _validate_public_url(url)
++
+                 response = None
+                 try:
+                     response = page.goto(url, wait_until="networkidle", timeout=5000)
+@@ -196,8 +253,9 @@ def scrape_with_httpx(self, url):
+ 
+         headers = {"User-Agent": f"Mozilla./5.0 ({aider_user_agent})"}
+         try:
++            _validate_public_url(url)
+             with httpx.Client(
+-                headers=headers, verify=self.verify_ssl, follow_redirects=True
++                headers=headers, verify=self.verify_ssl, follow_redirects=False
+             ) as client:
+                 response = client.get(url)
+                 response.raise_for_status()
+diff --git a/aider/voice.py b/aider/voice.py
+index c9af7ae9983..1ba87e35106 100644
+--- a/aider/voice.py
++++ b/aider/voice.py
+@@ -114,70 +114,72 @@ def record_and_transcribe(self, history=None, language=None):
+             return
+ 
+     def raw_record_and_transcribe(self, history, language):
+-        self.q = queue.Queue()
++        # Keep all intermediate files in a private directory. Using
++        # tempfile.mktemp() returns a predictable, attacker-replaceable path
++        # before the file is opened.
++        with tempfile.TemporaryDirectory(prefix="aider-voice-") as temp_dir:
++            self.q = queue.Queue()
++            temp_wav = os.path.join(temp_dir, "recording.wav")
+ 
+-        temp_wav = tempfile.mktemp(suffix=".wav")
+-
+-        try:
+-            sample_rate = int(self.sd.query_devices(self.device_id, "input")["default_samplerate"])
+-        except (TypeError, ValueError):
+-            sample_rate = 16000  # fallback to 16kHz if unable to query device
+-        except self.sd.PortAudioError:
+-            raise SoundDeviceError(
+-                "No audio input device detected. Please check your audio settings and try again."
+-            )
+-
+-        self.start_time = time.time()
+-
+-        try:
+-            with self.sd.InputStream(
+-                samplerate=sample_rate, channels=1, callback=self.callback, device=self.device_id
+-            ):
+-                prompt(self.get_prompt, refresh_interval=0.1)
+-        except self.sd.PortAudioError as err:
+-            raise SoundDeviceError(f"Error accessing audio input device: {err}")
+-
+-        with sf.SoundFile(temp_wav, mode="x", samplerate=sample_rate, channels=1) as file:
+-            while not self.q.empty():
+-                file.write(self.q.get())
+-
+-        use_audio_format = self.audio_format
+-
+-        # Check file size and offer to convert to mp3 if too large
+-        file_size = os.path.getsize(temp_wav)
+-        if file_size > 24.9 * 1024 * 1024 and self.audio_format == "wav":
+-            print("\nWarning: {temp_wav} is too large, switching to mp3 format.")
+-            use_audio_format = "mp3"
+-
+-        filename = temp_wav
+-        if use_audio_format != "wav":
+             try:
+-                new_filename = tempfile.mktemp(suffix=f".{use_audio_format}")
+-                audio = AudioSegment.from_wav(temp_wav)
+-                audio.export(new_filename, format=use_audio_format)
+-                os.remove(temp_wav)
+-                filename = new_filename
+-            except (CouldntDecodeError, CouldntEncodeError) as e:
+-                print(f"Error converting audio: {e}")
+-            except (OSError, FileNotFoundError) as e:
+-                print(f"File system error during conversion: {e}")
+-            except Exception as e:
+-                print(f"Unexpected error during audio conversion: {e}")
+-
+-        with open(filename, "rb") as fh:
+-            try:
+-                transcript = litellm.transcription(
+-                    model="whisper-1", file=fh, prompt=history, language=language
++                sample_rate = int(self.sd.query_devices(self.device_id, "input")["default_samplerate"])
++            except (TypeError, ValueError):
++                sample_rate = 16000  # fallback to 16kHz if unable to query device
++            except self.sd.PortAudioError:
++                raise SoundDeviceError(
++                    "No audio input device detected. Please check your audio settings and try again."
+                 )
+-            except Exception as err:
+-                print(f"Unable to transcribe {filename}: {err}")
+-                return
+ 
+-        if filename != temp_wav:
+-            os.remove(filename)
++            self.start_time = time.time()
++
++            try:
++                with self.sd.InputStream(
++                    samplerate=sample_rate, channels=1, callback=self.callback, device=self.device_id
++                ):
++                    prompt(self.get_prompt, refresh_interval=0.1)
++            except self.sd.PortAudioError as err:
++                raise SoundDeviceError(f"Error accessing audio input device: {err}")
++
++            # The directory is private and newly created, so this fixed filename
++            # cannot be replaced by another process between creation and open.
++            with sf.SoundFile(temp_wav, mode="x", samplerate=sample_rate, channels=1) as file:
++                while not self.q.empty():
++                    file.write(self.q.get())
++
++            use_audio_format = self.audio_format
++
++            # Check file size and offer to convert to mp3 if too large
++            file_size = os.path.getsize(temp_wav)
++            if file_size > 24.9 * 1024 * 1024 and self.audio_format == "wav":
++                print(f"\nWarning: {temp_wav} is too large, switching to mp3 format.")
++                use_audio_format = "mp3"
++
++            filename = temp_wav
++            if use_audio_format != "wav":
++                try:
++                    new_filename = os.path.join(temp_dir, f"converted.{use_audio_format}")
++                    audio = AudioSegment.from_wav(temp_wav)
++                    audio.export(new_filename, format=use_audio_format)
++                    os.remove(temp_wav)
++                    filename = new_filename
++                except (CouldntDecodeError, CouldntEncodeError) as e:
++                    print(f"Error converting audio: {e}")
++                except (OSError, FileNotFoundError) as e:
++                    print(f"File system error during conversion: {e}")
++                except Exception as e:
++                    print(f"Unexpected error during audio conversion: {e}")
++
++            with open(filename, "rb") as fh:
++                try:
++                    transcript = litellm.transcription(
++                        model="whisper-1", file=fh, prompt=history, language=language
++                    )
++                except Exception as err:
++                    print(f"Unable to transcribe {filename}: {err}")
++                    return
+ 
+-        text = transcript.text
+-        return text
++            text = transcript.text
++            return text
+ 
+ 
+ if __name__ == "__main__":

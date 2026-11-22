@@ -1,0 +1,32 @@
+diff --git a/README.md b/README.md
+index 551456f325f1..9fc2891aa744 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,5 @@
++goodbye
++
+ <p align="center">
+   <a href="https://opencode.ai">
+     <picture>
+diff --git a/packages/plugin/package.json b/packages/plugin/package.json
+index 3d46c470dca5..3ecd6c95bdcc 100644
+--- a/packages/plugin/package.json
++++ b/packages/plugin/package.json
+@@ -24,4 +24,4 @@
+     "typescript": "catalog:",
+     "@typescript/native-preview": "catalog:"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/packages/sdk/js/package.json b/packages/sdk/js/package.json
+index ef9a50679621..4758dba1a199 100644
+--- a/packages/sdk/js/package.json
++++ b/packages/sdk/js/package.json
+@@ -26,4 +26,4 @@
+   "publishConfig": {
+     "directory": "dist"
+   }
+-}
+\ No newline at end of file
++}

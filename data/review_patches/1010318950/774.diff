@@ -1,0 +1,54 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 7c1031fa3..808e9e10b 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -83,8 +83,8 @@ contree = [
+ 
+ [project.urls]
+ Documentation = "https://mini-swe-agent.com/latest/"
+-Repository = "https://github.com/SWE-agent/mini-SWE-agent"
+-"Bug Tracker" = "https://github.com/SWE-agent/mini-SWE-agent/issues"
++Repository = "https://github.com/SWE-agent/mini-swe-agent"
++"Bug Tracker" = "https://github.com/SWE-agent/mini-swe-agent/issues"
+ 
+ [project.scripts]
+ mini = "minisweagent.run.mini:app"
+diff --git a/src/minisweagent/config/default.yaml b/src/minisweagent/config/default.yaml
+index 33c0dd767..8f5ebb1a9 100644
+--- a/src/minisweagent/config/default.yaml
++++ b/src/minisweagent/config/default.yaml
+@@ -22,7 +22,7 @@ agent:
+ 
+     ## Recommended Workflow
+ 
+-    This workflows should be done step-by-step so that you can iterate on your changes and any possible problems.
++    This workflow should be done step-by-step so that you can iterate on your changes and any possible problems.
+ 
+     1. Analyze the codebase by finding and reading relevant files
+     2. Create a script to reproduce the issue
+diff --git a/src/minisweagent/config/mini.yaml b/src/minisweagent/config/mini.yaml
+index b52ad8bfb..1b802d100 100644
+--- a/src/minisweagent/config/mini.yaml
++++ b/src/minisweagent/config/mini.yaml
+@@ -8,7 +8,7 @@ agent:
+ 
+     ## Recommended Workflow
+ 
+-    This workflows should be done step-by-step so that you can iterate on your changes and any possible problems.
++    This workflow should be done step-by-step so that you can iterate on your changes and any possible problems.
+ 
+     1. Analyze the codebase by finding and reading relevant files
+     2. Create a script to reproduce the issue
+diff --git a/src/minisweagent/config/mini_textbased.yaml b/src/minisweagent/config/mini_textbased.yaml
+index 466cd50ec..7bdc89a1e 100644
+--- a/src/minisweagent/config/mini_textbased.yaml
++++ b/src/minisweagent/config/mini_textbased.yaml
+@@ -22,7 +22,7 @@ agent:
+ 
+     ## Recommended Workflow
+ 
+-    This workflows should be done step-by-step so that you can iterate on your changes and any possible problems.
++    This workflow should be done step-by-step so that you can iterate on your changes and any possible problems.
+ 
+     1. Analyze the codebase by finding and reading relevant files
+     2. Create a script to reproduce the issue

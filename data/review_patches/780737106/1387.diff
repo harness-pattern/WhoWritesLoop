@@ -1,0 +1,13 @@
+diff --git a/sweagent/run/run_single.py b/sweagent/run/run_single.py
+index 1c3209ad1..1d56f59a5 100644
+--- a/sweagent/run/run_single.py
++++ b/sweagent/run/run_single.py
+@@ -149,7 +149,7 @@ def __init__(
+         self.agent = agent
+         self.output_dir = output_dir
+         self._hooks = []
+-        if actions is not None:
++        if actions is None:
+             actions = RunSingleActionConfig()
+         self.actions = actions
+         self._chooks = CombinedRunHooks()

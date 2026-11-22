@@ -1,0 +1,398 @@
+diff --git a/.changeset/agent-controller-run-options.md b/.changeset/agent-controller-run-options.md
+new file mode 100644
+index 000000000000..ba540c2e0be1
+--- /dev/null
++++ b/.changeset/agent-controller-run-options.md
+@@ -0,0 +1,9 @@
++---
++'@mastra/core': patch
++---
++
++Add `runOptions` to `AgentControllerConfig`, so a host can set the loop controls on controller-driven runs.
++
++`AgentController` builds its own `agent.stream()` options and previously exposed no way to extend them, pinning every run to `maxSteps: 1000` and dropping `stopWhen`, `prepareStep`, `providerOptions`, `modelSettings`, `toolCallConcurrency`, and the step callbacks. Agents that depend on per-call loop control could not be driven through a session.
++
++`runOptions` accepts a static object or a per-request factory, and applies to the initial stream and every resume. Options carrying run identity — `memory`, `abortSignal`, `requestContext`, `toolsets`, `activeTools`, `instructions`, `outputWriter`, `requireToolApproval` — stay controller-owned and cannot be overridden. Host `providerOptions` are now merged with, rather than replaced by, the Anthropic server-side fallback.
+diff --git a/packages/core/src/agent-controller/__tests__/run-engine-abort-deadline.test.ts b/packages/core/src/agent-controller/__tests__/run-engine-abort-deadline.test.ts
+index b48e01c6d9a2..b484b5e0d128 100644
+--- a/packages/core/src/agent-controller/__tests__/run-engine-abort-deadline.test.ts
++++ b/packages/core/src/agent-controller/__tests__/run-engine-abort-deadline.test.ts
+@@ -35,7 +35,7 @@ function createHarness() {
+       throw new Error('subscribeToThread is not used by these tests');
+     },
+     buildStreamOptions: async () => ({}),
+-    buildSharedRunOptions: () => ({}),
++    buildSharedRunOptions: async () => ({}),
+     buildToolsets: async () => ({}),
+     buildRequestContext: async requestContext => requestContext ?? new RequestContext(),
+     persistTokenUsage: vi.fn(async () => {}),
+diff --git a/packages/core/src/agent-controller/__tests__/run-engine-db-message.test.ts b/packages/core/src/agent-controller/__tests__/run-engine-db-message.test.ts
+index c1834281cc47..407da7e14c3b 100644
+--- a/packages/core/src/agent-controller/__tests__/run-engine-db-message.test.ts
++++ b/packages/core/src/agent-controller/__tests__/run-engine-db-message.test.ts
+@@ -45,7 +45,7 @@ function createHarness() {
+       throw new Error('subscribeToThread is not used by these stream-folding tests');
+     },
+     buildStreamOptions: async () => ({}),
+-    buildSharedRunOptions: () => ({}),
++    buildSharedRunOptions: async () => ({}),
+     buildToolsets: async () => ({}),
+     buildRequestContext: async requestContext => requestContext ?? new RequestContext(),
+     persistTokenUsage: vi.fn(async () => {}),
+diff --git a/packages/core/src/agent-controller/agent-controller.ts b/packages/core/src/agent-controller/agent-controller.ts
+index 8016d44d7381..cf26901d1da9 100644
+--- a/packages/core/src/agent-controller/agent-controller.ts
++++ b/packages/core/src/agent-controller/agent-controller.ts
+@@ -30,6 +30,7 @@ import {
+   taskUpdateTool,
+   taskWriteTool,
+ } from './tools';
++import { AGENT_CONTROLLER_RUN_OPTION_KEYS } from './types';
+ import type {
+   AvailableModel,
+   IntervalHandler,
+@@ -37,6 +38,7 @@ import type {
+   AgentControllerMode,
+   AgentControllerRequestContext,
+   AgentControllerRequestStateUpdater,
++  AgentControllerRunOptions,
+   AgentControllerSessionCreatedListener,
+   AgentControllerSessionCreatedOptions,
+   AgentControllerSessionDeletedListener,
+@@ -403,7 +405,7 @@ export class AgentController<TState = {}> {
+       subscribeToThread: ({ resourceId, threadId }) =>
+         this.getCurrentAgent(session).subscribeToThread({ resourceId, threadId }),
+       buildStreamOptions: input => this.buildAgentMessageStreamOptions({ session, ...input }),
+-      buildSharedRunOptions: () => this.buildSharedRunOptions(session),
++      buildSharedRunOptions: requestContext => this.buildSharedRunOptions(session, requestContext),
+       buildToolsets: requestContext => this.buildToolsets(session, requestContext),
+       buildRequestContext: requestContext => this.buildRequestContext(session, requestContext),
+       persistTokenUsage: () => this.persistTokenUsage(session),
+@@ -1850,7 +1852,7 @@ export class AgentController<TState = {}> {
+     }
+ 
+     const streamOptions: Record<string, unknown> = {
+-      ...this.buildSharedRunOptions(session),
++      ...(await this.buildSharedRunOptions(session, requestContext)),
+       memory: { thread: session.thread.getId(), resource: session.identity.getResourceId() },
+       abortSignal: session.run.ensureAbortController().signal,
+       requestContext,
+@@ -1900,7 +1902,10 @@ export class AgentController<TState = {}> {
+    * missing `maxSteps` on resume silently caps the resumed run at the agent's
+    * small default and ends it mid-task (see {@link HARNESS_MAX_STEPS}).
+    */
+-  private buildSharedRunOptions(session: Session<TState>): Record<string, unknown> {
++  private async buildSharedRunOptions(
++    session: Session<TState>,
++    requestContext?: RequestContext,
++  ): Promise<Record<string, unknown>> {
+     const isYolo = (session.state.get() as Record<string, unknown>).yolo === true;
+     // Channel sessions on adapters that can't render approval buttons must
+     // auto-approve tools — a required approval would park the run forever on
+@@ -1910,19 +1915,50 @@ export class AgentController<TState = {}> {
+     const shared: Record<string, unknown> = {
+       maxSteps: CONTROLLER_MAX_STEPS,
+       savePerStep: false,
+-      requireToolApproval: !isYolo && !channelAutoApprove,
+     };
+ 
++    // Host-supplied loop controls override the defaults above. Copied key by
++    // key so an untyped caller cannot reach past the allowlist into a
++    // controller-owned option such as `abortSignal` or `memory`.
++    const configured = await this.resolveRunOptions(requestContext);
++    for (const key of AGENT_CONTROLLER_RUN_OPTION_KEYS) {
++      const value = configured[key];
++      if (value !== undefined) {
++        shared[key] = value;
++      }
++    }
++
++    // Controller-owned: a host cannot opt a session out of its approval gate,
++    // which is resolved from session state and the channel adapter.
++    shared.requireToolApproval = !isYolo && !channelAutoApprove;
++
+     // Auto-enable Anthropic server-side fallbacks for fable-5 so a classifier
+     // block is transparently retried on the fallback model instead of failing.
++    // Merged into any host-supplied provider options rather than replacing
++    // them, so the fallback does not silently drop e.g. prompt caching.
+     const fableFallback = buildFableFallbackProviderOptions(session.model.get());
+     if (fableFallback) {
+-      shared.providerOptions = { anthropic: { ...fableFallback.anthropic } };
++      const hostProviderOptions = (configured.providerOptions ?? {}) as Record<string, Record<string, unknown>>;
++      shared.providerOptions = {
++        ...hostProviderOptions,
++        anthropic: { ...(hostProviderOptions.anthropic ?? {}), ...fableFallback.anthropic },
++      };
+     }
+ 
+     return shared;
+   }
+ 
++  /**
++   * Resolve the host's configured run options, supporting both a static object
++   * and a per-request factory. Returns an empty object when unconfigured.
++   */
++  private async resolveRunOptions(requestContext?: RequestContext): Promise<AgentControllerRunOptions> {
++    const configured = this.config.runOptions;
++    if (!configured) return {};
++    if (typeof configured !== 'function') return configured;
++    return await configured({ requestContext: requestContext ?? new RequestContext(), mastra: this.getMastra() });
++  }
++
+   /**
+    * Persist a system-reminder message for a thread (host-owned storage). Throws
+    * when no storage is configured — the Session guards the no-thread case before
+diff --git a/packages/core/src/agent-controller/index.ts b/packages/core/src/agent-controller/index.ts
+index d1c24ce11a3e..5200520986c2 100644
+--- a/packages/core/src/agent-controller/index.ts
++++ b/packages/core/src/agent-controller/index.ts
+@@ -18,7 +18,7 @@ export {
+   taskUpdateTool,
+   taskWriteTool,
+ } from './tools';
+-export { defaultDisplayState, defaultOMProgressState } from './types';
++export { AGENT_CONTROLLER_RUN_OPTION_KEYS, defaultDisplayState, defaultOMProgressState } from './types';
+ export type {
+   ActiveSubagentState,
+   ActiveToolState,
+@@ -36,6 +36,7 @@ export type {
+   AgentControllerRequestState,
+   AgentControllerRequestStateUpdater,
+   AgentControllerRequestStateUpdateResult,
++  AgentControllerRunOptions,
+   AgentControllerSessionDeletedListener,
+   AgentControllerStateSchema,
+   AgentControllerSubagent,
+diff --git a/packages/core/src/agent-controller/run-options.test.ts b/packages/core/src/agent-controller/run-options.test.ts
+new file mode 100644
+index 000000000000..bed91bc18bba
+--- /dev/null
++++ b/packages/core/src/agent-controller/run-options.test.ts
+@@ -0,0 +1,103 @@
++import { describe, expect, it } from 'vitest';
++import { RequestContext } from '../request-context';
++import { createTestAgent, createTestSession } from './test-utils';
++import type { AgentControllerRunOptions } from './types';
++
++/**
++ * `buildSharedRunOptions` is host-owned machinery reached through the session,
++ * and is the single place both the initial stream and every resume read their
++ * run budget from.
++ */
++async function sharedRunOptions(runOptions?: AgentControllerRunOptions, requestContext?: RequestContext) {
++  const { session } = await createTestSession(runOptions ? { runOptions } : {});
++  return await session.machinery.buildSharedRunOptions(requestContext);
++}
++
++describe('AgentController run options', () => {
++  it('keeps the controller defaults when no run options are configured', async () => {
++    const options = await sharedRunOptions();
++
++    expect(options.maxSteps).toBe(1000);
++    expect(options.savePerStep).toBe(false);
++    expect(options.requireToolApproval).toBe(true);
++  });
++
++  it('lets a host override the loop controls it owns', async () => {
++    const stopWhen = () => true;
++    const prepareStep = () => ({ activeTools: ['read'] });
++
++    const options = await sharedRunOptions({
++      maxSteps: 12,
++      stopWhen,
++      prepareStep,
++      savePerStep: true,
++      toolCallConcurrency: 4,
++      modelSettings: { temperature: 0 },
++      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
++    } as AgentControllerRunOptions);
++
++    expect(options.maxSteps).toBe(12);
++    expect(options.stopWhen).toBe(stopWhen);
++    expect(options.prepareStep).toBe(prepareStep);
++    expect(options.savePerStep).toBe(true);
++    expect(options.toolCallConcurrency).toBe(4);
++    expect(options.modelSettings).toEqual({ temperature: 0 });
++    expect(options.providerOptions).toEqual({ anthropic: { cacheControl: { type: 'ephemeral' } } });
++  });
++
++  it('resolves a per-request factory against the run request context', async () => {
++    const requestContext = new RequestContext();
++    requestContext.set('budget', 5);
++
++    const { session } = await createTestSession({
++      runOptions: ({ requestContext: ctx }) => ({ maxSteps: (ctx.get('budget') as number) ?? 1 }),
++    });
++
++    const options = await session.machinery.buildSharedRunOptions(requestContext);
++
++    expect(options.maxSteps).toBe(5);
++  });
++
++  it('does not let run options reach a controller-owned key', async () => {
++    const abortSignal = new AbortController().signal;
++
++    const options = await sharedRunOptions({
++      maxSteps: 7,
++      // A controller-owned option supplied by an untyped caller must be ignored:
++      // a run whose abort signal or thread binding came from outside the session
++      // could not be cancelled or persisted correctly.
++      abortSignal,
++      memory: { thread: 'spoofed', resource: 'spoofed' },
++      requireToolApproval: false,
++      toolsets: { spoofed: {} },
++    } as unknown as AgentControllerRunOptions);
++
++    expect(options.maxSteps).toBe(7);
++    expect(options.abortSignal).toBeUndefined();
++    expect(options.memory).toBeUndefined();
++    expect(options.toolsets).toBeUndefined();
++    expect(options.requireToolApproval).toBe(true);
++  });
++
++  it('merges host provider options with the fable server-side fallback', async () => {
++    const { session } = await createTestSession({
++      agent: createTestAgent({ model: 'anthropic/claude-fable-5' }),
++      runOptions: {
++        providerOptions: {
++          anthropic: { cacheControl: { type: 'ephemeral' } },
++          openai: { store: false },
++        },
++      } as AgentControllerRunOptions,
++    });
++    session.model.set({ modelId: 'anthropic/claude-fable-5' });
++
++    const options = (await session.machinery.buildSharedRunOptions()) as {
++      providerOptions: { anthropic: Record<string, unknown>; openai: Record<string, unknown> };
++    };
++
++    // The fallback is added without dropping the host's own provider options.
++    expect(options.providerOptions.anthropic.fallbacks).toBeDefined();
++    expect(options.providerOptions.anthropic.cacheControl).toEqual({ type: 'ephemeral' });
++    expect(options.providerOptions.openai).toEqual({ store: false });
++  });
++});
+diff --git a/packages/core/src/agent-controller/session.ts b/packages/core/src/agent-controller/session.ts
+index e3e54632c7a7..b19ebea30d2e 100644
+--- a/packages/core/src/agent-controller/session.ts
++++ b/packages/core/src/agent-controller/session.ts
+@@ -272,8 +272,8 @@ export interface SessionMachinery {
+     tracingContext?: TracingContext;
+     tracingOptions?: TracingOptions;
+   }): Promise<Record<string, unknown>>;
+-  /** The run budget every initial stream and resume must carry (maxSteps, provider fallbacks, …). */
+-  buildSharedRunOptions(): Record<string, unknown>;
++  /** The run budget every initial stream and resume must carry (maxSteps, host run options, provider fallbacks, …). */
++  buildSharedRunOptions(requestContext?: RequestContext): Promise<Record<string, unknown>>;
+   /** Resolve the toolset (built-in controller  tools + user/subagent tools) for a run. */
+   buildToolsets(requestContext: RequestContext): Promise<ToolsetsInput>;
+   /** Resolve the effective request context for a run, layering controller defaults. */
+@@ -3874,7 +3874,7 @@ export class Session<TState = unknown> {
+ 
+     try {
+       const resourceId = this.identity.getResourceId();
+-      const sharedOptions = this.machinery.buildSharedRunOptions();
++      const sharedOptions = await this.machinery.buildSharedRunOptions(requestContext);
+       // Interactive builtins suspend to collect user input, not for approval.
+       // The resume data is the user's answer (a bare string), which the approval
+       // re-check would reject because it cannot carry an `{ approved }` field.
+diff --git a/packages/core/src/agent-controller/types.ts b/packages/core/src/agent-controller/types.ts
+index afab61d3f10f..6fa63b147215 100644
+--- a/packages/core/src/agent-controller/types.ts
++++ b/packages/core/src/agent-controller/types.ts
+@@ -1,4 +1,5 @@
+ import type { Agent } from '../agent';
++import type { AgentExecutionOptionsBase } from '../agent/agent.types';
+ import type { MastraDBMessage } from '../agent/message-list/state/types';
+ import type { AgentInstructions, ToolsInput } from '../agent/types';
+ import type { MastraBrowser } from '../browser/browser';
+@@ -240,6 +241,48 @@ export interface AgentControllerSessionCreatedOptions {
+ /** Process-local listener notified after AgentController tears down a live session. */
+ export type AgentControllerSessionDeletedListener<TState = {}> = (session: Session<TState>) => void | Promise<void>;
+ 
++/**
++ * The subset of agent execution options a host may set on controller-driven
++ * runs. Derived from {@link AgentExecutionOptionsBase} so the two stay in step.
++ *
++ * Options that carry run identity are deliberately absent: `memory`,
++ * `abortSignal`, `requestContext`, `toolsets`, `activeTools`, `instructions`,
++ * `outputWriter`, and `requireToolApproval` remain controller-owned.
++ */
++export type AgentControllerRunOptions = Pick<
++  AgentExecutionOptionsBase<unknown>,
++  | 'maxSteps'
++  | 'stopWhen'
++  | 'prepareStep'
++  | 'providerOptions'
++  | 'modelSettings'
++  | 'toolCallConcurrency'
++  | 'savePerStep'
++  | 'onStepFinish'
++  | 'onChunk'
++  | 'onFinish'
++  | 'onError'
++>;
++
++/**
++ * Keys of {@link AgentControllerRunOptions}, used to copy host-supplied run
++ * options onto the shared run options without letting an untyped caller reach
++ * a controller-owned key.
++ */
++export const AGENT_CONTROLLER_RUN_OPTION_KEYS = [
++  'maxSteps',
++  'stopWhen',
++  'prepareStep',
++  'providerOptions',
++  'modelSettings',
++  'toolCallConcurrency',
++  'savePerStep',
++  'onStepFinish',
++  'onChunk',
++  'onFinish',
++  'onError',
++] as const satisfies readonly (keyof AgentControllerRunOptions)[];
++
+ export interface AgentControllerConfig<TState = {}> {
+   /** Unique identifier for this controller instance */
+   id: string;
+@@ -286,6 +329,40 @@ export interface AgentControllerConfig<TState = {}> {
+ 
+   instructions?: string;
+ 
++  /**
++   * Loop controls applied to every run the controller drives — the initial
++   * stream and every resume.
++   *
++   * The controller supplies its own defaults (`maxSteps`,
++   * `savePerStep`) and owns the options that carry run identity: `memory`,
++   * `abortSignal`, `requestContext`, `toolsets`, `activeTools`,
++   * `instructions`, `outputWriter`, and `requireToolApproval`. Those cannot be
++   * overridden here, because a run whose abort signal or thread binding came
++   * from outside the session could not be cancelled or persisted correctly.
++   *
++   * Everything else is the host's to set. Without this, an agent whose
++   * behavior depends on per-call loop control — a bounded step budget, a
++   * domain `stopWhen`, per-step tool narrowing via `prepareStep`, provider
++   * options such as prompt caching — cannot be driven through a session at
++   * all, since `maxSteps` would otherwise be pinned to the controller's
++   * effectively unbounded default.
++   *
++   * `providerOptions` is merged with, rather than replaced by, any
++   * controller-supplied provider fallback.
++   *
++   * @example
++   * ```ts
++   * new AgentController({
++   *   runOptions: {
++   *     maxSteps: 12,
++   *     stopWhen: ({ steps }) => hasCheckedAnswer(steps),
++   *     providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
++   *   },
++   * })
++   * ```
++   */
++  runOptions?: DynamicArgument<AgentControllerRunOptions>;
++
+   /**
+    * Tools available to all agents across all modes.
+    * Can be a static tools object or a dynamic function that receives

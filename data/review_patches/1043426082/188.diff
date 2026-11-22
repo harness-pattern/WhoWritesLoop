@@ -1,0 +1,728 @@
+diff --git a/.github/prompts/update-documentation.md b/.github/prompts/update-documentation.md
+new file mode 100644
+index 00000000000..bb4e4146736
+--- /dev/null
++++ b/.github/prompts/update-documentation.md
+@@ -0,0 +1,109 @@
++# Documentation Update Prompt
++
++You are a world-class documentation writer tasked with keeping the OpenHands Agent SDK documentation accurate and up-to-date. Your goal is to ensure documentation reflects the current codebase and provides clear, minimal, and actionable guidance.
++
++## Core Objectives
++
++1. **Accuracy**: Ensure all documentation matches the current codebase
++2. **Completeness**: Include all available tools and core components
++3. **Clarity**: Keep examples simple, working, and easy to understand
++4. **Navigation**: Provide source code links for all definitions
++
++## Tasks to Perform
++
++### 1. Codebase Analysis
++
++- Scan `examples/` for available examples
++- Scan `openhands/tools/` for all available runtime tools
++- Check `openhands/sdk/tool/builtins/` for built-in tools
++- Identify any new tools or removed tools since last update
++
++### 2. Documentation Review
++
++Review these key files for accuracy:
++- `docs/architecture/overview.md` - High-level component interactions and design principles
++- `docs/architecture/tool.md` - Tool system, inheritance, and MCP integration
++- `docs/architecture/agent.md` - Agent architecture and execution flow
++- `docs/architecture/llm.md` - LLM integration and capabilities
++- `docs/architecture/conversation.md` - Conversation interface and persistence
++- `docs/getting-started.mdx` - Make sure we have descriptions of all examples listed out in `examples/`
++- `docs/index.md` - Overview and navigation
++- `README.md` - Root project documentation
++
++### 3. Content Updates Required
++
++#### Architecture Diagrams
++
++- Keep mermaid diagrams SIMPLE and READABLE across all docs/architecture/ files
++- Focus on core components and relationships, not every possible class
++- Include all current runtime tools: BashTool, FileEditorTool, TaskTrackerTool, etc.
++- Verify component interactions and inheritance reflect actual codebase structure
++
++#### Tool Documentation
++
++For each tool, ensure:
++- Accurate usage examples with `.create()` method
++- Working code snippets (test them!)
++- Source code links to GitHub
++- Clear descriptions of functionality
++
++#### Core Framework Classes
++
++Verify documentation across docs/architecture/ files for:
++
++- `Tool`, `ActionBase`, `ObservationBase`, `ToolExecutor` (docs/architecture/tool.md)
++- `Agent`, `AgentBase`, system prompts (docs/architecture/agent.md)
++- `LLM`, message types, provider support (docs/architecture/llm.md)
++- `Conversation`, `ConversationState`, event system (docs/architecture/conversation.md)
++- All built-in tools: `FinishTool`, `ThinkTool`
++- All runtime tools: `BashTool`, `FileEditorTool`, `TaskTrackerTool`
++
++### 4. Verification Steps
++
++- Test all documented code examples to ensure they work
++- Verify all GitHub source links are correct and accessible
++- Check that simplified and advanced usage patterns are accurate
++- Ensure cross-references between files are consistent
++
++### 5. Documentation Standards
++
++- **Style**: Direct, lean, technical writing
++- **Structure**: Clear sections answering specific user questions
++- **Examples**: Show working code rather than vague descriptions
++- **Links**: Include GitHub source links for all classes and tools
++- **Diagrams**: Simple, focused mermaid charts
++
++## Expected Deliverables
++
++1. Updated documentation files with current tool listings
++2. Verified working code examples
++3. Simplified and accurate architecture diagrams
++4. Complete source code links for all definitions
++5. Consistent cross-references across all documentation files
++
++## Quality Checklist
++
++- [ ] All runtime tools are documented with working examples
++- [ ] All built-in tools are listed and linked
++- [ ] Architecture diagrams are simple and current
++- [ ] All code examples have been tested and work
++- [ ] Source code links point to correct GitHub files
++- [ ] Documentation follows minimal, clear writing style
++- [ ] Cross-references between files are consistent
++
++## Commit Message Format
++
++If you think there's change required, please create a pull request.
++
++```
++Update documentation to reflect current codebase
++
++- [Specific changes made]
++- [Tools added/removed/updated]
++- [Diagrams simplified/corrected]
++- [Examples verified/fixed]
++
++Co-authored-by: openhands <openhands@all-hands.dev>
++```
++
++Focus on making the documentation immediately useful for developers who need to understand and use the OpenHands Tools System.
+diff --git a/.github/workflows/oh-update-documentation.yml b/.github/workflows/oh-update-documentation.yml
+new file mode 100644
+index 00000000000..67c70d7339c
+--- /dev/null
++++ b/.github/workflows/oh-update-documentation.yml
+@@ -0,0 +1,30 @@
++name: Update Documentation (by OpenHands)
++
++on:
++  schedule:
++    # Run every 7 days at 2 AM UTC on Sundays
++    - cron: '0 2 * * 0'
++  workflow_dispatch: # Allow manual triggering
++
++jobs:
++  update-docs:
++    runs-on: ubuntu-latest
++    permissions:
++      contents: write
++      pull-requests: write
++    
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Update Documentation with OpenHands
++        uses: All-Hands-AI/openhands-github-action@v1
++        with:
++          prompt: .github/prompts/update-documentation.md
++          repository: ${{ github.repository }}
++          selected-branch: main
++          base-url: https://app.all-hands.dev
++          poll: "true"
++          timeout-seconds: 1800
++          poll-interval-seconds: 30
++          github-token: ${{ secrets.GITHUB_TOKEN }}
++          openhands-api-key: ${{ secrets.OPENHANDS_API_KEY }}
+diff --git a/.openhands/microagents/repo.md b/.openhands/microagents/repo.md
+index 6e9dd5da63c..2e053b75e86 100644
+--- a/.openhands/microagents/repo.md
++++ b/.openhands/microagents/repo.md
+@@ -104,7 +104,7 @@ When reviewing code, provide constructive feedback:
+ This repo has two python packages, with unit tests specifically written for each package.
+ ```
+ ├── Makefile
+-├── README.md
++├── README.mdx
+ ├── examples
+ ├── openhands
+ │   ├── __init__.py
+diff --git a/README.md b/README.md
+index 1e82b7068f6..6f8ded25387 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,8 @@
++---
++title: OpenHands Agent SDK
++description: A clean, modular SDK for building AI agents with OpenHands. Complete architectural refactor emphasizing simplicity, maintainability, and developer experience.
++---
++
+ # OpenHands Agent SDK
+ 
+ A clean, modular SDK for building AI agents with OpenHands. This project represents a complete architectural refactor from OpenHands V0, emphasizing simplicity, maintainability, and developer experience.
+@@ -264,6 +269,21 @@ context = AgentContext(
+ )
+ ```
+ 
++## Documentation
++
++Comprehensive architecture documentation is available in the [`docs/architecture/`](./docs/architecture/) folder:
++
++- **[Overview](./docs/architecture/overview.mdx)** - High-level component interactions and design principles
++- **[Tool System](./docs/architecture/tool.mdx)** - Tool framework, built-ins, runtime tools, and MCP integration
++- **[Agent Architecture](./docs/architecture/agent.mdx)** - Agent execution flow, system prompts, and context management
++- **[LLM Integration](./docs/architecture/llm.mdx)** - Provider support, message types, and advanced features
++- **[Conversation System](./docs/architecture/conversation.mdx)** - State management, event system, and persistence
++
++Additional documentation:
++- **[Getting Started](./docs/getting-started.mdx)** - Step-by-step setup guide
++- **[Examples](./docs/examples.mdx)** - Code examples and use cases
++- **[MCP Integration](./docs/mcp.mdx)** - Model Context Protocol integration guide
++
+ ## Development Workflow
+ 
+ ### Environment Setup
+@@ -324,4 +344,4 @@ uv run pre-commit run --files path/to/file.py
+ 
+ # Run on all files
+ uv run pre-commit run --all-files
+-```
++```
+\ No newline at end of file
+diff --git a/docs/README.md b/docs/README.md
+deleted file mode 100644
+index 88d5662e57d..00000000000
+--- a/docs/README.md
++++ /dev/null
+@@ -1,34 +0,0 @@
+-# OpenHands Agent SDK (V1)
+-
+-A clean, modular SDK for building AI agents. This repository provides two Python packages:
+-
+-- openhands.sdk — core agent framework (agent, conversation, context, LLM, events, tools API)
+-- openhands.tools — production-ready tool implementations (Bash, File Editor, Task Tracker)
+-
+-Goals:
+-- Simple mental model: short, focused modules with clear responsibilities
+-- Zero magic: explicit configuration over implicit behavior
+-
+-Quick start
+-
+-```bash
+-# install deps
+-make build
+-
+-# run an example
+-uv run python examples/hello_world.py
+-
+-# run tests
+-uv run pytest
+-```
+-
+-Core concepts
+-- Agent: orchestrates LLM + tools to take actions
+-- Conversation: stateful driver for user <-> agent interaction
+-- Tools: strongly-typed actions + observations (input_schema/output_schema)
+-- LLM: thin adapter with registry for reuse across services
+-- Context: microagents and knowledge that condition the agent
+-
+-Navigation
+-- Use the left sidebar in the docs site to explore Getting Started, Architecture, Tools, MCP Integration, and Examples.
+-- For a deep dive into tool internals, see Tools System.
+diff --git a/docs/architecture.md b/docs/architecture.md
+deleted file mode 100644
+index 10562a98c99..00000000000
+--- a/docs/architecture.md
++++ /dev/null
+@@ -1,22 +0,0 @@
+-# Architecture Overview
+-
+-Packages
+-- openhands.sdk: agent, conversation, config, context, llm, tool, utils
+-- openhands.tools: concrete tools (bash, file editor, task tracker) and executors
+-
+-Design principles
+-- Keep functions short; minimize indentation depth
+-- Prefer data-structure design over branching
+-- Backward compatibility will not be kept; breakages will be documented
+-
+-Key modules
+-- Agent: composes LLM with tools to decide next actions
+-- Conversation: drives message flow, state, and callbacks
+-- LLM: typed messages and a registry for reuse
+-- Tool: typed action/observation schemas and executors
+-- Context: microagents and repo/knowledge ingestion
+-
+-Testing strategy
+-- Unit tests per package (openhands/sdk/tests, openhands/tools/tests)
+-- Integration tests under tests/
+-- Pre-commit runs ruff/pyright/pycodestyle
+diff --git a/docs/architecture/agent.mdx b/docs/architecture/agent.mdx
+new file mode 100644
+index 00000000000..5ce9657a868
+--- /dev/null
++++ b/docs/architecture/agent.mdx
+@@ -0,0 +1,306 @@
++---
++title: Agent Architecture
++description: Core orchestrator combining language models with tools to execute tasks. Manages reasoning loop, tool execution, and state transitions.
++---
++
++# Agent Architecture
++
++The Agent is the core orchestrator that combines language models with tools to execute tasks. It manages the reasoning loop, tool execution, and state transitions while maintaining conversation context.
++
++## Core Architecture
++
++```mermaid
++graph TB
++    Agent[Agent] --> LLM[LLM]
++    Agent --> Tools[Tools]
++    Agent --> Context[AgentContext]
++    Agent --> Prompts[System Prompts]
++    
++    Context --> Microagents[Microagents]
++    Context --> Knowledge[Knowledge Base]
++    Context --> Condenser[Context Condenser]
++    
++    Tools --> BuiltIn[Built-in Tools]
++    Tools --> Runtime[Runtime Tools]
++    Tools --> MCP[MCP Tools]
++    
++    Prompts --> SystemPrompt[system_prompt.j2]
++    Prompts --> Interactive[system_prompt_interactive.j2]
++    Prompts --> LongHorizon[system_prompt_long_horizon.j2]
++    
++    style Agent fill:#e1f5fe
++    style LLM fill:#fff3e0
++    style Tools fill:#e8f5e8
++    style Context fill:#f3e5f5
++```
++
++## Core Classes
++
++### AgentBase
++**Source**: [`openhands/sdk/agent/base.py`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/agent/base.py)
++
++Abstract base class defining the agent interface:
++
++```python
++from openhands.sdk.agent import AgentBase
++from openhands.sdk.llm import LLM
++from openhands.sdk.tool import Tool
++
++class MyAgent(AgentBase):
++    def step(self, state: ConversationState) -> ConversationState:
++        # Implementation logic
++        pass
++```
++
++**Key Properties**:
++- **Immutable**: All agent instances are frozen Pydantic models
++- **Serializable**: Full agent state can be saved and restored
++- **Type-safe**: Strict type checking with Pydantic validation
++
++### Agent
++**Source**: [`openhands/sdk/agent/agent.py`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/agent/agent.py)
++
++Main agent implementation with reasoning and tool execution capabilities.
++
++```python
++from openhands.sdk import Agent, LLM
++from openhands.tools import BashTool, FileEditorTool
++
++agent = Agent(
++    llm=llm,
++    tools=[
++        BashTool.create(),
++        FileEditorTool.create(),
++    ]
++)
++```
++
++## Agent Execution Flow
++
++### 1. **Message Processing**
++```mermaid
++sequenceDiagram
++    participant C as Conversation
++    participant A as Agent
++    participant L as LLM
++    participant T as Tools
++    
++    C->>A: step(state)
++    A->>A: Render system prompt
++    A->>L: Generate response
++    L->>A: Tool calls + reasoning
++    A->>T: Execute tool actions
++    T->>A: Tool observations
++    A->>C: Updated state
++```
++
++### 2. **Tool Integration**
++- **Action Generation**: LLM generates structured tool calls
++- **Validation**: Actions validated against tool schemas
++- **Execution**: Tools execute with proper error handling
++- **Observation**: Results integrated back into conversation
++
++### 3. **Context Management**
++- **System Prompts**: Dynamic prompt rendering with context
++- **Memory**: Conversation history and state persistence
++- **Condensation**: Context compression for long conversations
++
++## System Prompts
++
++**Source**: [`openhands/sdk/agent/prompts/`](https://github.com/All-Hands-AI/agent-sdk/tree/main/openhands/sdk/agent/prompts)
++
++### Available Prompt Templates
++
++#### system_prompt.j2
++**Source**: [`system_prompt.j2`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/agent/prompts/system_prompt.j2)
++
++Default system prompt with tool usage guidelines and reasoning framework.
++
++#### system_prompt_interactive.j2
++**Source**: [`system_prompt_interactive.j2`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/agent/prompts/system_prompt_interactive.j2)
++
++Optimized for interactive, conversational workflows.
++
++#### system_prompt_long_horizon.j2
++**Source**: [`system_prompt_long_horizon.j2`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/agent/prompts/system_prompt_long_horizon.j2)
++
++Designed for complex, multi-step tasks requiring planning.
++
++### Custom Prompts
++```python
++class MyAgent(Agent):
++    system_prompt_filename: str = "my_custom_prompt.j2"
++```
++
++Place custom prompts in `prompts/` directory alongside your agent class.
++
++## Agent Context
++
++**Source**: [`openhands/sdk/context/agent_context.py`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/context/agent_context.py)
++
++Provides additional capabilities beyond basic tool execution:
++
++### Microagents
++**Source**: [`openhands/sdk/context/microagents/`](https://github.com/All-Hands-AI/agent-sdk/tree/main/openhands/sdk/context/microagents)
++
++Specialized sub-agents for specific tasks:
++```python
++from openhands.sdk.context import AgentContext
++
++context = AgentContext(
++    microagents=["code_reviewer", "test_generator"]
++)
++
++agent = Agent(llm=llm, tools=tools, agent_context=context)
++```
++
++### Knowledge Integration
++- **Repository context**: Code understanding and navigation
++- **Document ingestion**: External knowledge sources
++- **Context condensation**: Intelligent memory management
++
++## Configuration
++
++### Basic Agent Setup
++```python
++from openhands.sdk import Agent, LLM
++from openhands.tools import BashTool, FileEditorTool
++from pydantic import SecretStr
++
++# Configure LLM
++llm = LLM(
++    model="anthropic/claude-sonnet-4-20250514",
++    api_key=SecretStr("your-api-key"),
++)
++
++# Create agent with tools
++agent = Agent(
++    llm=llm,
++    tools=[
++        BashTool.create(working_dir="/workspace"),
++        FileEditorTool.create(),
++    ]
++)
++```
++
++### Advanced Configuration
++```python
++from openhands.sdk.context import AgentContext
++from openhands.sdk.context.condenser import Condenser
++
++# Advanced context management
++context = AgentContext(
++    microagents=["code_reviewer"],
++    knowledge_base="/path/to/docs"
++)
++
++condenser = Condenser(max_tokens=8000)
++
++agent = Agent(
++    llm=llm,
++    tools=tools,
++    agent_context=context,
++    condenser=condenser,
++    cli_mode=False  # Disable CLI-specific behaviors
++)
++```
++
++## State Management
++
++### Immutable State
++All agent state is immutable - modifications create new instances:
++
++```python
++# State transitions create new objects
++new_state = agent.step(current_state)
++assert new_state is not current_state
++```
++
++### Serialization
++Full agent state can be serialized for persistence:
++
++```python
++# Save agent configuration
++agent_json = agent.model_dump_json()
++
++# Restore agent
++restored_agent = Agent.model_validate_json(agent_json)
++```
++
++## Error Handling
++
++### Tool Execution Errors
++- **Validation errors**: Invalid action parameters
++- **Execution errors**: Tool runtime failures  
++- **Timeout errors**: Long-running operations
++- **Permission errors**: Access restrictions
++
++### LLM Integration Errors
++- **API errors**: Network or service failures
++- **Rate limiting**: Request throttling
++- **Token limits**: Context size exceeded
++- **Parsing errors**: Invalid tool call format
++
++### Recovery Strategies
++```python
++try:
++    new_state = agent.step(state)
++except ValidationError as e:
++    # Handle invalid tool parameters
++    logger.error(f"Tool validation failed: {e}")
++except TimeoutError as e:
++    # Handle operation timeouts
++    logger.error(f"Operation timed out: {e}")
++```
++
++## Performance Considerations
++
++### Context Management
++- **Condensation**: Compress conversation history when approaching token limits
++- **Selective context**: Include only relevant conversation segments
++- **Tool result filtering**: Summarize large tool outputs
++
++### Tool Optimization
++- **Executor reuse**: Share executors across tool instances
++- **Lazy loading**: Initialize tools only when needed
++- **Resource pooling**: Manage connections and file handles
++
++### LLM Efficiency
++- **Prompt optimization**: Minimize unnecessary context
++- **Streaming responses**: Process partial results
++- **Caching**: Reuse responses for identical inputs
++
++## Custom Agent Development
++
++### Extending AgentBase
++```python
++from openhands.sdk.agent import AgentBase
++from openhands.sdk.conversation import ConversationState
++
++class SpecializedAgent(AgentBase):
++    def step(self, state: ConversationState) -> ConversationState:
++        # Custom reasoning logic
++        # Tool selection and execution
++        # State management
++        return updated_state
++    
++    @property
++    def prompt_dir(self) -> str:
++        # Custom prompt directory
++        return "/path/to/custom/prompts"
++```
++
++### Agent Composition
++```python
++# Combine multiple agents for complex workflows
++class WorkflowAgent(AgentBase):
++    planning_agent: Agent
++    execution_agent: Agent
++    review_agent: Agent
++    
++    def step(self, state: ConversationState) -> ConversationState:
++        # Multi-agent coordination logic
++        pass
++```
++
++The agent system provides a flexible foundation for building sophisticated AI agents while maintaining type safety, immutability, and clear separation of concerns.
+\ No newline at end of file
+diff --git a/docs/architecture/conversation.mdx b/docs/architecture/conversation.mdx
+new file mode 100644
+index 00000000000..cd1af3fae3d
+--- /dev/null
++++ b/docs/architecture/conversation.mdx
+@@ -0,0 +1,447 @@
++---
++title: Conversation System
++description: Message flow, state transitions, and event handling between users and agents. Stateful interface for interactive AI agent sessions.
++---
++
++# Conversation System
++
++The Conversation system manages message flow, state transitions, and event handling between users and agents. It provides a stateful interface for interactive AI agent sessions with support for callbacks, visualization, and persistence.
++
++## Core Architecture
++
++```mermaid
++graph TB
++    User[User] --> Conversation[Conversation]
++    Conversation --> Agent[Agent]
++    Conversation --> State[ConversationState]
++    Conversation --> Events[Event System]
++    Conversation --> Callbacks[Callbacks]
++    
++    State --> EventList[Event List]
++    State --> Flags[Status Flags]
++    State --> Lock[Thread Lock]
++    
++    Events --> MessageEvent[MessageEvent]
++    Events --> ActionEvent[ActionEvent]
++    Events --> ObservationEvent[ObservationEvent]
++    Events --> SystemEvent[SystemEvent]
++    
++    Callbacks --> Visualizer[Visualizer]
++    Callbacks --> Logger[Logger]
++    Callbacks --> Custom[Custom Callbacks]
++    
++    style Conversation fill:#e1f5fe
++    style State fill:#fff3e0
++    style Events fill:#e8f5e8
++    style Callbacks fill:#f3e5f5
++```
++
++## Core Classes
++
++### Conversation
++**Source**: [`openhands/sdk/conversation/conversation.py`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/conversation/conversation.py)
++
++Main conversation orchestrator that manages the interaction loop between users and agents.
++
++```python
++from openhands.sdk import Conversation, Agent, Message, TextContent
++
++conversation = Conversation(
++    agent=agent,
++    max_iteration_per_run=500,
++    visualize=True
++)
++
++# Send user message
++conversation.send_message(
++    Message(
++        role="user", 
++        content=[TextContent(text="Hello, help me with a task")]
++    )
++)
++
++# Run agent processing
++conversation.run()
++```
++
++**Key Features**:
++- **Stateful sessions**: Maintains conversation history and context
++- **Event-driven**: All interactions are captured as events
++- **Thread-safe**: Concurrent access protection with locks
++- **Extensible**: Custom callbacks for monitoring and integration
++
++### ConversationState
++**Source**: [`openhands/sdk/conversation/state.py`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/conversation/state.py)
++
++Immutable state container for conversation data with thread-safe access.
++
++```python
++from openhands.sdk.conversation import ConversationState
++
++# Thread-safe state access
++with conversation.state as state:
++    print(f"Events: {len(state.events)}")
++    print(f"Agent finished: {state.agent_finished}")
++```
++
++**State Properties**:
++- `id`: Unique conversation identifier
++- `events`: Chronological list of all conversation events
++- `agent_finished`: Whether agent has completed the task
++- `confirmation_mode`: User confirmation required for actions
++- `agent_paused`: Agent execution is paused
++- `activated_knowledge_microagents`: Active knowledge agents
++
++## Event System
++
++**Source**: [`openhands/sdk/event/`](https://github.com/All-Hands-AI/agent-sdk/tree/main/openhands/sdk/event)
++
++All conversation interactions are captured as typed events.
++
++### Event Types
++
++#### MessageEvent
++**Source**: [`MessageEvent`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/event/types.py)
++
++User or agent messages in the conversation.
++
++```python
++from openhands.sdk.event import MessageEvent
++from openhands.sdk.llm import Message, TextContent
++
++message_event = MessageEvent(
++    message=Message(
++        role="user",
++        content=[TextContent(text="Please help me")]
++    )
++)
++```
++
++#### ActionEvent
++**Source**: [`ActionEvent`](https://github.com/All-Hands-AI/agent-sdk/blob/main/openhands/sdk/event/types.py)
++
++Agent actions (tool calls) during execution.
++
++```python
++from openhands.sdk.event import ActionEvent
++from openhands.tools import BashAction
++
++action_event = ActionEvent(
++    action=BashAction(command="ls -la")
++)
++```
++
++#### ObservationEvent
++**Source**: [`ObservationEvent`](https://github.com/All

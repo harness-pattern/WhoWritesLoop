@@ -1,0 +1,301 @@
+diff --git a/packages/core/src/session/runner/llm.ts b/packages/core/src/session/runner/llm.ts
+index f3f64fe26613..84271c1f73de 100644
+--- a/packages/core/src/session/runner/llm.ts
++++ b/packages/core/src/session/runner/llm.ts
+@@ -23,6 +23,7 @@ import { SkillGuidance } from "../../skill/guidance"
+ import { ReferenceGuidance } from "../../reference/guidance"
+ import { McpGuidance } from "../../mcp/guidance"
+ import { ToolRegistry } from "../../tool/registry"
++import { ReadToolFileSystem } from "../../tool/read-filesystem"
+ import { ToolOutputStore } from "../../tool-output-store"
+ import { SessionContextEpoch } from "../context-epoch"
+ import { SessionCompaction } from "../compaction"
+@@ -99,6 +100,7 @@ const layer = Layer.effect(
+     const llm = yield* LLMClient.Service
+     const agents = yield* AgentV2.Service
+     const tools = yield* ToolRegistry.Service
++    const reader = yield* ReadToolFileSystem.Service
+     const models = yield* SessionRunnerModel.Service
+     const store = yield* SessionStore.Service
+     const location = yield* Location.Service
+@@ -208,13 +210,14 @@ const layer = Layer.effect(
+         ? undefined
+         : yield* tools.materialize({ permissions: agent.info?.permissions, model })
+       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
++      const messages = yield* toLLMMessages(context, model, reader)
+       const request = LLM.request({
+         model,
+         providerOptions: { openai: { promptCacheKey } },
+         system: [agent.info?.system ? agent.info.system : SessionRunnerSystemPrompt.provider(model), system.baseline]
+           .filter((part): part is string => part !== undefined && part.length > 0)
+           .map(SystemPart.make),
+-        messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
++        messages: [...messages, ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
+         tools: toolMaterialization?.definitions ?? [],
+         toolChoice: isLastStep ? "none" : undefined,
+       })
+@@ -444,5 +447,6 @@ export const node = makeLocationNode({
+     Config.node,
+     Snapshot.node,
+     Database.node,
++    ReadToolFileSystem.node,
+   ],
+ })
+diff --git a/packages/core/src/session/runner/to-llm-message.ts b/packages/core/src/session/runner/to-llm-message.ts
+index 8ddd7cce5c36..7451276e61bc 100644
+--- a/packages/core/src/session/runner/to-llm-message.ts
++++ b/packages/core/src/session/runner/to-llm-message.ts
+@@ -7,6 +7,10 @@ import {
+   type Model,
+   type ProviderMetadata,
+ } from "@opencode-ai/llm"
++import { Cause, Effect } from "effect"
++import { fileURLToPath } from "url"
++import { AbsolutePath, PositiveInt } from "../../schema"
++import { ReadToolFileSystem } from "../../tool/read-filesystem"
+ import { SessionMessage } from "../message"
+ import type { FileAttachment } from "../prompt"
+ 
+@@ -18,6 +22,71 @@ const media = (file: FileAttachment): ContentPart => ({
+   metadata: file.description === undefined ? undefined : { description: file.description },
+ })
+ 
++const fileContent = Effect.fn("toLLMMessage.fileContent")(function* (
++  file: FileAttachment,
++  reader: ReadToolFileSystem.Interface,
++) {
++  if (file.mime !== "text/plain" && file.mime !== "application/x-directory") return [media(file)]
++  if (file.uri.startsWith("data:text/plain")) return [{ type: "text" as const, text: decodeDataUrl(file.uri) }]
++  if (!URL.canParse(file.uri)) return []
++  const url = new URL(file.uri)
++  if (url.protocol !== "file:") return []
++  const filepath = fileURLToPath(url)
++  const path = AbsolutePath.make(filepath)
++  if (file.mime === "application/x-directory") {
++    const result = yield* reader.list(path, page(url)).pipe(Effect.exit)
++    if (result._tag === "Failure")
++      return [{ type: "text" as const, text: readError(filepath, Cause.squash(result.cause)) }]
++    return [{ type: "text" as const, text: directoryText(filepath, result.value) }]
++  }
++  const result = yield* reader.read(path, filepath, page(url)).pipe(Effect.exit)
++  if (result._tag === "Failure")
++    return [{ type: "text" as const, text: readError(filepath, Cause.squash(result.cause)) }]
++  if ("type" in result.value && result.value.type === "text-page")
++    return [{ type: "text" as const, text: readText(filepath, result.value.content) }]
++  if ("encoding" in result.value && result.value.encoding === "utf8")
++    return [{ type: "text" as const, text: readText(filepath, result.value.content) }]
++  return []
++})
++
++const page = (url: URL): ReadToolFileSystem.PageInput => {
++  const start = positiveInt(url.searchParams.get("start"))
++  const end = positiveInt(url.searchParams.get("end"))
++  return {
++    ...(start === undefined ? {} : { offset: start }),
++    ...(start === undefined || end === undefined || end < start ? {} : { limit: PositiveInt.make(end - start + 1) }),
++  }
++}
++
++const positiveInt = (value: string | null) => {
++  if (value === null) return undefined
++  const parsed = Number.parseInt(value, 10)
++  return Number.isInteger(parsed) && parsed > 0 ? PositiveInt.make(parsed) : undefined
++}
++
++const readText = (filepath: string, content: string) =>
++  `Called the Read tool with the following input: ${JSON.stringify({ path: filepath })}\n\n${content}`
++
++const directoryText = (filepath: string, page: ReadToolFileSystem.ListPage) =>
++  [
++    `Called the Read tool with the following input: ${JSON.stringify({ path: filepath })}`,
++    "",
++    ...page.entries.map((entry) => `${entry.type}: ${entry.path}`),
++    ...(page.truncated ? [`... (directory listing truncated, next offset: ${page.next})`] : []),
++  ].join("\n")
++
++const readError = (filepath: string, error: unknown) =>
++  `Read tool failed to read ${filepath} with the following error: ${error instanceof Error ? error.message : String(error)}`
++
++const decodeDataUrl = (dataUrl: string) => {
++  const index = dataUrl.indexOf(",")
++  if (index === -1) return ""
++  const data = dataUrl.slice(index + 1)
++  return dataUrl.slice(0, index).toLowerCase().endsWith(";base64")
++    ? Buffer.from(data, "base64").toString("utf8")
++    : decodeURIComponent(data)
++}
++
+ const toolInput = (tool: SessionMessage.AssistantTool) => {
+   if (tool.state.status !== "pending") return tool.state.input
+   try {
+@@ -112,23 +181,31 @@ const assistant = (message: SessionMessage.Assistant, model: Model) => {
+   ]
+ }
+ 
+-function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] {
++const toLLMMessage = Effect.fn("toLLMMessage")(function* (
++  message: SessionMessage.Message,
++  model: Model,
++  reader: ReadToolFileSystem.Interface,
++) {
+   switch (message.type) {
+     case "agent-switched":
+     case "model-switched":
+       return []
+-    case "user":
++    case "user": {
++      const files = yield* Effect.forEach(message.files ?? [], (file) => fileContent(file, reader), {
++        concurrency: "unbounded",
++      })
+       return [
+         Message.make({
+           id: message.id,
+           role: "user",
+-          content: [{ type: "text", text: message.text }, ...(message.files ?? []).map(media)],
++          content: [{ type: "text", text: message.text }, ...files.flat()],
+           metadata: {
+             ...message.metadata,
+             ...(message.agents?.length ? { agents: message.agents } : {}),
+           },
+         }),
+       ]
++    }
+     case "synthetic":
+       return [Message.make({ id: message.id, role: "user", content: message.text })]
+     case "skill":
+@@ -166,8 +243,15 @@ ${message.recent}
+         }),
+       ]
+   }
+-}
++})
+ 
+ /** Translate projected V2 Session history into canonical @opencode-ai/llm context. */
+-export const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
+-  messages.flatMap((message) => toLLMMessage(message, model))
++export const toLLMMessages = (
++  messages: readonly SessionMessage.Message[],
++  model: Model,
++  reader: ReadToolFileSystem.Interface,
++) =>
++  Effect.map(
++    Effect.forEach(messages, (message) => toLLMMessage(message, model, reader)),
++    (messages) => messages.flat(),
++  )
+diff --git a/packages/core/test/session-instructions.test.ts b/packages/core/test/session-instructions.test.ts
+index b9e401be4bc6..8e5e463304ec 100644
+--- a/packages/core/test/session-instructions.test.ts
++++ b/packages/core/test/session-instructions.test.ts
+@@ -28,7 +28,7 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
+ import { SessionProjector } from "@opencode-ai/core/session/projector"
+ import { SessionStore } from "@opencode-ai/core/session/store"
+ import { SessionV2 } from "@opencode-ai/core/session"
+-import { toLLMMessages } from "@opencode-ai/core/session/runner/to-llm-message"
++import { toLLMMessages as lowerLLMMessages } from "@opencode-ai/core/session/runner/to-llm-message"
+ import { ToolHooks } from "@opencode-ai/core/tool/hooks"
+ import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
+ import { ToolRegistry } from "@opencode-ai/core/tool/registry"
+@@ -36,6 +36,14 @@ import { tempLocationLayer } from "./fixture/location"
+ import { testEffect } from "./lib/effect"
+ import { settleTool, testModel } from "./lib/tool"
+ 
++const noopReader = ReadToolFileSystem.Service.of({
++  inspect: () => Effect.die("unused"),
++  read: () => Effect.die("unused"),
++  list: () => Effect.die("unused"),
++})
++const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
++  Effect.runSync(lowerLLMMessages(messages, model, noopReader))
++
+ const projects = Layer.succeed(
+   ProjectV2.Service,
+   ProjectV2.Service.of({
+diff --git a/packages/core/test/session-runner-message.test.ts b/packages/core/test/session-runner-message.test.ts
+index 5798b665a86a..b90821cdd387 100644
+--- a/packages/core/test/session-runner-message.test.ts
++++ b/packages/core/test/session-runner-message.test.ts
+@@ -1,17 +1,44 @@
+ import { describe, expect, test } from "bun:test"
++import { Effect } from "effect"
+ import { Message, Model } from "@opencode-ai/llm"
+ import * as OpenAIChat from "@opencode-ai/llm/protocols/openai-chat"
+ import { ModelV2 } from "@opencode-ai/core/model"
+ import { ProviderV2 } from "@opencode-ai/core/provider"
+ import { SessionMessage } from "@opencode-ai/core/session/message"
+ import { AgentAttachment, FileAttachment } from "@opencode-ai/core/session/prompt"
+-import { toLLMMessages } from "@opencode-ai/core/session/runner/to-llm-message"
++import { toLLMMessages as lowerLLMMessages } from "@opencode-ai/core/session/runner/to-llm-message"
+ import { SessionV2 } from "@opencode-ai/core/session"
+ import { DateTime } from "effect"
++import { FileSystem } from "@opencode-ai/core/filesystem"
++import { RelativePath } from "@opencode-ai/core/schema"
++import { ReadToolFileSystem } from "@opencode-ai/core/tool/read-filesystem"
+ 
+ const created = DateTime.makeUnsafe(0)
+ const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
+ const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
++const reader = ReadToolFileSystem.Service.of({
++  inspect: () => Effect.die("unused"),
++  read: (path) =>
++    Effect.succeed({
++      uri: `file://${path}`,
++      name: "README.md",
++      content: `contents of ${path}`,
++      encoding: "utf8",
++      mime: "text/plain",
++    }),
++  list: () =>
++    Effect.succeed(
++      new ReadToolFileSystem.ListPage({
++        entries: [
++          FileSystem.Entry.make({ path: RelativePath.make("src/"), type: "directory" }),
++          FileSystem.Entry.make({ path: RelativePath.make("README.md"), type: "file" }),
++        ],
++        truncated: false,
++      }),
++    ),
++})
++const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
++  Effect.runSync(lowerLLMMessages(messages, model, reader))
+ 
+ describe("toLLMMessages", () => {
+   test("omits empty assistant turns", () => {
+@@ -139,6 +166,38 @@ Recent work
+     ])
+   })
+ 
++  test("materializes text and directory prompt attachments as text", () => {
++    const messages = toLLMMessages(
++      [
++        SessionMessage.User.make({
++          id: id("user-with-directory"),
++          type: "user",
++          text: "Inspect these attachments",
++          files: [
++            FileAttachment.make({ uri: "file:///repo/README.md", mime: "text/plain", name: "README.md" }),
++            FileAttachment.make({ uri: "file:///repo/packages/core/", mime: "application/x-directory", name: "core" }),
++            FileAttachment.make({ uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "hello.png" }),
++          ],
++          time: { created },
++        }),
++      ],
++      model,
++    )
++
++    expect(messages[0]?.content).toEqual([
++      { type: "text", text: "Inspect these attachments" },
++      {
++        type: "text",
++        text: 'Called the Read tool with the following input: {"path":"/repo/README.md"}\n\ncontents of /repo/README.md',
++      },
++      {
++        type: "text",
++        text: 'Called the Read tool with the following input: {"path":"/repo/packages/core/"}\n\ndirectory: src/\nfile: README.md',
++      },
++      { type: "media", mediaType: "image/png", data: "data:image/png;base64,aGVsbG8=", filename: "hello.png" },
++    ])
++  })
++
+   test("replays durable tool media into canonical tool messages without structured base64", () => {
+     const messages = toLLMMessages(
+       [

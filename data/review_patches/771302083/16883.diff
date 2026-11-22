@@ -1,0 +1,572 @@
+diff --git a/__tests__/components/backends/backend-selector.test.tsx b/__tests__/components/backends/backend-selector.test.tsx
+index e46598f6084a..c8434b641250 100644
+--- a/__tests__/components/backends/backend-selector.test.tsx
++++ b/__tests__/components/backends/backend-selector.test.tsx
+@@ -790,6 +790,48 @@ describe("BackendSelector", () => {
+     expect(input.value).toBe("BACKEND$NO_BACKEND_AVAILABLE");
+   });
+ 
++  describe("settings link", () => {
++    it("renders the settings link as a NavigationLink for a local backend", async () => {
++      let localId = "";
++      renderWithProviders(
++        <TestSeed
++          onMount={(ctx) => {
++            localId = ctx.addBackend(SEED_LOCAL_1).id;
++            ctx.setActive(localId, null);
++          }}
++        >
++          <BackendSelector />
++        </TestSeed>,
++      );
++
++      const link = screen.getByTestId("backend-selector-settings-link");
++      expect(link).toHaveAttribute("href", "/settings");
++      expect(link).not.toHaveAttribute("target", "_blank");
++    });
++
++    it("renders the settings link as an external anchor for a cloud backend", async () => {
++      let cloudId = "";
++      renderWithProviders(
++        <TestSeed
++          onMount={(ctx) => {
++            cloudId = ctx.addBackend(SEED_CLOUD_PRODUCTION).id;
++            ctx.setActive(cloudId, null);
++          }}
++        >
++          <BackendSelector />
++        </TestSeed>,
++      );
++
++      const link = screen.getByTestId("backend-selector-settings-link");
++      expect(link).toHaveAttribute(
++        "href",
++        `${SEED_CLOUD_PRODUCTION.host}/settings`,
++      );
++      expect(link).toHaveAttribute("target", "_blank");
++      expect(link).toHaveAttribute("rel", "noopener noreferrer");
++    });
++  });
++
+   describe("connection indicator", () => {
+     it("renders one status dot per option, green when the probe succeeds", async () => {
+       vi.mocked(SettingsClient).mockImplementation(
+diff --git a/__tests__/components/features/sidebar/sidebar-cloud-settings.test.tsx b/__tests__/components/features/sidebar/sidebar-cloud-settings.test.tsx
+new file mode 100644
+index 000000000000..b0864c724c6a
+--- /dev/null
++++ b/__tests__/components/features/sidebar/sidebar-cloud-settings.test.tsx
+@@ -0,0 +1,255 @@
++import {
++  render,
++  screen,
++  fireEvent,
++} from "@testing-library/react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { Sidebar } from "#/components/features/sidebar/sidebar";
++import { SidebarMobileNavProvider } from "#/components/features/sidebar/sidebar-mobile-nav-context";
++import { SidebarMobileMenuBar } from "#/components/features/sidebar/sidebar-mobile-menu-bar";
++import { useSidebarStore } from "#/stores/sidebar-store";
++import {
++  NavigationProvider,
++  type NavigationContextValue,
++} from "#/context/navigation-context";
++import translations from "#/i18n/translation.json";
++
++// The global `useTranslation` mock in `vitest.setup.ts` returns the key
++// as-is. Override it here so `t(...)` resolves keys via the source-of-truth
++// `translation.json` (English values), letting the test assert real
++// user-facing labels rather than raw keys.
++vi.mock("react-i18next", async () => {
++  const actual = await vi.importActual("react-i18next");
++  return {
++    ...(actual as object),
++    useTranslation: () => ({
++      t: (key: string) => {
++        const entry = (translations as Record<string, Record<string, string>>)[
++          key
++        ];
++        return entry?.en ?? key;
++      },
++      i18n: { language: "en", exists: () => false },
++    }),
++  };
++});
++
++const cloudBackendMock = {
++  backend: {
++    id: "cloud-1",
++    name: "Cloud Backend",
++    kind: "cloud" as const,
++    host: "https://cloud.example.com",
++    apiKey: "test-key",
++  },
++  orgId: "org-1",
++};
++
++vi.mock("#/hooks/query/use-config", () => ({
++  useConfig: () => ({ data: { feature_flags: {} } }),
++}));
++
++vi.mock("#/hooks/query/use-settings", () => ({
++  useSettings: () => ({
++    data: { email_verified: true },
++    error: null,
++    isError: false,
++    isFetching: false,
++  }),
++  getErrorStatus: () => undefined,
++}));
++
++vi.mock("#/contexts/active-backend-context", () => ({
++  useActiveBackendContext: () => ({
++    backends: [cloudBackendMock.backend],
++    active: cloudBackendMock,
++    setActive: vi.fn(),
++  }),
++  useActiveBackend: () => cloudBackendMock,
++}));
++
++vi.mock("#/hooks/query/use-backends-health", () => ({
++  useBackendsHealth: () => ({
++    "cloud-1": { isConnected: true },
++  }),
++}));
++
++vi.mock("#/components/shared/buttons/styled-tooltip", () => ({
++  StyledTooltip: ({ children }: { children: unknown }) => children,
++}));
++
++vi.mock("#/components/shared/buttons/openhands-logo-button", () => ({
++  OpenHandsLogoButton: () => <div data-testid="logo-button" />,
++}));
++
++vi.mock("#/components/features/sidebar/user-actions", () => ({
++  UserActions: () => <div data-testid="user-actions" />,
++}));
++
++vi.mock("#/components/features/conversation-panel/conversation-panel", () => ({
++  ConversationPanel: () => null,
++}));
++
++vi.mock("#/components/features/sidebar/sidebar-onboarding-checklist", () => ({
++  SidebarOnboardingChecklist: () => (
++    <div data-testid="sidebar-onboarding-checklist" />
++  ),
++}));
++
++vi.mock(
++  "#/components/features/conversation-panel/conversation-panel-wrapper",
++  () => ({
++    ConversationPanelWrapper: () => null,
++  }),
++);
++
++vi.mock("#/components/shared/modals/settings/settings-modal", () => ({
++  SettingsModal: () => null,
++}));
++
++vi.mock("#/components/features/settings/agent-canvas-version-tile", () => ({
++  AgentCanvasVersionTile: ({
++    hideWhenUpToDate,
++  }: {
++    hideWhenUpToDate?: boolean;
++  } = {}) =>
++    hideWhenUpToDate ? (
++      <button type="button" data-testid="agent-canvas-version-tile">
++        Agent Canvas version
++      </button>
++    ) : null,
++}));
++
++vi.mock("#/components/features/backends/backend-selector", () => ({
++  BackendSelector: ({
++    onSelectOption,
++    onOpenAddBackend,
++    onOpenManageBackends,
++  }: {
++    onSelectOption?: () => void;
++    onOpenAddBackend?: () => void;
++    onOpenManageBackends?: () => void;
++  } = {}) => (
++    <div data-testid="backend-selector">
++      <ul>
++        <li
++          data-testid="mock-backend-option"
++          role="option"
++          aria-selected={false}
++          onClick={() => onSelectOption?.()}
++        >
++          Switch backend
++        </li>
++      </ul>
++      <button
++        type="button"
++        data-testid="mock-add-backend"
++        onClick={() => onOpenAddBackend?.()}
++      >
++        Add Backend
++      </button>
++      <button
++        type="button"
++        data-testid="mock-manage-backends"
++        onClick={() => onOpenManageBackends?.()}
++      >
++        Manage Backends
++      </button>
++    </div>
++  ),
++}));
++
++vi.mock("#/components/features/backends/add-backend-modal", () => ({
++  AddBackendModal: ({ onClose }: { onClose: () => void }) => (
++    <div data-testid="add-backend-modal">
++      <button
++        type="button"
++        data-testid="add-backend-modal-close"
++        onClick={onClose}
++      >
++        Close
++      </button>
++    </div>
++  ),
++}));
++
++vi.mock("#/components/features/backends/manage-backends-modal", () => ({
++  ManageBackendsModal: ({ onClose }: { onClose: () => void }) => (
++    <div data-testid="manage-backends-modal">
++      <button
++        type="button"
++        data-testid="manage-backends-modal-close"
++        onClick={onClose}
++      >
++        Close
++      </button>
++    </div>
++  ),
++}));
++
++vi.mock("#/components/features/sidebar/sidebar-conversation-list", () => ({
++  SidebarConversationList: () => (
++    <div data-testid="sidebar-conversation-list" />
++  ),
++}));
++
++vi.mock("#/hooks/use-settings-nav-items", () => ({
++  useSettingsNavItems: () => [],
++}));
++
++function renderSidebar(currentPath: string) {
++  const navigate = vi.fn();
++  const value: NavigationContextValue = {
++    currentPath,
++    conversationId: null,
++    isNavigating: false,
++    navigate,
++  };
++
++  const rendered = render(
++    <QueryClientProvider client={new QueryClient()}>
++      <NavigationProvider value={value}>
++        <SidebarMobileNavProvider>
++          <Sidebar />
++          <SidebarMobileMenuBar />
++        </SidebarMobileNavProvider>
++      </NavigationProvider>
++    </QueryClientProvider>,
++  );
++
++  return { ...rendered, navigate };
++}
++
++describe("Sidebar with Cloud Backend", () => {
++  beforeEach(() => {
++    window.localStorage.clear();
++    useSidebarStore.setState({ collapsed: false });
++  });
++
++  afterEach(() => {
++    window.localStorage.clear();
++    useSidebarStore.setState({ collapsed: false });
++  });
++
++  it("opens cloud settings in new tab when connected to cloud backend", () => {
++    useSidebarStore.setState({ collapsed: true });
++    renderSidebar("/conversations");
++
++    const settingsLink = screen.getByTestId("collapsed-settings-link");
++    expect(settingsLink).toBeInTheDocument();
++    expect(settingsLink).toHaveAttribute("target", "_blank");
++    expect(settingsLink).toHaveAttribute(
++      "href",
++      "https://cloud.example.com/settings",
++    );
++  });
++
++  it("cloud settings link has correct rel attribute", () => {
++    useSidebarStore.setState({ collapsed: true });
++    renderSidebar("/conversations");
++
++    const settingsLink = screen.getByTestId("collapsed-settings-link");
++    expect(settingsLink).toHaveAttribute("rel", "noopener noreferrer");
++  });
++});
+diff --git a/__tests__/routes/settings.test.tsx b/__tests__/routes/settings.test.tsx
+index dd7a3b44eb8d..7ca95e07bc1b 100644
+--- a/__tests__/routes/settings.test.tsx
++++ b/__tests__/routes/settings.test.tsx
+@@ -5,7 +5,11 @@ import { createRoutesStub } from "react-router";
+ import SettingsScreen, { clientLoader } from "#/routes/settings";
+ import OptionService from "#/api/option-service/option-service.api";
+ import SettingsService from "#/api/settings-service/settings-service.api";
+-import { __resetActiveStoreForTests } from "#/api/backend-registry/active-store";
++import {
++  __resetActiveStoreForTests,
++  setRegisteredBackends,
++} from "#/api/backend-registry/active-store";
++import { readStoredBackends } from "#/api/backend-registry/storage";
+ import { getFirstAvailablePath } from "#/utils/settings-utils";
+ import { OSS_NAV_ITEMS } from "#/constants/settings-nav";
+ import { ActiveBackendProvider } from "#/contexts/active-backend-context";
+@@ -216,4 +220,69 @@ describe("settings route", () => {
+       expect(settingsSpy).not.toHaveBeenCalled();
+     },
+   );
++
++  describe("backend settings routes", () => {
++    it.each(["local", "cloud"] as const)(
++      "renders /settings normally when the active backend is %s",
++      (backendKind) => {
++        vi.spyOn(OptionService, "getConfig").mockResolvedValue({
++          feature_flags: {
++            hide_llm_settings: false,
++            hide_users_page: false,
++          },
++          providers_configured: [],
++          maintenance_start_time: null,
++          recaptcha_site_key: null,
++          faulty_models: [],
++          error_message: null,
++          updated_at: new Date().toISOString(),
++        });
++
++        const backendId = `${backendKind}-backend`;
++        window.localStorage.setItem(
++          "openhands-backends",
++          JSON.stringify([
++            {
++              id: backendId,
++              name: backendKind,
++              host:
++                backendKind === "cloud"
++                  ? "https://app.all-hands.dev"
++                  : "http://localhost:9000",
++              apiKey: "key",
++              kind: backendKind,
++            },
++          ]),
++        );
++        window.localStorage.setItem(
++          "openhands-active-backend",
++          JSON.stringify({ backendId, orgId: null }),
++        );
++        setRegisteredBackends(readStoredBackends());
++
++        const RouterStub = createRoutesStub([
++          {
++            path: "/settings",
++            Component: SettingsScreen,
++            children: [
++              {
++                path: "/settings/llm",
++                Component: () => <div data-testid="llm-settings-screen" />,
++              },
++            ],
++          },
++        ]);
++
++        render(
++          <QueryClientProvider client={new QueryClient()}>
++            <ActiveBackendProvider>
++              <RouterStub initialEntries={["/settings/llm"]} />
++            </ActiveBackendProvider>
++          </QueryClientProvider>,
++        );
++
++        expect(screen.getByTestId("llm-settings-screen")).toBeInTheDocument();
++      },
++    );
++  });
+ });
+diff --git a/src/components/features/backends/backend-selector.tsx b/src/components/features/backends/backend-selector.tsx
+index 350341530bf5..6c904748bccb 100644
+--- a/src/components/features/backends/backend-selector.tsx
++++ b/src/components/features/backends/backend-selector.tsx
+@@ -418,25 +418,41 @@ export function BackendSelector({
+             placement={settingsTooltipPlacement}
+             offset={10}
+           >
+-            <NavigationLink
+-              to="/settings"
+-              data-testid="backend-selector-settings-link"
+-              data-active={isSettingsActive}
+-              aria-label={settingsLabel}
+-              className={
+-                isSettingsActive
+-                  ? cn(
+-                      "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md bg-tertiary text-white font-normal cursor-pointer",
+-                      formControlTransitionClassName,
+-                    )
+-                  : cn(
+-                      "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md text-[var(--oh-muted)] hover:text-white hover:bg-[var(--oh-surface-raised)] cursor-pointer",
+-                      formControlTransitionClassName,
+-                    )
+-              }
+-            >
+-              <Settings width={16} height={16} />
+-            </NavigationLink>
++            {active.backend.kind === "cloud" ? (
++              <a
++                href={`${active.backend.host.replace(/\/+$/, "")}/settings`}
++                target="_blank"
++                rel="noopener noreferrer"
++                data-testid="backend-selector-settings-link"
++                aria-label={settingsLabel}
++                className={cn(
++                  "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md text-[var(--oh-muted)] hover:text-white hover:bg-[var(--oh-surface-raised)] cursor-pointer",
++                  formControlTransitionClassName,
++                )}
++              >
++                <Settings width={16} height={16} />
++              </a>
++            ) : (
++              <NavigationLink
++                to="/settings"
++                data-testid="backend-selector-settings-link"
++                data-active={isSettingsActive}
++                aria-label={settingsLabel}
++                className={
++                  isSettingsActive
++                    ? cn(
++                        "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md bg-tertiary text-white font-normal cursor-pointer",
++                        formControlTransitionClassName,
++                      )
++                    : cn(
++                        "inline-flex items-center justify-center shrink-0 w-9 h-9 rounded-md text-[var(--oh-muted)] hover:text-white hover:bg-[var(--oh-surface-raised)] cursor-pointer",
++                        formControlTransitionClassName,
++                      )
++                }
++              >
++                <Settings width={16} height={16} />
++              </NavigationLink>
++            )}
+           </StyledTooltip>
+         ) : null}
+       </div>
+diff --git a/src/components/features/sidebar/sidebar-rail-body.tsx b/src/components/features/sidebar/sidebar-rail-body.tsx
+index cd06b4924c6b..632308a64070 100644
+--- a/src/components/features/sidebar/sidebar-rail-body.tsx
++++ b/src/components/features/sidebar/sidebar-rail-body.tsx
+@@ -42,6 +42,7 @@ import {
+   sidebarNavRowClassName,
+ } from "./sidebar-layout";
+ import { useCanvasExtensionsRuntime } from "#/components/features/canvas-extensions/canvas-extensions-runtime";
++import type { Backend } from "#/api/backend-registry/types";
+ 
+ const ICON_SIZE = 18;
+ const SIDEBAR_LOGO_WIDTH = 34;
+@@ -58,6 +59,7 @@ export interface SidebarRailBodyProps {
+   showCollapsedExpandButton: boolean;
+   isExtensionsActive: boolean;
+   currentPath: string;
++  activeBackend: Backend;
+   activeBackendHealth: { isConnected: boolean | null } | undefined;
+   collapsedBackendPopoverOpen: boolean;
+   setCollapsedBackendPopoverOpen: (open: boolean) => void;
+@@ -80,6 +82,7 @@ export function SidebarRailBody({
+   showCollapsedExpandButton,
+   isExtensionsActive,
+   currentPath,
++  activeBackend,
+   activeBackendHealth,
+   collapsedBackendPopoverOpen,
+   setCollapsedBackendPopoverOpen,
+@@ -105,6 +108,11 @@ export function SidebarRailBody({
+     };
+   };
+ 
++  const isCloudBackend = activeBackend.kind === "cloud";
++  const cloudSettingsUrl = isCloudBackend
++    ? `${activeBackend.host.replace(/\/+$/, "")}/settings`
++    : null;
++
+   return (
+     <div className="flex min-h-0 flex-1 flex-col">
+       <div className={sidebarHeaderRowClassName(collapsed)}>
+@@ -269,21 +277,39 @@ export function SidebarRailBody({
+             content={t(I18nKey.SIDEBAR$SETTINGS)}
+             placement="right"
+           >
+-            <NavigationLink
+-              to="/settings"
+-              data-testid="collapsed-settings-link"
+-              aria-label={t(I18nKey.SIDEBAR$SETTINGS)}
+-              className={sidebarNavRowClassName({ collapsed: true })}
+-            >
+-              <SidebarCollapsedIconSlot
+-                active={currentPath.startsWith("/settings")}
++            {isCloudBackend && cloudSettingsUrl ? (
++              <a
++                href={cloudSettingsUrl}
++                target="_blank"
++                rel="noopener noreferrer"
++                data-testid="collapsed-settings-link"
++                aria-label={t(I18nKey.SIDEBAR$SETTINGS)}
++                className={sidebarNavRowClassName({ collapsed: true })}
+               >
+-                <Settings width={ICON_SIZE} height={ICON_SIZE} />
+-              </SidebarCollapsedIconSlot>
+-              <span className={sidebarNavLabelClassName(true)}>
+-                {t(I18nKey.SIDEBAR$SETTINGS)}
+-              </span>
+-            </NavigationLink>
++                <SidebarCollapsedIconSlot active={false}>
++                  <Settings width={ICON_SIZE} height={ICON_SIZE} />
++                </SidebarCollapsedIconSlot>
++                <span className={sidebarNavLabelClassName(true)}>
++                  {t(I18nKey.SIDEBAR$SETTINGS)}
++                </span>
++              </a>
++            ) : (
++              <NavigationLink
++                to="/settings"
++                data-testid="collapsed-settings-link"
++                aria-label={t(I18nKey.SIDEBAR$SETTINGS)}
++                className={sidebarNavRowClassName({ collapsed: true })}
++              >
++                <SidebarCollapsedIconSlot
++                  active={currentPath.startsWith("/settings")}
++                >
++                  <Settings width={ICON_SIZE} height={ICON_SIZE} />
++                </SidebarCollapsedIconSlot>
++                <span className={sidebarNavLabelClassName(true)}>
++                  {t(I18nKey.SIDEBAR$SETTINGS)}
++                </span>
++              </NavigationLink>
++            )}
+           </StyledTooltip>
+           <div
+             className="relative"
+diff --git a/src/components/features/sidebar/sidebar.tsx b/src/components/features/sidebar/sidebar.tsx
+index 0b9f5de2b6f4..ced290552adf 100644
+--- a/src/components/features/sidebar/sidebar.tsx
++++ b/src/components/features/sidebar/sidebar.tsx
+@@ -191,6 +191,7 @@ export function Sidebar() {
+     showCollapsedExpandButton,
+     isExtensionsActive,
+     currentPath,
++    activeBackend: active.backend,
+     activeBackendHealth,
+     collapsedBackendPopoverOpen,
+     setCollapsedBackendPopoverOpen,

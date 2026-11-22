@@ -1,0 +1,103 @@
+diff --git a/packages/opencode/src/acp/agent.ts b/packages/opencode/src/acp/agent.ts
+index 8b74b9c9bad3..effb36e9bbd1 100644
+--- a/packages/opencode/src/acp/agent.ts
++++ b/packages/opencode/src/acp/agent.ts
+@@ -38,7 +38,7 @@ import { pathToFileURL } from "url"
+ import { Filesystem } from "@/util/filesystem"
+ import { Hash } from "@opencode-ai/core/util/hash"
+ import { ACPSessionManager } from "./session"
+-import type { ACPConfig } from "./types"
++import type { ACPConfig, ACPSessionState } from "./types"
+ import { ACPRuntime } from "./runtime"
+ import { Provider } from "@/provider/provider"
+ import { ModelID, ProviderID } from "../provider/schema"
+@@ -558,11 +558,17 @@ export class Agent implements ACPAgent {
+     try {
+       const model = await defaultModel(this.config, directory)
+ 
+-      // Store ACP session state
+-      const state = await this.sessionManager.create(params.cwd, params.mcpServers, model)
++      const systemPrompt = (params._meta as { systemPrompt?: ACPSessionState["systemPrompt"] } | undefined)
++        ?.systemPrompt
++
++      const state = await this.sessionManager.create(params.cwd, params.mcpServers, model, systemPrompt)
+       const sessionId = state.id
+ 
+-      log.info("creating_session", { sessionId, mcpServers: params.mcpServers.length })
++      log.info("creating_session", {
++        sessionId,
++        mcpServers: params.mcpServers.length,
++        hasSystemPrompt: systemPrompt !== undefined,
++      })
+ 
+       const load = await this.loadSessionMode({
+         cwd: directory,
+@@ -1431,6 +1437,11 @@ export class Agent implements ACPAgent {
+     })
+ 
+     if (!cmd) {
++      const system =
++        typeof session.systemPrompt === "string"
++          ? session.systemPrompt
++          : session.systemPrompt?.append
++
+       const response = await this.sdk.session.prompt({
+         sessionID,
+         model: {
+@@ -1441,6 +1452,7 @@ export class Agent implements ACPAgent {
+         parts,
+         agent,
+         directory,
++        ...(system !== undefined && system !== "" ? { system } : {}),
+       })
+       const msg = response.data?.info
+ 
+diff --git a/packages/opencode/src/acp/session.ts b/packages/opencode/src/acp/session.ts
+index cc1ed0be3098..66bcfb6aae7f 100644
+--- a/packages/opencode/src/acp/session.ts
++++ b/packages/opencode/src/acp/session.ts
+@@ -17,7 +17,12 @@ export class ACPSessionManager {
+     return this.sessions.get(sessionId)
+   }
+ 
+-  async create(cwd: string, mcpServers: McpServer[], model?: ACPSessionState["model"]): Promise<ACPSessionState> {
++  async create(
++    cwd: string,
++    mcpServers: McpServer[],
++    model?: ACPSessionState["model"],
++    systemPrompt?: ACPSessionState["systemPrompt"],
++  ): Promise<ACPSessionState> {
+     const session = await this.sdk.session
+       .create(
+         {
+@@ -36,6 +41,7 @@ export class ACPSessionManager {
+       mcpServers,
+       createdAt: new Date(),
+       model: resolvedModel,
++      systemPrompt,
+     }
+     log.info("creating_session", { state })
+ 
+diff --git a/packages/opencode/src/acp/types.ts b/packages/opencode/src/acp/types.ts
+index 2c3e886bc185..d132fd3d4d67 100644
+--- a/packages/opencode/src/acp/types.ts
++++ b/packages/opencode/src/acp/types.ts
+@@ -2,6 +2,9 @@ import type { McpServer } from "@agentclientprotocol/sdk"
+ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+ import type { ProviderID, ModelID } from "../provider/schema"
+ 
++/** From ACP `session/new` `_meta.systemPrompt`: full string or append-only fragment for `session.prompt.system`. */
++export type ACPSystemPromptMeta = string | { append: string }
++
+ export interface ACPSessionState {
+   id: string
+   cwd: string
+@@ -13,6 +16,8 @@ export interface ACPSessionState {
+   }
+   variant?: string
+   modeId?: string
++  /** Carried from `newSession` for ACP bridge only; forwarded as SDK `system` on non-command prompts. */
++  systemPrompt?: ACPSystemPromptMeta
+ }
+ 
+ export interface ACPConfig {

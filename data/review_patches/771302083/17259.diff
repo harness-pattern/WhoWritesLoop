@@ -1,0 +1,203 @@
+diff --git a/__tests__/components/features/chat/components/chat-input-llm-profile-picker.test.tsx b/__tests__/components/features/chat/components/chat-input-llm-profile-picker.test.tsx
+index 689bbd3cc270..3e476e0b76be 100644
+--- a/__tests__/components/features/chat/components/chat-input-llm-profile-picker.test.tsx
++++ b/__tests__/components/features/chat/components/chat-input-llm-profile-picker.test.tsx
+@@ -102,7 +102,7 @@ describe("ChatInputLlmProfilePicker", () => {
+ 
+   it("labels a backend-flagged free OpenHands route in the profile menu", () => {
+     useFreeModelsStore.getState().setFlags({
+-      freeModels: new Set(["openhands/deepseek-v4-flash"]),
++      freeModels: new Set(["openhands/deepseek-v4.1-flash"]),
+       defaultModel: null,
+     });
+     useChatInputLlmProfileStateMock.mockReturnValue(
+@@ -110,13 +110,13 @@ describe("ChatInputLlmProfilePicker", () => {
+         profiles: [
+           {
+             name: "Free",
+-            model: "openhands/deepseek-v4-flash",
++            model: "openhands/deepseek-v4.1-flash",
+             base_url: null,
+             api_key_set: true,
+           },
+         ],
+         currentProfileName: "Free",
+-        currentProfileModel: "openhands/deepseek-v4-flash",
++        currentProfileModel: "openhands/deepseek-v4.1-flash",
+       }),
+     );
+ 
+@@ -124,19 +124,19 @@ describe("ChatInputLlmProfilePicker", () => {
+     fireEvent.click(screen.getByTestId("chat-input-llm-profile"));
+ 
+     expect(
+-      screen.getByText("OpenHands DeepSeek V4 Flash (free)"),
++      screen.getByText("OpenHands DeepSeek V4.1 Flash (free)"),
+     ).toBeInTheDocument();
+   });
+ 
+   it("labels a backend-flagged free OpenHands route in the read-only profile menu", () => {
+     useFreeModelsStore.getState().setFlags({
+-      freeModels: new Set(["openhands/deepseek-v4-flash"]),
++      freeModels: new Set(["openhands/deepseek-v4.1-flash"]),
+       defaultModel: null,
+     });
+     useChatInputLlmProfileStateMock.mockReturnValue(
+       state({
+         canSwitchProfile: false,
+-        currentProfileModel: "openhands/deepseek-v4-flash",
++        currentProfileModel: "openhands/deepseek-v4.1-flash",
+       }),
+     );
+ 
+@@ -145,7 +145,7 @@ describe("ChatInputLlmProfilePicker", () => {
+ 
+     expect(
+       screen.getByTestId("chat-input-llm-profile-current"),
+-    ).toHaveTextContent("OpenHands DeepSeek V4 Flash (free)");
++    ).toHaveTextContent("OpenHands DeepSeek V4.1 Flash (free)");
+   });
+ 
+   it("links to the LLM profiles settings page", () => {
+diff --git a/__tests__/components/modals/settings/model-selector-openhands.test.tsx b/__tests__/components/modals/settings/model-selector-openhands.test.tsx
+index 1c7e7927ea51..e00240243f20 100644
+--- a/__tests__/components/modals/settings/model-selector-openhands.test.tsx
++++ b/__tests__/components/modals/settings/model-selector-openhands.test.tsx
+@@ -37,7 +37,7 @@ const OPENHANDS_MODELS: LLMModel[] = [
+   },
+   {
+     provider: "openhands",
+-    name: "deepseek-v4-flash",
++    name: "deepseek-v4.1-flash",
+     verified: true,
+     free: true,
+     default: false,
+@@ -75,7 +75,7 @@ describe("ModelSelector — OpenHands provider display", () => {
+             openhands: [
+               "claude-opus-4-7",
+               "glm-5.2",
+-              "deepseek-v4-flash",
++              "deepseek-v4.1-flash",
+               "minimax-m2.7",
+             ],
+             anthropic: ["claude-opus-4-5-20251101"],
+@@ -106,12 +106,12 @@ describe("ModelSelector — OpenHands provider display", () => {
+   it("makes clear which OpenHands models are free", async () => {
+     const user = userEvent.setup();
+     renderWithQuery(
+-      <ModelSelector currentModel="openhands/deepseek-v4-flash" />,
++      <ModelSelector currentModel="openhands/deepseek-v4.1-flash" />,
+     );
+ 
+     await waitFor(() => {});
+     expect(screen.getByTestId("openhands-free-models-note")).toHaveTextContent(
+-      "openhands/deepseek-v4-flash",
++      "openhands/deepseek-v4.1-flash",
+     );
+     expect(screen.getByTestId("selected-free-model-badge")).toHaveTextContent(
+       "Free",
+@@ -122,11 +122,17 @@ describe("ModelSelector — OpenHands provider display", () => {
+     // Three DB-flagged free models render a "Free" badge in the dropdown; the
+     // selected-model badge adds a fourth occurrence.
+     expect(screen.getAllByText("Free")).toHaveLength(4);
+-    expect(screen.getByLabelText("LLM$MODEL")).toHaveValue("deepseek-v4-flash");
++    expect(screen.getByLabelText("LLM$MODEL")).toHaveValue(
++      "deepseek-v4.1-flash",
++    );
+ 
+-    await user.click(screen.getByRole("option", { name: /deepseek-v4-flash/ }));
++    await user.click(
++      screen.getByRole("option", { name: /deepseek-v4.1-flash/ }),
++    );
+ 
+-    expect(screen.getByLabelText("LLM$MODEL")).toHaveValue("deepseek-v4-flash");
++    expect(screen.getByLabelText("LLM$MODEL")).toHaveValue(
++      "deepseek-v4.1-flash",
++    );
+     expect(screen.getByTestId("selected-free-model-badge")).toHaveTextContent(
+       "Free",
+     );
+diff --git a/__tests__/utils/format-model-name.test.ts b/__tests__/utils/format-model-name.test.ts
+index 255118f85e87..96ab153f129a 100644
+--- a/__tests__/utils/format-model-name.test.ts
++++ b/__tests__/utils/format-model-name.test.ts
+@@ -11,7 +11,7 @@ import {
+ // previously-hardcoded free-model map.
+ const FREE_MODELS = new Set([
+   "openhands/glm-5.2",
+-  "openhands/deepseek-v4-flash",
++  "openhands/deepseek-v4.1-flash",
+   "openhands/minimax-m2.7",
+ ]);
+ 
+@@ -56,8 +56,8 @@ describe("formatNativeModelName", () => {
+       `glm-5.2${FREE_MODEL_SUFFIX}`,
+     );
+     expect(
+-      formatNativeModelName("openhands/deepseek-v4-flash", FREE_MODELS),
+-    ).toBe(`deepseek-v4-flash${FREE_MODEL_SUFFIX}`);
++      formatNativeModelName("openhands/deepseek-v4.1-flash", FREE_MODELS),
++    ).toBe(`deepseek-v4.1-flash${FREE_MODEL_SUFFIX}`);
+   });
+ 
+   it("strips nested routing prefixes to the last segment", () => {
+diff --git a/src/mocks/settings-handlers.ts b/src/mocks/settings-handlers.ts
+index 81e6cd843b61..907077339c2f 100644
+--- a/src/mocks/settings-handlers.ts
++++ b/src/mocks/settings-handlers.ts
+@@ -611,7 +611,7 @@ const MOCK_MODELS = [
+   "openhands/claude-haiku-4-5-20251001",
+   "openhands/claude-opus-4-5-20251101",
+   "openai/gpt-5.6-sol",
+-  "openhands/deepseek-v4-flash",
++  "openhands/deepseek-v4.1-flash",
+   "openhands/glm-5.2",
+   "sambanova/Meta-Llama-3.1-8B-Instruct",
+ ];
+@@ -626,7 +626,7 @@ const MOCK_VERIFIED_MODELS = new Set([
+   "openhands/claude-opus-4-5-20251101",
+   "openhands/claude-sonnet-4-5-20250929",
+   "openai/gpt-5.6-sol",
+-  "openhands/deepseek-v4-flash",
++  "openhands/deepseek-v4.1-flash",
+   "openhands/glm-5.2",
+ ]);
+ 
+diff --git a/src/utils/format-model-name.test.ts b/src/utils/format-model-name.test.ts
+index 4e933b949710..592d745b90d3 100644
+--- a/src/utils/format-model-name.test.ts
++++ b/src/utils/format-model-name.test.ts
+@@ -3,15 +3,15 @@ import { formatModelPillLabel } from "./format-model-name";
+ 
+ describe("formatModelPillLabel", () => {
+   it("keeps the pretty OpenHands label without a free suffix unless backend marks it free", () => {
+-    expect(formatModelPillLabel("openhands/deepseek-v4-flash")).toBe(
+-      "OpenHands DeepSeek V4 Flash",
++    expect(formatModelPillLabel("openhands/deepseek-v4.1-flash")).toBe(
++      "OpenHands DeepSeek V4.1 Flash",
+     );
+ 
+     expect(
+       formatModelPillLabel(
+-        "openhands/deepseek-v4-flash",
+-        new Set(["openhands/deepseek-v4-flash"]),
++        "openhands/deepseek-v4.1-flash",
++        new Set(["openhands/deepseek-v4.1-flash"]),
+       ),
+-    ).toBe("OpenHands DeepSeek V4 Flash (free)");
++    ).toBe("OpenHands DeepSeek V4.1 Flash (free)");
+   });
+ });
+diff --git a/src/utils/format-model-name.ts b/src/utils/format-model-name.ts
+index b2789a73de34..700ddce245e5 100644
+--- a/src/utils/format-model-name.ts
++++ b/src/utils/format-model-name.ts
+@@ -8,7 +8,7 @@ export const FREE_MODEL_SUFFIX = " (free)";
+  * status still comes only from the backend-provided `freeModels` set.
+  */
+ export const FREE_OPENHANDS_MODELS = {
+-  "openhands/deepseek-v4-flash": "OpenHands DeepSeek V4 Flash",
++  "openhands/deepseek-v4.1-flash": "OpenHands DeepSeek V4.1 Flash",
+ } as const;
+ 
+ export const FREE_OPENHANDS_MODEL_IDS = Object.keys(FREE_OPENHANDS_MODELS);

@@ -1,0 +1,31 @@
+diff --git a/packages/channels/base/src/AcpBridge.ts b/packages/channels/base/src/AcpBridge.ts
+index b3d4e8c214f..403730b054e 100644
+--- a/packages/channels/base/src/AcpBridge.ts
++++ b/packages/channels/base/src/AcpBridge.ts
+@@ -203,12 +203,12 @@ export class AcpBridge extends EventEmitter implements ChannelAgentBridge {
+   async loadSession(sessionId: string, cwd: string): Promise<string> {
+     const conn = this.ensureConnection();
+     await this.registerChannelLoopMcpServer();
+-    const response = await conn.loadSession({
++    await conn.loadSession({
+       sessionId,
+       cwd,
+       mcpServers: [],
+     });
+-    return response.sessionId;
++    return sessionId;
+   }
+ 
+   async prompt(
+diff --git a/packages/channels/qqbot/src/QQChannel.ts b/packages/channels/qqbot/src/QQChannel.ts
+index a1fa3f52866..13b2bc9e1f1 100644
+--- a/packages/channels/qqbot/src/QQChannel.ts
++++ b/packages/channels/qqbot/src/QQChannel.ts
+@@ -1973,6 +1973,7 @@ export class QQChannel extends ChannelBase {
+                 onReady();
+               })
+               .catch(() => {
++                this.fixRestoredSessions();
+                 process.stderr.write(
+                   `[QQ:${this.name}] WARNING: router session restore failed — cron messages will be dropped until sessions re-establish\n`,
+                 );

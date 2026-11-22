@@ -1,0 +1,54 @@
+diff --git a/aider/main.py b/aider/main.py
+index afb3f836624..348836441f4 100644
+--- a/aider/main.py
++++ b/aider/main.py
+@@ -887,6 +887,13 @@ def get_io(pretty):
+         analytics.event("exit", reason="Invalid lint command format")
+         return 1
+ 
++    if main_model.ollama_error and args.exit:
++        io.tool_error(
++            f"Cannot connect to Ollama: {main_model.ollama_error}\n"
++            "Aborting because --exit (batch mode) was specified."
++        )
++        return 1
++
+     if args.show_model_warnings:
+         problem = models.sanity_check_models(io, main_model)
+         if problem:
+diff --git a/aider/models.py b/aider/models.py
+index 3edbe26644e..fead8af3e8b 100644
+--- a/aider/models.py
++++ b/aider/models.py
+@@ -242,6 +242,8 @@ def get_model_info(self, model):
+             try:
+                 litellm_info = litellm.get_model_info(model)
+             except Exception as ex:
++                if str(ex).startswith("OllamaError:"):
++                    raise
+                 if "model_prices_and_context_window.json" not in str(ex):
+                     print(str(ex))
+ 
+@@ -327,6 +329,7 @@ def __init__(
+         self.max_chat_history_tokens = 1024
+         self.weak_model = None
+         self.editor_model = None
++        self.ollama_error = None
+ 
+         # Find the extra settings
+         self.extra_model_settings = next(
+@@ -357,7 +360,13 @@ def __init__(
+             self.get_editor_model(editor_model, editor_edit_format)
+ 
+     def get_model_info(self, model):
+-        return model_info_manager.get_model_info(model)
++        try:
++            return model_info_manager.get_model_info(model)
++        except Exception as ex:
++            if str(ex).startswith("OllamaError:"):
++                self.ollama_error = ex
++                return {}
++            raise
+ 
+     def _copy_fields(self, source):
+         """Helper to copy fields from a ModelSettings instance to self"""

@@ -1,0 +1,672 @@
+diff --git a/.github/scripts/openai-proxy.mjs b/.github/scripts/openai-proxy.mjs
+deleted file mode 100644
+index dbb6133ed56..00000000000
+--- a/.github/scripts/openai-proxy.mjs
++++ /dev/null
+@@ -1,106 +0,0 @@
+-#!/usr/bin/env node
+-import { writeFileSync } from 'node:fs';
+-import http from 'node:http';
+-import { Readable } from 'node:stream';
+-
+-const baseUrl = process.env.QWEN_UPSTREAM_OPENAI_BASE_URL;
+-const apiKey = process.env.QWEN_UPSTREAM_OPENAI_API_KEY;
+-const infoPath = process.env.QWEN_OPENAI_PROXY_INFO;
+-
+-if (!baseUrl || !apiKey || !infoPath) {
+-  console.error('missing OpenAI proxy configuration');
+-  process.exit(1);
+-}
+-
+-const base = new URL(baseUrl);
+-const basePath = base.pathname.replace(/\/+$/, '');
+-
+-function errorMessage(error) {
+-  return error instanceof Error ? error.message : String(error);
+-}
+-
+-function finishWith(res, status, body) {
+-  res.writeHead(status, { 'content-type': 'text/plain' });
+-  res.end(body);
+-}
+-
+-const server = http.createServer(async (req, res) => {
+-  if (req.url === '/__health') {
+-    res.writeHead(204);
+-    res.end();
+-    return;
+-  }
+-
+-  const startedAt = process.hrtime.bigint();
+-  try {
+-    const incoming = new URL(req.url || '/', 'http://127.0.0.1');
+-    const target = new URL(base.origin);
+-    let path = incoming.pathname;
+-    if (
+-      basePath &&
+-      basePath !== '/' &&
+-      path !== basePath &&
+-      !path.startsWith(`${basePath}/`)
+-    ) {
+-      path = `${basePath}${path.startsWith('/') ? '' : '/'}${path}`;
+-    }
+-    target.pathname = path;
+-    target.search = incoming.search;
+-
+-    if (
+-      req.method !== 'POST' ||
+-      !target.pathname.endsWith('/chat/completions')
+-    ) {
+-      console.error(`[proxy] ${req.method} ${incoming.pathname} -> 403`);
+-      finishWith(res, 403, 'proxy: only POST /chat/completions is allowed\n');
+-      return;
+-    }
+-
+-    const headers = new Headers(req.headers);
+-    headers.delete('host');
+-    headers.delete('content-length');
+-    headers.set('authorization', `Bearer ${apiKey}`);
+-
+-    const upstream = await fetch(target, {
+-      method: req.method,
+-      headers,
+-      body: req,
+-      duplex: 'half',
+-    });
+-
+-    const responseHeaders = {};
+-    upstream.headers.forEach((value, key) => {
+-      if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
+-        responseHeaders[key] = value;
+-      }
+-    });
+-
+-    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+-    console.error(
+-      `[proxy] ${req.method} ${target.pathname} -> ${upstream.status} (${durationMs.toFixed(0)}ms)`,
+-    );
+-    res.writeHead(upstream.status, responseHeaders);
+-    if (upstream.body) {
+-      Readable.fromWeb(upstream.body).pipe(res);
+-    } else {
+-      res.end();
+-    }
+-  } catch (error) {
+-    console.error(`[proxy] error: ${errorMessage(error)}`);
+-    if (!res.headersSent) {
+-      finishWith(res, 502, `proxy error: ${errorMessage(error)}\n`);
+-    } else {
+-      res.end();
+-    }
+-  }
+-});
+-
+-server.listen(0, '127.0.0.1', () => {
+-  const address = server.address();
+-  if (!address || typeof address === 'string') {
+-    console.error('OpenAI proxy did not receive a TCP listen address');
+-    process.exit(1);
+-  }
+-  const path = basePath && basePath !== '/' ? basePath : '';
+-  writeFileSync(infoPath, `http://127.0.0.1:${address.port}${path}`);
+-});
+diff --git a/.github/scripts/resolve-sandbox-image.mjs b/.github/scripts/resolve-sandbox-image.mjs
+new file mode 100644
+index 00000000000..4d02ad1e8bb
+--- /dev/null
++++ b/.github/scripts/resolve-sandbox-image.mjs
+@@ -0,0 +1,153 @@
++#!/usr/bin/env node
++import { appendFileSync } from 'node:fs';
++import { spawn } from 'node:child_process';
++import { pathToFileURL } from 'node:url';
++
++const GHCR_REPOSITORY = 'qwenlm/qwen-code';
++const FETCH_TIMEOUT_MS = 30_000;
++const PULL_TIMEOUT_MS = 10 * 60 * 1000;
++
++async function responseError(response, label) {
++  const body = await response.text();
++  return new Error(
++    `${label}: ${response.status} ${body.slice(0, 200)}`.trimEnd(),
++  );
++}
++
++export function latestSemverTag(tags) {
++  return tags
++    .filter((tag) => /^\d+\.\d+\.\d+$/.test(tag))
++    .sort((a, b) => {
++      const left = a.split('.').map(Number);
++      const right = b.split('.').map(Number);
++      return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
++    })
++    .at(-1);
++}
++
++export function validateRequestedImage(image) {
++  const requestedImage = image?.trim();
++  if (
++    !requestedImage ||
++    requestedImage === 'undefined' ||
++    requestedImage === 'null'
++  ) {
++    throw new Error(
++      'package.json config.sandboxImageUri must be set to a sandbox image.',
++    );
++  }
++  return requestedImage;
++}
++
++async function fetchLatestGhcrSemver() {
++  const tokenResponse = await fetch(
++    `https://ghcr.io/token?service=ghcr.io&scope=repository:${GHCR_REPOSITORY}:pull`,
++    { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
++  );
++  if (!tokenResponse.ok) {
++    throw await responseError(tokenResponse, 'Failed to fetch GHCR token');
++  }
++
++  const { token } = await tokenResponse.json();
++  const tagsResponse = await fetch(
++    `https://ghcr.io/v2/${GHCR_REPOSITORY}/tags/list?n=1000`,
++    {
++      headers: { Authorization: `Bearer ${token}` },
++      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
++    },
++  );
++  if (!tagsResponse.ok) {
++    throw await responseError(tagsResponse, 'Failed to fetch GHCR tags');
++  }
++
++  const { tags = [] } = await tagsResponse.json();
++  if (tags.length >= 1000) {
++    console.warn(
++      '::warning::GHCR returned at least 1000 tags; latest semver may be inaccurate without pagination.',
++    );
++  }
++  const latest = latestSemverTag(tags);
++  if (!latest) {
++    throw new Error('No semver GHCR tags found for qwen-code.');
++  }
++  return latest;
++}
++
++function pullImage(command, image) {
++  return new Promise((resolve) => {
++    const child = spawn(command, ['pull', image], { stdio: 'inherit' });
++    let settled = false;
++    let timer;
++    const finish = (ok) => {
++      if (settled) return;
++      settled = true;
++      clearTimeout(timer);
++      resolve(ok);
++    };
++    timer = setTimeout(() => {
++      console.error(
++        `::error::Timed out pulling ${image} after ${PULL_TIMEOUT_MS / 1000}s.`,
++      );
++      child.kill('SIGKILL');
++      finish(false);
++    }, PULL_TIMEOUT_MS);
++
++    child.on('error', (error) => {
++      console.error(
++        `::error::Failed to start '${command} pull ${image}': ${error.message}`,
++      );
++      finish(false);
++    });
++    child.on('close', (code) => {
++      if (code !== 0) {
++        console.error(
++          `::error::'${command} pull ${image}' exited with code ${code}.`,
++        );
++      }
++      finish(code === 0);
++    });
++  });
++}
++
++function exportImage(image) {
++  if (process.env.GITHUB_ENV) {
++    appendFileSync(process.env.GITHUB_ENV, `QWEN_SANDBOX_IMAGE=${image}\n`);
++  }
++  console.log(`QWEN_SANDBOX_IMAGE=${image}`);
++}
++
++async function main() {
++  const requestedImage = validateRequestedImage(process.argv[2]);
++
++  const command = process.env.SANDBOX_COMMAND || 'docker';
++  if (await pullImage(command, requestedImage)) {
++    exportImage(requestedImage);
++    return;
++  }
++
++  const latest = await fetchLatestGhcrSemver();
++  const fallbackImage = `ghcr.io/${GHCR_REPOSITORY}:${latest}`;
++  if (fallbackImage === requestedImage) {
++    throw new Error(
++      `Requested sandbox image failed to pull: ${requestedImage}`,
++    );
++  }
++
++  console.warn(
++    `::warning::Falling back from ${requestedImage} to latest GHCR semver ${fallbackImage}; sandbox image version may differ from package version.`,
++  );
++  if (!(await pullImage(command, fallbackImage))) {
++    throw new Error(`Fallback sandbox image failed to pull: ${fallbackImage}`);
++  }
++  exportImage(fallbackImage);
++}
++
++if (
++  process.argv[1] &&
++  import.meta.url === pathToFileURL(process.argv[1]).href
++) {
++  main().catch((error) => {
++    console.error(error instanceof Error ? error.message : String(error));
++    process.exit(1);
++  });
++}
+diff --git a/.github/scripts/resolve-sandbox-image.test.mjs b/.github/scripts/resolve-sandbox-image.test.mjs
+new file mode 100644
+index 00000000000..fc583155b28
+--- /dev/null
++++ b/.github/scripts/resolve-sandbox-image.test.mjs
+@@ -0,0 +1,42 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++
++import {
++  latestSemverTag,
++  validateRequestedImage,
++} from './resolve-sandbox-image.mjs';
++
++test('latestSemverTag returns the highest stable semver tag', () => {
++  assert.equal(
++    latestSemverTag([
++      'latest',
++      '0.19',
++      '0.19.4',
++      '0.19.10',
++      '0.20.0-rc.1',
++      'sha-abc123',
++      '0.20.0',
++    ]),
++    '0.20.0',
++  );
++});
++
++test('latestSemverTag ignores non-stable tags', () => {
++  assert.equal(latestSemverTag(['latest', '0.19', 'sha-abc123']), undefined);
++});
++
++test('validateRequestedImage accepts a configured image', () => {
++  assert.equal(
++    validateRequestedImage(' ghcr.io/qwenlm/qwen-code:0.1.0 '),
++    'ghcr.io/qwenlm/qwen-code:0.1.0',
++  );
++});
++
++test('validateRequestedImage rejects missing package config output', () => {
++  for (const value of [undefined, '', ' ', 'undefined', 'null']) {
++    assert.throws(
++      () => validateRequestedImage(value),
++      /package\.json config\.sandboxImageUri/,
++    );
++  }
++});
+diff --git a/.github/workflows/build-and-publish-image.yml b/.github/workflows/build-and-publish-image.yml
+index 4a0482b9933..b682771c754 100644
+--- a/.github/workflows/build-and-publish-image.yml
++++ b/.github/workflows/build-and-publish-image.yml
+@@ -47,13 +47,22 @@ jobs:
+ 
+           # Extract major.minor for floating tag (e.g., 1.0.0 -> 1.0)
+           MAJOR_MINOR=$(echo "$CLEAN_VERSION" | grep -oE '^[0-9]+\.[0-9]+' || true)
++          if [[ "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
++            IS_STABLE_SEMVER=true
++          else
++            IS_STABLE_SEMVER=false
++          fi
+ 
+-          echo "raw=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+-          echo "clean=${CLEAN_VERSION}" >> "$GITHUB_OUTPUT"
+-          echo "major_minor=${MAJOR_MINOR}" >> "$GITHUB_OUTPUT"
++          {
++            echo "raw=${INPUT_VERSION}"
++            echo "clean=${CLEAN_VERSION}"
++            echo "major_minor=${MAJOR_MINOR}"
++            echo "is_stable_semver=${IS_STABLE_SEMVER}"
++          } >> "$GITHUB_OUTPUT"
+           echo "Input version: ${INPUT_VERSION}"
+           echo "Clean version: ${CLEAN_VERSION}"
+           echo "Major.minor: ${MAJOR_MINOR}"
++          echo "Stable semver: ${IS_STABLE_SEMVER}"
+ 
+       - name: 'Debug inputs'
+         if: |-
+@@ -79,7 +88,8 @@ jobs:
+           images: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}'
+           tags: |
+             type=raw,value=${{ steps.version.outputs.clean }},enable=${{ steps.version.outputs.clean != '' }}
+-            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ steps.version.outputs.major_minor != '' }}
++            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ steps.version.outputs.is_stable_semver == 'true' }}
++            type=raw,value=latest,enable=${{ steps.version.outputs.is_stable_semver == 'true' }}
+             type=ref,event=branch,enable=${{ steps.version.outputs.clean == '' }}
+             type=ref,event=pr,enable=${{ steps.version.outputs.clean == '' }}
+             type=semver,pattern={{version}},enable=${{ steps.version.outputs.clean == '' }}
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index f28bce85e38..7b2ec4a01da 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -199,7 +199,7 @@ jobs:
+           node scripts/lint.js --setup
+           node scripts/lint.js --actionlint
+           node scripts/lint.js --yamllint
+-          node --test .github/scripts/pr-safety-precheck.test.mjs .github/scripts/ci/classify-profile.test.mjs
++          node --test .github/scripts/pr-safety-precheck.test.mjs .github/scripts/ci/classify-profile.test.mjs .github/scripts/resolve-sandbox-image.test.mjs
+ 
+       # Self-hosted can't reach nodejs.org reliably; reuse the machine's Node.
+       - name: 'Set up Node.js 22.x (hosted)'
+diff --git a/.github/workflows/qwen-autofix.yml b/.github/workflows/qwen-autofix.yml
+index 83b35b0a585..e12100efd77 100644
+--- a/.github/workflows/qwen-autofix.yml
++++ b/.github/workflows/qwen-autofix.yml
+@@ -167,9 +167,7 @@ jobs:
+     needs: 'route'
+     if: |-
+       ${{ needs.route.outputs.do_issue == 'true' }}
+-    # Heavy autonomous jobs run on the dedicated ECS pool when available. Hosted
+-    # remains as a guarded fallback so maintainers can disable the pool quickly.
+-    runs-on: '${{ (github.repository == ''QwenLM/qwen-code'' && vars.AUTOFIX_ECS_RUNNER_DISABLED != ''true'') && fromJSON(''["self-hosted", "linux", "x64", "autofix"]'') || fromJSON(''["ubuntu-latest"]'') }}'
++    runs-on: 'ubuntu-latest'
+     timeout-minutes: 180
+     concurrency:
+       group: 'qwen-autofix-issue'
+@@ -221,7 +219,7 @@ jobs:
+           RUNNER_ENVIRONMENT: '${{ runner.environment }}'
+         run: |-
+           case "${RUNNER_ENVIRONMENT}" in
+-            github-hosted|self-hosted) ;;
++            github-hosted) ;;
+             *)
+               echo "::error::Unsupported runner environment: ${RUNNER_ENVIRONMENT:-unset}."
+               exit 1
+@@ -237,17 +235,6 @@ jobs:
+           cache: 'npm'
+           cache-dependency-path: 'package-lock.json'
+ 
+-      - name: 'Use pre-installed Node.js (self-hosted)'
+-        if: |-
+-          ${{ runner.environment == 'self-hosted' }}
+-        run: |-
+-          if ! command -v node > /dev/null 2>&1; then
+-            echo '::error::Node.js is required on the autofix self-hosted runner.'
+-            exit 1
+-          fi
+-          node --version
+-          npm --version
+-
+       - name: 'Install tmux'
+         run: |-
+           if command -v tmux > /dev/null 2>&1; then
+@@ -262,7 +249,15 @@ jobs:
+ 
+       - name: 'Install dependencies and build'
+         run: |-
+-          npm ci --prefer-offline --no-audit --progress=false
++          for attempt in 1 2 3; do
++            if npm ci --prefer-offline --no-audit --progress=false; then
++              break
++            fi
++            if [[ "${attempt}" == "3" ]]; then
++              exit 1
++            fi
++            sleep $((attempt * 15))
++          done
+           npm run build
+           npm run bundle
+ 
+@@ -340,15 +335,23 @@ jobs:
+           fi
+           echo "has_candidates=$([[ "${COUNT}" -gt 0 ]] && echo true || echo false)" >> "${GITHUB_OUTPUT}"
+ 
++      - name: 'Resolve sandbox image'
++        if: |-
++          ${{ steps.scan.outputs.has_candidates == 'true' }}
++        run: |-
++          node .github/scripts/resolve-sandbox-image.mjs \
++            "$(node -p "require('./package.json').config.sandboxImageUri")"
++
+       - name: 'Assess candidates'
+         id: 'assess'
+         if: |-
+           ${{ steps.scan.outputs.has_candidates == 'true' }}
+         env:
+           GITHUB_TOKEN: '${{ secrets.CI_DEV_BOT_PAT }}'
+-          QWEN_UPSTREAM_OPENAI_API_KEY: '${{ secrets.OPENAI_API_KEY }}'
+-          QWEN_UPSTREAM_OPENAI_BASE_URL: '${{ secrets.OPENAI_BASE_URL }}'
++          OPENAI_API_KEY: '${{ secrets.AUTOFIX_OPENAI_API_KEY }}'
++          OPENAI_BASE_URL: '${{ secrets.AUTOFIX_OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}'
+           OPENAI_MODEL: '${{ vars.QWEN_PR_REVIEW_MODEL }}'
++          NO_PROXY: '127.0.0.1,localhost,::1'
+           QWEN_HOME: '${{ runner.temp }}/qwen-autofix-home'
+           SETTINGS_JSON: |-
+             {
+@@ -361,11 +364,11 @@ jobs:
+                 "write_file",
+                 "run_shell_command(cat)",
+                 "run_shell_command(git log)",
+-                "run_shell_command(git diff)",
+-                "run_shell_command(gh issue view)",
+-                "run_shell_command(gh search)"
++                "run_shell_command(git diff)"
+               ],
+-              "sandbox": false
++              "tools": {
++                "sandbox": "docker"
++              }
+             }
+           PROMPT: |-
+             ## Role
+@@ -424,39 +427,12 @@ jobs:
+             this bot (wrong platform, needs more info, not a real task) and
+             should never be re-scanned. Transient doubts are not permanent.
+         run: |-
+-          start_openai_proxy() {
+-            local proxy_info local_openai_base_url
+-            proxy_info="$(mktemp "${RUNNER_TEMP:-/tmp}/qwen-openai-proxy.XXXXXX")"
+-
+-            QWEN_OPENAI_PROXY_INFO="${proxy_info}" node .github/scripts/openai-proxy.mjs &
+-            OPENAI_PROXY_PID=$!
+-            trap 'kill "${OPENAI_PROXY_PID}" 2>/dev/null || true' EXIT
+-            for _ in 1 2 3 4 5; do
+-              if [[ -s "${proxy_info}" ]]; then
+-                break
+-              fi
+-              if ! kill -0 "${OPENAI_PROXY_PID}" 2>/dev/null; then
+-                echo '::error::OpenAI proxy exited before becoming ready.'
+-                exit 1
+-              fi
+-              sleep 1
+-            done
+-            if [[ ! -s "${proxy_info}" ]]; then
+-              echo '::error::OpenAI proxy did not become ready.'
+-              exit 1
+-            fi
+-            local_openai_base_url="$(cat "${proxy_info}")"
+-            unset QWEN_UPSTREAM_OPENAI_API_KEY
+-            unset QWEN_UPSTREAM_OPENAI_BASE_URL
+-            export OPENAI_API_KEY=qwen-loopback-proxy
+-            export OPENAI_BASE_URL="${local_openai_base_url}"
+-            echo "openai_proxy=enabled (${OPENAI_BASE_URL})"
+-          }
+-
+-          start_openai_proxy
+-
+           rm -rf "${QWEN_HOME}"
+           mkdir -p .qwen "${QWEN_HOME}"
++          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
++            echo '::error::AUTOFIX_OPENAI_API_KEY secret is required for Qwen Autofix.'
++            exit 1
++          fi
+           printf '%s\n' "${SETTINGS_JSON}" > .qwen/settings.json
+           rm -f "${WORKDIR}/decision.json"
+           qwen --yolo --prompt "${PROMPT}"
+@@ -544,9 +520,10 @@ jobs:
+           ${{ steps.decision.outputs.go_issue != '' }}
+         env:
+           ISSUE: '${{ steps.decision.outputs.go_issue }}'
+-          QWEN_UPSTREAM_OPENAI_API_KEY: '${{ secrets.OPENAI_API_KEY }}'
+-          QWEN_UPSTREAM_OPENAI_BASE_URL: '${{ secrets.OPENAI_BASE_URL }}'
++          OPENAI_API_KEY: '${{ secrets.AUTOFIX_OPENAI_API_KEY }}'
++          OPENAI_BASE_URL: '${{ secrets.AUTOFIX_OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}'
+           OPENAI_MODEL: '${{ vars.QWEN_PR_REVIEW_MODEL }}'
++          NO_PROXY: '127.0.0.1,localhost,::1'
+           QWEN_HOME: '${{ runner.temp }}/qwen-autofix-home'
+           SETTINGS_JSON: |-
+             {
+@@ -569,7 +546,9 @@ jobs:
+                 "run_shell_command(mkdir)",
+                 "run_shell_command(pwd)"
+               ],
+-              "sandbox": false
++              "tools": {
++                "sandbox": "docker"
++              }
+             }
+           PROMPT: |-
+             ## Role
+@@ -624,41 +603,12 @@ jobs:
+             exit without committing. An honest abort is better than a wrong
+             fix.
+         run: |-
+-          BRANCH="autofix/issue-${ISSUE}"
+-
+-          start_openai_proxy() {
+-            local proxy_info local_openai_base_url
+-            proxy_info="$(mktemp "${RUNNER_TEMP:-/tmp}/qwen-openai-proxy.XXXXXX")"
+-
+-            QWEN_OPENAI_PROXY_INFO="${proxy_info}" node .github/scripts/openai-proxy.mjs &
+-            OPENAI_PROXY_PID=$!
+-            trap 'kill "${OPENAI_PROXY_PID}" 2>/dev/null || true' EXIT
+-            for _ in 1 2 3 4 5; do
+-              if [[ -s "${proxy_info}" ]]; then
+-                break
+-              fi
+-              if ! kill -0 "${OPENAI_PROXY_PID}" 2>/dev/null; then
+-                echo '::error::OpenAI proxy exited before becoming ready.'
+-                exit 1
+-              fi
+-              sleep 1
+-            done
+-            if [[ ! -s "${proxy_info}" ]]; then
+-              echo '::error::OpenAI proxy did not become ready.'
+-              exit 1
+-            fi
+-            local_openai_base_url="$(cat "${proxy_info}")"
+-            unset QWEN_UPSTREAM_OPENAI_API_KEY
+-            unset QWEN_UPSTREAM_OPENAI_BASE_URL
+-            export OPENAI_API_KEY=qwen-loopback-proxy
+-            export OPENAI_BASE_URL="${local_openai_base_url}"
+-            echo "openai_proxy=enabled (${OPENAI_BASE_URL})"
+-          }
+-
+-          start_openai_proxy
+-
+           rm -rf "${QWEN_HOME}"
+           mkdir -p .qwen "${QWEN_HOME}"
++          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
++            echo '::error::AUTOFIX_OPENAI_API_KEY secret is required for Qwen Autofix.'
++            exit 1
++          fi
+           printf '%s\n' "${SETTINGS_JSON}" > .qwen/settings.json
+           qwen --yolo --prompt "${PROMPT}"
+ 
+@@ -951,9 +901,7 @@ jobs:
+     needs: 'review-scan'
+     if: |-
+       ${{ needs.review-scan.outputs.has_targets == 'true' }}
+-    # Heavy autonomous jobs run on the dedicated ECS pool when available. Hosted
+-    # remains as a guarded fallback so maintainers can disable the pool quickly.
+-    runs-on: '${{ (github.repository == ''QwenLM/qwen-code'' && vars.AUTOFIX_ECS_RUNNER_DISABLED != ''true'') && fromJSON(''["self-hosted", "linux", "x64", "autofix"]'') || fromJSON(''["ubuntu-latest"]'') }}'
++    runs-on: 'ubuntu-latest'
+     timeout-minutes: 120
+     permissions:
+       contents: 'read'
+@@ -990,7 +938,7 @@ jobs:
+           RUNNER_ENVIRONMENT: '${{ runner.environment }}'
+         run: |-
+           case "${RUNNER_ENVIRONMENT}" in
+-            github-hosted|self-hosted) ;;
++            github-hosted) ;;
+             *)
+               echo "::error::Unsupported runner environment: ${RUNNER_ENVIRONMENT:-unset}."
+               exit 1
+@@ -1006,17 +954,6 @@ jobs:
+           cache: 'npm'
+           cache-dependency-path: 'package-lock.json'
+ 
+-      - name: 'Use pre-installed Node.js (self-hosted)'
+-        if: |-
+-          ${{ runner.environment == 'self-hosted' }}
+-        run: |-
+-          if ! command -v node > /dev/null 2>&1; then
+-            echo '::error::Node.js is required on the autofix self-hosted runner.'
+-            exit 1
+-          fi
+-          node --version
+-          npm --version
+-
+       - name: 'Install tmux'
+         run: |-
+           if command -v tmux > /dev/null 2>&1; then
+@@ -1031,7 +968,15 @@ jobs:
+ 
+       - name: 'Install dependencies and build'
+         run: |-
+-          npm ci --prefer-offline --no-audit --progress=false
++          for attempt in 1 2 3; do
++            if npm ci --prefer-offline --no-audit --progress=false; then
++              break
++            fi
++            if [[ "${attempt}" == "3" ]]; then
++              exit 1
++            fi
++            sleep $((attempt * 15))
++          done
+           npm run build
+           npm run bundle
+ 
+@@ -1050,12 +995,22 @@ jobs:
+           PATH="${qwen_bin}:${PATH}"
+           qwen --version
+ 
++      - name: 'Resolve sandbox image'
++        run: |-
++          node .github/scripts/resolve-sandbox-image.mjs \
++            "$(node -p "require('./package.json').config.sandboxImageUri")"
++
+       - name: 'Prepare branch and feedback'
+         id: 'prepare'
+         env:
+           GITHUB_TOKEN: '${{ secrets.CI_DEV_BOT_PAT }}'
+         run: |-
+           mkdir -p "${WORKDIR}"
++          if ! git diff --quiet || ! git diff --cached --quiet; then
++            echo 'Restoring tracked build output before switching to the PR branch.'
++            git status --short
++            git restore --source=HEAD --staged --worktree .
++          fi
+           git checkout -B "${BRANCH}" "origin/${BRANCH}"
+ 
+           # Does the branch conflict with base? merge-tree computes the merge
+@@ -1125,9 +1080,10 @@ jobs:
+         env:
+           PR: '${{ env.PR }}'
+           ISSUE: '${{ env.ISSUE }}'
+-          QWEN_UPSTREAM_OPENAI_API_KEY: '${{ secrets.OPENAI_API_KEY }}'
+-          QWEN_UPSTREAM_OPENAI_BASE_URL: '${{ secrets.OPENAI_BASE_URL }}'
++          OPENAI_API_KEY: '${{ secrets.AUTOFIX_OPENA

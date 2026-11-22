@@ -1,0 +1,451 @@
+diff --git a/.github/workflows/release-dry-run.yml b/.github/workflows/release-dry-run.yml
+index 056c89cb9691..4d440875644c 100644
+--- a/.github/workflows/release-dry-run.yml
++++ b/.github/workflows/release-dry-run.yml
+@@ -132,7 +132,6 @@ jobs:
+         env:
+           BUN_COMPILE_RELEASE: bun-v1.4.4
+           OPENCODE_MODELS_SNAPSHOT: ${{ github.workspace }}/.cache/models-catalog/api.json
+-          OPENCODE_RELEASE_NOTES: ${{ needs.plan.outputs.channel == 'latest' && inputs.release_notes || '' }}
+           GH_TOKEN: ${{ github.token }} # read-only; raises the rate limit for Bun release downloads
+       - name: Verify bundled models catalog
+         run: bun packages/cli/script/catalog-smoke.ts packages/cli/dist/cli-linux-x64/bin/opencode
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 3c0a05594e76..fd816f728f13 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -152,7 +152,6 @@ jobs:
+         env:
+           BUN_COMPILE_RELEASE: bun-v1.4.4
+           OPENCODE_MODELS_SNAPSHOT: ${{ github.workspace }}/.cache/models-catalog/api.json
+-          OPENCODE_RELEASE_NOTES: ${{ needs.plan.outputs.channel == 'latest' && inputs.release_notes || '' }}
+           GH_TOKEN: ${{ github.token }} # read-only; raises the rate limit for Bun release downloads
+       - name: Verify bundled models catalog
+         run: bun packages/cli/script/catalog-smoke.ts packages/cli/dist/cli-linux-x64/bin/opencode
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 4bcf73c3b3b3..0a7376e7fd61 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -382,12 +382,12 @@ These changes affect code that imports `@opencode/ai` directly. They don't chang
+ 
+ ### Highlights
+ 
+-- Create, install and share [Desktop plugins](https://opencode.ai/v2/docs/build/plugins/gui) (experimental) ([#55246](https://github.com/anomalyco/opencode/pull/55246), [#59469](https://github.com/anomalyco/opencode/pull/59469), [#59489](https://github.com/anomalyco/opencode/pull/59489))
+-- Refreshed the desktop app experience ([#56898](https://github.com/anomalyco/opencode/pull/56898), [#58865](https://github.com/anomalyco/opencode/pull/58865), [#55838](https://github.com/anomalyco/opencode/pull/55838), [#57962](https://github.com/anomalyco/opencode/pull/57962))
+-- Add experimental image and decision generation APIs to plugins and sdk, allowing image generation or decision model (think typesafe, clef, etc) workflows. ([#59190](https://github.com/anomalyco/opencode/pull/59190), [#59380](https://github.com/anomalyco/opencode/pull/59380), [#58758](https://github.com/anomalyco/opencode/pull/58758))
+-- Plugins can now attach and update keyed session instructions with ctx.session.instructions.entry.put/list/remove. Instead of editing the system prompt and busting the prompt cache, each change is added as a small update at the next step. The entries also survive compaction and reverts, and they don't start an extra model turn. ([#56550](https://github.com/anomalyco/opencode/pull/56550))
+-- Restored the Todo tool in desktop via opt-in ([#59092](https://github.com/anomalyco/opencode/pull/59092))
+-- Add configurable prompt cache TTLs per provider/model ([#59157](https://github.com/anomalyco/opencode/pull/59157))
++- **Desktop Plugins**: Create, install and share [Desktop plugins](https://opencode.ai/v2/docs/build/plugins/gui) (experimental). ([#55246](https://github.com/anomalyco/opencode/pull/55246), [#59469](https://github.com/anomalyco/opencode/pull/59469), [#59489](https://github.com/anomalyco/opencode/pull/59489))
++- **Refreshed Desktop App**: The desktop app experience has been refreshed. ([#56898](https://github.com/anomalyco/opencode/pull/56898), [#58865](https://github.com/anomalyco/opencode/pull/58865), [#55838](https://github.com/anomalyco/opencode/pull/55838), [#57962](https://github.com/anomalyco/opencode/pull/57962))
++- **Image and Decision Generation APIs**: Plugins and the SDK get experimental image and decision generation APIs for image generation or decision model workflows. ([#59190](https://github.com/anomalyco/opencode/pull/59190), [#59380](https://github.com/anomalyco/opencode/pull/59380), [#58758](https://github.com/anomalyco/opencode/pull/58758))
++- **Keyed Session Instructions**: Plugins can attach and update keyed session instructions with `ctx.session.instructions.entry.put/list/remove`. Each change is added at the next step instead of editing the system prompt and busting the prompt cache, and entries survive compaction and reverts. ([#56550](https://github.com/anomalyco/opencode/pull/56550))
++- **Opt-In Todo Tool on Desktop**: The Todo tool is back in desktop as an opt-in. ([#59092](https://github.com/anomalyco/opencode/pull/59092))
++- **Prompt Cache TTLs**: Configure prompt cache TTLs per provider and model. ([#59157](https://github.com/anomalyco/opencode/pull/59157))
+ 
+ ### Breaking changes
+ 
+diff --git a/packages/cli/script/build-node.ts b/packages/cli/script/build-node.ts
+index 92330fdd5ee9..f6ebb4fe3f1f 100644
+--- a/packages/cli/script/build-node.ts
++++ b/packages/cli/script/build-node.ts
+@@ -31,7 +31,7 @@ const bundleOnly = process.argv.includes("--bundle-only")
+ const single = process.argv.includes("--single")
+ const skipInstall = process.argv.includes("--skip-install")
+ const appArchiveOnly = process.argv.includes("--app-archive-only")
+-const highlights = Script.preview ? undefined : embed(process.env.OPENCODE_RELEASE_NOTES)
++const highlights = Script.preview ? undefined : await embed()
+ const requestedArchive = process.env.OPENCODE_APP_ARCHIVE
+ const archivePath = requestedArchive ? path.resolve(dir, requestedArchive) : undefined
+ const requested = process.env.OPENCODE_TARGET
+diff --git a/packages/cli/script/build.ts b/packages/cli/script/build.ts
+index 80a67fe75589..08b29ac2007a 100755
+--- a/packages/cli/script/build.ts
++++ b/packages/cli/script/build.ts
+@@ -33,7 +33,7 @@ const requestedTarget = process.env.OPENCODE_TARGET
+ const skipInstall = process.argv.includes("--skip-install")
+ const skipWebUi = process.argv.includes("--skip-web-ui")
+ const solidPlugin = createSolidTransformPlugin()
+-const highlights = Script.preview ? undefined : embed(process.env.OPENCODE_RELEASE_NOTES)
++const highlights = Script.preview ? undefined : await embed()
+ const releaseAssets = new Map<string, Promise<Map<string, string>>>()
+ const modelsSnapshot = modelsSnapshotPlugin(await bundledModelsSnapshot())
+ 
+diff --git a/packages/cli/src/version.ts b/packages/cli/src/version.ts
+index 54caec498f5c..09e5be59f883 100644
+--- a/packages/cli/src/version.ts
++++ b/packages/cli/src/version.ts
+@@ -8,12 +8,19 @@ declare const OPENCODE_RELEASE_HIGHLIGHTS: string
+ const version = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : "local"
+ const channel = typeof OPENCODE_CHANNEL === "string" ? OPENCODE_CHANNEL : "local"
+ const artifact = typeof OPENCODE_ARTIFACT === "string" ? OPENCODE_ARTIFACT : "cli"
+-// Stable release builds embed the release notes' Highlights; every other build has none.
++// Stable release builds embed the newest releases' Highlights from CHANGELOG.md, newest first; every other build has none.
+ const highlights =
+   typeof OPENCODE_RELEASE_HIGHLIGHTS === "string"
+     ? Option.getOrElse(
+         Schema.decodeUnknownOption(
+-          Schema.fromJsonString(Schema.Array(Schema.Struct({ title: Schema.String, body: Schema.String }))),
++          Schema.fromJsonString(
++            Schema.Array(
++              Schema.Struct({
++                version: Schema.String,
++                items: Schema.Array(Schema.Struct({ title: Schema.String, body: Schema.String })),
++              }),
++            ),
++          ),
+         )(OPENCODE_RELEASE_HIGHLIGHTS),
+         () => [],
+       )
+diff --git a/packages/script/src/highlights.ts b/packages/script/src/highlights.ts
+index 3266b64678e4..f0dc593a6032 100644
+--- a/packages/script/src/highlights.ts
++++ b/packages/script/src/highlights.ts
+@@ -1,6 +1,8 @@
++import path from "path"
++
+ export type Highlight = { title: string; body: string }
+ 
+-const LIMIT = { items: 5, title: 60, body: 300 }
++const LIMIT = { releases: 5, items: 5, title: 60, body: 300 }
+ 
+ /**
+  * Extracts the `### Highlights` bullets from reviewed release notes. Each bullet is expected to look like
+@@ -58,11 +60,35 @@ function truncate(value: string, limit: number) {
+   return `${(space > limit / 2 ? cut.slice(0, space) : cut).trimEnd()}…`
+ }
+ 
+-/** Returns the JSON a stable release build embeds as `OPENCODE_RELEASE_HIGHLIGHTS`, warning about malformed notes. */
+-export function embed(notes: string | undefined) {
+-  if (!notes?.trim()) return
+-  const result = parse(notes)
++/**
++ * Splits CHANGELOG.md at its `## vX.Y.Z` release headings and parses each release's Highlights. Returns the newest
++ * releases that have highlights, newest first, with the problems in the newest release's notes only: older releases
++ * have shipped, so their problems are no longer actionable.
++ */
++export function history(changelog: string) {
++  const sections = changelog
++    .replace(/\r\n/g, "\n")
++    .split(/^(?=## v\d+\.\d+\.\d+(?:\s|$))/m)
++    .flatMap((section) => {
++      const version = section.match(/^## v(\d+\.\d+\.\d+)(?:\s|$)/)?.[1]
++      return version ? [{ version, ...parse(section) }] : []
++    })
++  return {
++    releases: sections
++      .filter((section) => section.items.length > 0)
++      .slice(0, LIMIT.releases)
++      .map((section) => ({ version: section.version, items: section.items })),
++    problems: sections[0]?.problems ?? [],
++  }
++}
++
++/**
++ * Returns the JSON a stable release build embeds as `OPENCODE_RELEASE_HIGHLIGHTS`: the newest releases' highlights
++ * from the repository's CHANGELOG.md, which the release commit has already extended with this release's notes.
++ */
++export async function embed() {
++  const result = history(await Bun.file(path.resolve(import.meta.dir, "../../../CHANGELOG.md")).text())
+   result.problems.forEach((problem) => console.warn(`release highlights: ${problem}`))
+-  if (!result.items.length) return
+-  return JSON.stringify(result.items)
++  if (!result.releases.length) return
++  return JSON.stringify(result.releases)
+ }
+diff --git a/packages/script/test/highlights.test.ts b/packages/script/test/highlights.test.ts
+index f7dde1059973..f06a6233a354 100644
+--- a/packages/script/test/highlights.test.ts
++++ b/packages/script/test/highlights.test.ts
+@@ -1,6 +1,6 @@
+ import { describe, expect, test } from "bun:test"
+ import path from "path"
+-import { parse } from "../src/highlights"
++import { history, parse } from "../src/highlights"
+ 
+ describe("highlights", () => {
+   test("parses the v2.0.27 release notes", async () => {
+@@ -77,4 +77,63 @@ describe("highlights", () => {
+     expect(result.items[0].body.endsWith("…")).toBe(true)
+     expect(result.problems).toEqual(["Kept the first 5 of 7 highlights"])
+   })
++
++  test("reads the newest releases with highlights from CHANGELOG.md, newest first", async () => {
++    const changelog = await Bun.file(path.resolve(import.meta.dir, "../../../CHANGELOG.md")).text()
++    const versions = [...changelog.matchAll(/^## v(\d+\.\d+\.\d+) /gm)].map((match) => match[1])
++    const result = history(changelog)
++
++    expect(result.problems).toEqual([])
++    expect(result.releases).toHaveLength(5)
++    expect(result.releases[0].version).toBe(versions[0])
++    // Releases keep the changelog's newest-first order.
++    expect(result.releases.map((release) => versions.indexOf(release.version))).toEqual(
++      result.releases.map((release) => versions.indexOf(release.version)).toSorted((a, b) => a - b),
++    )
++    expect(result.releases.every((release) => release.items.length > 0 && release.items.length <= 5)).toBe(true)
++  })
++
++  test("skips releases without highlights and reports problems only for the newest", () => {
++    const release = (version: string, highlights: string) =>
++      [`## v${version} — 2026-10-30`, "", "### Highlights", "", highlights, "", "### Core", "", "- A fix."].join("\n")
++    const result = history(
++      [
++        "# Changelog",
++        "",
++        release("2.0.3", "- Plain bullet without a title."),
++        release("2.0.2", "- **Two**: The second release."),
++        release("2.0.1", "- Another plain bullet."),
++        "## v2.0.0-beta.1 — 2026-10-01",
++        "",
++        "### Highlights",
++        "",
++        "- **Beta**: Not a release.",
++        release("1.9.0", "- **One**: The first release."),
++      ].join("\r\n"),
++    )
++
++    expect(result.releases).toEqual([
++      { version: "2.0.2", items: [{ title: "Two", body: "The second release." }] },
++      { version: "1.9.0", items: [{ title: "One", body: "The first release." }] },
++    ])
++    expect(result.problems).toEqual([
++      "Skipped a highlight without a bold title and description: Plain bullet without a title.",
++      "The Highlights section has no highlights in the expected format",
++    ])
++  })
++
++  test("keeps the newest five releases", () => {
++    const changelog = Array.from(
++      { length: 7 },
++      (_, index) => `## v2.0.${7 - index}\n\n### Highlights\n\n- **Release ${7 - index}**: Text.\n`,
++    ).join("\n")
++
++    expect(history(changelog).releases.map((release) => release.version)).toEqual([
++      "2.0.7",
++      "2.0.6",
++      "2.0.5",
++      "2.0.4",
++      "2.0.3",
++    ])
++  })
+ })
+diff --git a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
+index 2334c869fc77..f6c10e897309 100644
+--- a/packages/tui/src/app.tsx
++++ b/packages/tui/src/app.tsx
+@@ -732,19 +732,19 @@ function App() {
+   createEffect(() => {
+     if (highlighted || !plugins.ready() || client.connection.status() !== "connected") return
+     highlighted = true
+-    const items = app.highlights ?? []
++    const releases = app.highlights ?? []
+     if (config.data.highlights === false) return
+     if (route.data.type !== "home" || dialog.stack.length > 0 || promptRef.current?.current.text) return
+     if (args.prompt || args.continue || args.sessionID || args.newSessionID) return
+     if (process.env.OPENCODE_DRIVE || process.env.OPENCODE_STORY || process.env.OPENCODE_ROUTE) return
+     void claim(storage, {
+       version: app.version,
+-      count: items.length,
++      releases: releases.map((release) => release.version),
+       history: existsSync(path.join(paths.state, "prompt-history.jsonl")),
+     })
+       .then((show) => {
+         if (show && dialog.stack.length === 0)
+-          dialog.replace(() => <DialogHighlights version={app.version} items={items} />)
++          dialog.replace(() => <DialogHighlights releases={releases} />)
+       })
+       .catch(toast.error)
+   })
+@@ -1036,7 +1036,7 @@ function App() {
+               name: "opencode.highlights",
+               title: "Show release highlights",
+               slash: { name: "highlights" },
+-              run: () => dialog.replace(() => <DialogHighlights version={app.version} items={app.highlights ?? []} />),
++              run: () => dialog.replace(() => <DialogHighlights releases={app.highlights ?? []} />),
+               category: "System",
+             },
+           ]
+diff --git a/packages/tui/src/component/dialog-highlights.tsx b/packages/tui/src/component/dialog-highlights.tsx
+index d11506eae7ab..208aecda29ee 100644
+--- a/packages/tui/src/component/dialog-highlights.tsx
++++ b/packages/tui/src/component/dialog-highlights.tsx
+@@ -1,21 +1,33 @@
+ import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
+ import { useTerminalDimensions } from "@opentui/solid"
+-import { createMemo, For } from "solid-js"
++import { createMemo, createSignal, For, Show } from "solid-js"
+ import { useConfig } from "../config"
+ import { Keymap } from "../context/keymap"
+-import type { TuiHighlight } from "../context/runtime"
++import type { TuiReleaseHighlights } from "../context/runtime"
+ import { useTheme } from "../context/theme"
+ import { DIALOG_INSET, DialogBleed, DialogFooter, DialogHeader, DialogLayout, useDialog } from "../ui/dialog"
+ import { getScrollAcceleration } from "../util/scroll"
+ 
+-export function DialogHighlights(props: { version: string; items: ReadonlyArray<TuiHighlight> }) {
++/** Shows one embedded release's highlights at a time, starting at the newest. */
++export function DialogHighlights(props: { releases: ReadonlyArray<TuiReleaseHighlights> }) {
+   const dialog = useDialog()
+-  const theme = useTheme().surface("dialog")
+   const overlay = useTheme()
+   const config = useConfig().data
+   const dimensions = useTerminalDimensions()
+-  const maxHeight = createMemo(() => Math.max(6, Math.floor(dimensions().height * 0.6) - 2))
++  // Leaves room for the version row above the scrolling highlights.
++  const maxHeight = createMemo(() => Math.max(6, Math.floor(dimensions().height * 0.6) - 4))
+   let scroll: ScrollBoxRenderable | undefined
++  const [index, setIndex] = createSignal(0)
++  const release = () => props.releases[index()]
++  const hasOlder = () => index() < props.releases.length - 1
++  const hasNewer = () => index() > 0
++  const select = (next: number) => {
++    if (next < 0 || next >= props.releases.length) return
++    setIndex(next)
++    scroll?.scrollTo(0)
++  }
++  const older = () => select(index() + 1)
++  const newer = () => select(index() - 1)
+ 
+   dialog.setCentered(true)
+ 
+@@ -29,30 +41,39 @@ export function DialogHighlights(props: { version: string; items: ReadonlyArray<
+       { bind: "pagedown", title: "Next page", group: "Dialog", run: () => scroll?.scrollBy(maxHeight()) },
+       { bind: "home", title: "Scroll to top", group: "Dialog", run: () => scroll?.scrollTo(0) },
+       { bind: "end", title: "Scroll to bottom", group: "Dialog", run: () => scroll?.scrollTo(Infinity) },
++      ...["left", "h"].map((bind) => ({ bind, title: "Newer release", group: "Dialog", run: newer })),
++      ...["right", "l"].map((bind) => ({ bind, title: "Older release", group: "Dialog", run: older })),
+     ],
+   }))
+ 
+   return (
+     <DialogLayout
+-      header={<DialogHeader title={`What's new in ${props.version}`} />}
++      header={<DialogHeader title="What's new" />}
+       footer={{ actions: { primary: [{ title: "ok", key: "enter", onTrigger: () => dialog.clear() }] } }}
+       legacyFooter={
+         <box flexDirection="row" justifyContent="space-between" alignItems="center">
+           <DialogFooter actions={{ secondary: [{ title: "scroll", key: "↑/↓" }] }} />
+-          <box
+-            paddingLeft={3}
+-            paddingRight={3}
+-            backgroundColor={theme.background.action.primary.focused}
+-            onMouseUp={() => dialog.clear()}
+-          >
+-            <text fg={theme.text.action.primary.focused}>ok</text>
+-          </box>
++          <Button title="ok" onTrigger={() => dialog.clear()} />
+         </box>
+       }
+     >
+       {/* The band owns the vertical padding so it stays visible while the highlights scroll. */}
+       <DialogBleed>
+-        <box backgroundColor={overlay.background.raised.high} paddingTop={1} paddingBottom={1}>
++        <box backgroundColor={overlay.background.raised.high} paddingTop={1} paddingBottom={1} gap={1}>
++          {/* The version stays centered and put while the highlights below it scroll; each arrow keeps its slot. */}
++          <box flexDirection="row" justifyContent="center" gap={2}>
++            <box width={3}>
++              <Show when={hasNewer()}>
++                <Button title="<" padding={1} onTrigger={newer} />
++              </Show>
++            </box>
++            <text fg={overlay.text.base}>{release().version}</text>
++            <box width={3}>
++              <Show when={hasOlder()}>
++                <Button title=">" padding={1} onTrigger={older} />
++              </Show>
++            </box>
++          </box>
+           <scrollbox
+             ref={(element: ScrollBoxRenderable) => (scroll = element)}
+             maxHeight={maxHeight()}
+@@ -62,7 +83,7 @@ export function DialogHighlights(props: { version: string; items: ReadonlyArray<
+             scrollAcceleration={getScrollAcceleration(config)}
+           >
+             <box gap={1} paddingLeft={DIALOG_INSET} paddingRight={DIALOG_INSET}>
+-              <For each={props.items}>
++              <For each={release().items}>
+                 {(item) => (
+                   <box>
+                     <text attributes={TextAttributes.BOLD} fg={overlay.text.base}>
+@@ -86,3 +107,18 @@ export function DialogHighlights(props: { version: string; items: ReadonlyArray<
+     </DialogLayout>
+   )
+ }
++
++/** A filled dialog button, shared by ok and the release arrows so they look alike. */
++function Button(props: { title: string; padding?: number; onTrigger: () => void }) {
++  const theme = useTheme().surface("dialog")
++  return (
++    <box
++      paddingLeft={props.padding ?? 3}
++      paddingRight={props.padding ?? 3}
++      backgroundColor={theme.background.action.primary.focused}
++      onMouseUp={props.onTrigger}
++    >
++      <text fg={theme.text.action.primary.focused}>{props.title}</text>
++    </box>
++  )
++}
+diff --git a/packages/tui/src/context/runtime.tsx b/packages/tui/src/context/runtime.tsx
+index fc996da99827..220c47f83dbb 100644
+--- a/packages/tui/src/context/runtime.tsx
++++ b/packages/tui/src/context/runtime.tsx
+@@ -5,12 +5,17 @@ export type TuiHighlight = Readonly<{
+   body: string
+ }>
+ 
++export type TuiReleaseHighlights = Readonly<{
++  version: string
++  items: ReadonlyArray<TuiHighlight>
++}>
++
+ export type TuiApp = Readonly<{
+   name: string
+   version: string
+   channel: string
+-  /** The current release's highlights, embedded only in stable release builds. */
+-  highlights?: ReadonlyArray<TuiHighlight>
++  /** The newest releases' highlights, newest first, embedded only in stable release builds. */
++  highlights?: ReadonlyArray<TuiReleaseHighlights>
+ }>
+ 
+ export type TuiPaths = Readonly<{
+diff --git a/packages/tui/src/feature-plugins/system/storybook/highlights.tsx b/packages/tui/src/feature-plugins/system/storybook/highlights.tsx
+index cf03ecab9623..23c2929d06dd 100644
+--- a/packages/tui/src/feature-plugins/system/storybook/highlights.tsx
++++ b/packages/tui/src/feature-plugins/system/storybook/highlights.tsx
+@@ -5,39 +5,112 @@ import { DialogHighlights } from "../../../component/dialog-highlights"
+ import type { Story } from "./index"
+ import { StoryFooter } from "./footer"
+ 
+-// The v2.0.27 release highlights, as a release build embeds them.
+-const items = [
++// The v2.2.1 to v2.2.5 release highlights, as a release build embeds them from CHANGELOG.md.
++const releases = [
+   {
+-    title: "Built-In Worktree Tools",
+-    body: "Ask OpenCode to use `worktree_create`, `worktree_list`, and `worktree_remove` in Code Mode. You can create isolated worktrees, move sessions into them, and remove them with normal edit approval.",
++    version: "2.2.5",
++    items: [
++      {
++        title: "Worktree and Shell Mode Shortcuts",
++        body: "Press `⌘⌥O` on macOS or `Ctrl+Alt+O` on Windows and Linux to choose a worktree, and `⌘⌥B` or `Ctrl+Alt+B` to choose its base branch. `⌘⇧X` or `Ctrl+Shift+X` now toggles shell mode in the composer.",
++      },
++      {
++        title: "Send Quotes From the Comment Popup",
++        body: "Hold `⌘` or `Ctrl` in the quote popup to turn its checkmark into send, or press `⌘Enter` or `Ctrl+Enter`, to send just that quote and comment while leaving the rest of the composer untouched.",
++      },
++      {
++        title: "Percentage Compaction Buffer",
++        body: "Set `\"compaction\": { \"buffer\": \"20%\" }` in `opencode.json` to keep a share of each model's context window free, so one setting fits models with small and large windows. Token counts still work.",
++      },
++    ],
+   },
+   {
+-    title: "Safer Remote Pairing",
+-    body: "The first `opencode pair --remote` now warns that it will expose your server and asks for confirmation. For non-interactive use, pass `opencode pair --remote --yes`.",
++    version: "2.2.4",
++    items: [
++      {
++        title: "Persistent Desktop Terminals",
++        body: "Desktop terminals now belong to the session, survive se

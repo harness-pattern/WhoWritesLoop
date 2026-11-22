@@ -1,0 +1,16 @@
+diff --git a/ui/goose2/src/shared/api/acpApi.ts b/ui/goose2/src/shared/api/acpApi.ts
+index 4ae88d56699b..c844bc6705ba 100644
+--- a/ui/goose2/src/shared/api/acpApi.ts
++++ b/ui/goose2/src/shared/api/acpApi.ts
+@@ -131,7 +131,10 @@ export async function updateWorkingDir(
+   workingDir: string,
+ ): Promise<void> {
+   const client = await getClient();
+-  await client.extMethod("goose/working_dir/update", { sessionId, workingDir });
++  await client.extMethod("_goose/working_dir/update", {
++    sessionId,
++    workingDir,
++  });
+ }
+ 
+ export async function cancelSession(sessionId: string): Promise<void> {

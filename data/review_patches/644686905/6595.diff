@@ -1,0 +1,684 @@
+diff --git a/core/config/ConfigHandler.ts b/core/config/ConfigHandler.ts
+index 0d4d81b3093..c67ac72e19d 100644
+--- a/core/config/ConfigHandler.ts
++++ b/core/config/ConfigHandler.ts
+@@ -11,12 +11,14 @@ import {
+ } from "../index.js";
+ import { GlobalContext } from "../util/GlobalContext.js";
+ 
++import EventEmitter from "node:events";
+ import {
+   AuthType,
+   ControlPlaneSessionInfo,
+ } from "../control-plane/AuthTypes.js";
+ import { getControlPlaneEnv } from "../control-plane/env.js";
+ import { logger } from "../util/logger.js";
++import { Telemetry } from "../util/posthog.js";
+ import {
+   ASSISTANTS,
+   getAllDotContinueDefinitionFiles,
+@@ -44,6 +46,16 @@ export class ConfigHandler {
+   private organizations: OrgWithProfiles[] = [];
+   currentProfile: ProfileLifecycleManager | null;
+   currentOrg: OrgWithProfiles;
++  totalConfigLoads: number = 0;
++
++  public isInitialized: Promise<void>;
++  private initter: EventEmitter;
++
++  cascadeAbortController: AbortController;
++  private abortCascade() {
++    this.cascadeAbortController.abort();
++    this.cascadeAbortController = new AbortController();
++  }
+ 
+   constructor(
+     private readonly ide: IDE,
+@@ -80,7 +92,13 @@ export class ConfigHandler {
+     this.currentOrg = personalOrg;
+     this.organizations = [personalOrg];
+ 
+-    void this.cascadeInit();
++    this.initter = new EventEmitter();
++    this.isInitialized = new Promise((resolve) => {
++      this.initter.on("init", resolve);
++    });
++
++    this.cascadeAbortController = new AbortController();
++    void this.cascadeInit("Config handler initialization");
+   }
+ 
+   private workspaceDirs: string[] | null = null;
+@@ -96,54 +114,71 @@ export class ConfigHandler {
+     return `${workspaceId}:::${orgId}`;
+   }
+ 
+-  private async cascadeInit() {
++  private async cascadeInit(reason: string) {
++    const signal = this.cascadeAbortController.signal;
+     this.workspaceDirs = null; // forces workspace dirs reload
+ 
+-    const orgs = await this.getOrgs();
++    try {
++      const orgs = await this.getOrgs();
+ 
+-    // Figure out selected org
+-    const workspaceId = await this.getWorkspaceId();
+-    const selectedOrgs =
+-      this.globalContext.get("lastSelectedOrgIdForWorkspace") ?? {};
+-    const currentSelection = selectedOrgs[workspaceId];
++      // Figure out selected org
++      const workspaceId = await this.getWorkspaceId();
++      const selectedOrgs =
++        this.globalContext.get("lastSelectedOrgIdForWorkspace") ?? {};
++      const currentSelection = selectedOrgs[workspaceId];
+ 
+-    const firstNonPersonal = orgs.find(
+-      (org) => org.id !== this.PERSONAL_ORG_DESC.id,
+-    );
+-    const fallback = firstNonPersonal ?? orgs[0];
+-    // note, ignoring case of zero orgs since should never happen
++      const firstNonPersonal = orgs.find(
++        (org) => org.id !== this.PERSONAL_ORG_DESC.id,
++      );
++      const fallback = firstNonPersonal ?? orgs[0];
++      // note, ignoring case of zero orgs since should never happen
+ 
+-    let selectedOrg: OrgWithProfiles;
+-    if (!currentSelection) {
+-      selectedOrg = fallback;
+-    } else {
+-      const match = orgs.find((org) => org.id === currentSelection);
+-      if (match) {
+-        selectedOrg = match;
+-      } else {
++      let selectedOrg: OrgWithProfiles;
++      if (!currentSelection) {
+         selectedOrg = fallback;
++      } else {
++        const match = orgs.find((org) => org.id === currentSelection);
++        if (match) {
++          selectedOrg = match;
++        } else {
++          selectedOrg = fallback;
++        }
+       }
+-    }
+ 
+-    this.globalContext.update("lastSelectedOrgIdForWorkspace", {
+-      ...selectedOrgs,
+-      [workspaceId]: selectedOrg.id,
+-    });
++      if (signal.aborted) {
++        return; // local only case, no`fetch to throw abort error
++      }
++      this.initter.emit("init");
++
++      this.globalContext.update("lastSelectedOrgIdForWorkspace", {
++        ...selectedOrgs,
++        [workspaceId]: selectedOrg.id,
++      });
++
++      this.organizations = orgs;
++      this.currentOrg = selectedOrg;
++      this.currentProfile = selectedOrg.currentProfile;
+ 
+-    this.organizations = orgs;
+-    this.currentOrg = selectedOrg;
+-    this.currentProfile = selectedOrg.currentProfile;
+-    await this.reloadConfig();
++      await this.reloadConfig(reason);
++    } catch (e) {
++      if (e instanceof Error && e.message.includes("AbortError")) {
++        return;
++      } else {
++        this.initter.emit("init"); // Error case counts for initialization
++        throw e;
++      }
++    }
+   }
+ 
+   private async getOrgs(): Promise<OrgWithProfiles[]> {
+-    if (await this.controlPlaneClient.isSignedIn()) {
++    const isSignedIn = await this.controlPlaneClient.isSignedIn();
++    if (isSignedIn) {
+       const orgDescs = await this.controlPlaneClient.listOrganizations();
+-      const personalHubOrg = await this.getPersonalHubOrg();
+-      const hubOrgs = await Promise.all(
+-        orgDescs.map((org) => this.getNonPersonalHubOrg(org)),
+-      );
+-      return [...hubOrgs, personalHubOrg];
++      const orgs = await Promise.all([
++        this.getPersonalHubOrg(),
++        ...orgDescs.map((org) => this.getNonPersonalHubOrg(org)),
++      ]);
++      return orgs;
+     } else {
+       return [await this.getLocalOrg()];
+     }
+@@ -312,13 +347,14 @@ export class ConfigHandler {
+   // Should not be used internally
+   //////////////////
+   async refreshAll() {
+-    await this.cascadeInit();
++    await this.cascadeInit("External refresh all");
+   }
+ 
+   // Ide settings change: refresh session and cascade refresh from the top
+   async updateIdeSettings(ideSettings: IdeSettings) {
+     this.ideSettingsPromise = Promise.resolve(ideSettings);
+-    await this.cascadeInit();
++    this.abortCascade();
++    await this.cascadeInit("IDE settings update");
+   }
+ 
+   // Session change: refresh session and cascade refresh from the top
+@@ -329,7 +365,8 @@ export class ConfigHandler {
+       Promise.resolve(sessionInfo),
+       this.ideSettingsPromise,
+     );
+-    await this.cascadeInit();
++    this.abortCascade();
++    await this.cascadeInit("Control plane session info update");
+   }
+ 
+   // Org id: check id validity, save selection, switch and reload
+@@ -356,7 +393,7 @@ export class ConfigHandler {
+       await this.setSelectedProfileId(profileId);
+     } else {
+       this.currentProfile = org.currentProfile;
+-      await this.reloadConfig();
++      await this.reloadConfig("Selected org changed");
+     }
+   }
+ 
+@@ -384,14 +421,17 @@ export class ConfigHandler {
+     });
+ 
+     this.currentProfile = profile;
+-    await this.reloadConfig();
++    await this.reloadConfig("Selected profile changed");
+   }
+ 
+   // Bottom level of cascade: refresh the current profile
+   // IMPORTANT - must always refresh when switching profiles
+   // Because of e.g. MCP singleton and docs service using things from config
+   // Could improve this
+-  async reloadConfig() {
++  async reloadConfig(reason: string) {
++    const startTime = performance.now();
++    this.totalConfigLoads += 1;
++    // console.log(`Reloading config (#${this.totalConfigLoads}): ${reason}`); // Uncomment to see config loading logs
+     if (!this.currentProfile) {
+       return {
+         config: undefined,
+@@ -415,6 +455,17 @@ export class ConfigHandler {
+       await this.currentProfile.reloadConfig(this.additionalContextProviders);
+ 
+     this.notifyConfigListeners({ config, errors, configLoadInterrupted });
++
++    // Track config loading telemetry
++    const endTime = performance.now();
++    const duration = endTime - startTime;
++    void Telemetry.capture("config_reload", {
++      duration,
++      reason,
++      totalConfigLoads: this.totalConfigLoads,
++      configLoadInterrupted,
++    });
++
+     return { config, errors, configLoadInterrupted };
+   }
+ 
+@@ -457,6 +508,7 @@ export class ConfigHandler {
+         configLoadInterrupted: true,
+       };
+     }
++    await this.isInitialized;
+     const config = await this.currentProfile.loadConfig(
+       this.additionalContextProviders,
+     );
+@@ -487,7 +539,7 @@ export class ConfigHandler {
+   private additionalContextProviders: IContextProvider[] = [];
+   registerCustomContextProvider(contextProvider: IContextProvider) {
+     this.additionalContextProviders.push(contextProvider);
+-    void this.reloadConfig();
++    void this.reloadConfig("Custom context provider registered");
+   }
+   /**
+    * Retrieves the titles of additional context providers that are of type "submenu".
+diff --git a/core/config/ConfigHandler.vitest.ts b/core/config/ConfigHandler.vitest.ts
+index 5af9d6bb8e3..f5816004421 100644
+--- a/core/config/ConfigHandler.vitest.ts
++++ b/core/config/ConfigHandler.vitest.ts
+@@ -32,7 +32,7 @@ describe.skip("Test the ConfigHandler and E2E config loading", () => {
+ }`;
+     fs.writeFileSync(getConfigTsPath(), configTs);
+     await new Promise((resolve) => setTimeout(resolve, 1000));
+-    const config = await testConfigHandler.reloadConfig();
++    const config = await testConfigHandler.reloadConfig("test");
+     /**
+      * @ts-ignore is applied because this test is skipped
+      */
+@@ -45,7 +45,7 @@ describe.skip("Test the ConfigHandler and E2E config loading", () => {
+       path.join(TEST_DIR, ".continuerc.json"),
+       JSON.stringify({ systemMessage: "SYSTEM2" }),
+     );
+-    const config = await testConfigHandler.reloadConfig();
++    const config = await testConfigHandler.reloadConfig("test");
+     /**
+      * @ts-ignore is applied because this test is skipped
+      */
+diff --git a/core/core.ts b/core/core.ts
+index 72892d394ba..c1dff0e4875 100644
+--- a/core/core.ts
++++ b/core/core.ts
+@@ -152,7 +152,7 @@ export class Core {
+     );
+ 
+     MCPManagerSingleton.getInstance().onConnectionsRefreshed = () => {
+-      void this.configHandler.reloadConfig();
++      void this.configHandler.reloadConfig("MCP Connections refreshed");
+ 
+       // Refresh @mention dropdown submenu items for MCP providers
+       const mcpManager = MCPManagerSingleton.getInstance();
+@@ -310,23 +310,31 @@ export class Core {
+     on("config/addModel", (msg) => {
+       const model = msg.data.model;
+       addModel(model, msg.data.role);
+-      void this.configHandler.reloadConfig();
++      void this.configHandler.reloadConfig(
++        "Model added (config/addModel message)",
++      );
+     });
+ 
+     on("config/deleteModel", (msg) => {
+       deleteModel(msg.data.title);
+-      void this.configHandler.reloadConfig();
++      void this.configHandler.reloadConfig(
++        "Model removed (config/deleteModel message)",
++      );
+     });
+ 
+     on("config/newPromptFile", async (msg) => {
+       const { config } = await this.configHandler.loadConfig();
+       await createNewPromptFileV2(this.ide, config?.experimental?.promptPath);
+-      await this.configHandler.reloadConfig();
++      await this.configHandler.reloadConfig(
++        "Prompt file created (config/newPromptFile message)",
++      );
+     });
+ 
+     on("config/addLocalWorkspaceBlock", async (msg) => {
+       await createNewWorkspaceBlockFile(this.ide, msg.data.blockType);
+-      await this.configHandler.reloadConfig();
++      await this.configHandler.reloadConfig(
++        "Local block created (config/addLocalWorkspaceBlock message)",
++      );
+     });
+ 
+     on("config/openProfile", async (msg) => {
+@@ -334,7 +342,9 @@ export class Core {
+     });
+ 
+     on("config/reload", async (msg) => {
+-      void this.configHandler.reloadConfig();
++      void this.configHandler.reloadConfig(
++        "Force reloaded (config/reload message)",
++      );
+       return await this.configHandler.getSerializedConfig();
+     });
+ 
+@@ -354,7 +364,9 @@ export class Core {
+ 
+     on("config/updateSharedConfig", async (msg) => {
+       const newSharedConfig = this.globalContext.updateSharedConfig(msg.data);
+-      await this.configHandler.reloadConfig();
++      await this.configHandler.reloadConfig(
++        "Shared config update (config/updateSharedConfig message)",
++      );
+       return newSharedConfig;
+     });
+ 
+@@ -364,7 +376,9 @@ export class Core {
+         msg.data.role,
+         msg.data.title,
+       );
+-      await this.configHandler.reloadConfig();
++      await this.configHandler.reloadConfig(
++        "Selected model update (config/updateSelectedModel message)",
++      );
+       return newSelectedModels;
+     });
+ 
+@@ -668,7 +682,7 @@ export class Core {
+         void refreshIfNotIgnored(data.uris);
+ 
+         if (hasRulesFiles(data.uris)) {
+-          await this.configHandler.reloadConfig();
++          await this.configHandler.reloadConfig("Rules file created");
+         }
+ 
+         // If it's a local assistant being created, we want to reload all assistants so it shows up in the list
+@@ -690,7 +704,7 @@ export class Core {
+         void refreshIfNotIgnored(data.uris);
+ 
+         if (hasRulesFiles(data.uris)) {
+-          await this.configHandler.reloadConfig();
++          await this.configHandler.reloadConfig("Rules file deleted");
+         }
+       }
+     });
+@@ -966,7 +980,7 @@ export class Core {
+         ],
+       }),
+     );
+-    void this.configHandler.reloadConfig();
++    void this.configHandler.reloadConfig("Autocomplete model added");
+   }
+ 
+   private async handleFilesChanged({
+@@ -996,7 +1010,9 @@ export class Core {
+               this.globalContext.update("showConfigUpdateToast", false);
+             }
+           }
+-          await this.configHandler.reloadConfig();
++          await this.configHandler.reloadConfig(
++            "Current profile config file updated",
++          );
+           continue;
+         }
+ 
+@@ -1012,7 +1028,9 @@ export class Core {
+               uri.includes(`.continue\\${blockType}`),
+           )
+         ) {
+-          await this.configHandler.reloadConfig();
++          await this.configHandler.reloadConfig(
++            "Config-related file updated: continuerc, prompt, local block, etc",
++          );
+         } else if (
+           uri.endsWith(".continueignore") ||
+           uri.endsWith(".gitignore")
+@@ -1094,7 +1112,7 @@ export class Core {
+ 
+     editConfigFile((c) => c, editConfigYamlCallback);
+ 
+-    void this.configHandler.reloadConfig();
++    void this.configHandler.reloadConfig("Onboarding completed");
+   }
+ 
+   private getContextItems = async (
+diff --git a/extensions/vscode/src/ContinueGUIWebviewViewProvider.ts b/extensions/vscode/src/ContinueGUIWebviewViewProvider.ts
+index 90ef6fe8edd..6059e2ad7ec 100644
+--- a/extensions/vscode/src/ContinueGUIWebviewViewProvider.ts
++++ b/extensions/vscode/src/ContinueGUIWebviewViewProvider.ts
+@@ -1,4 +1,3 @@
+-import { ConfigHandler } from "core/config/ConfigHandler";
+ import * as vscode from "vscode";
+ 
+ import { getTheme } from "./util/getTheme";
+@@ -59,16 +58,10 @@ export class ContinueGUIWebviewViewProvider
+   }
+ 
+   constructor(
+-    private readonly configHandlerPromise: Promise<ConfigHandler>,
+     private readonly windowId: string,
+     private readonly extensionContext: vscode.ExtensionContext,
+   ) {
+-    this.webviewProtocol = new VsCodeWebviewProtocol(
+-      (async () => {
+-        const configHandler = await this.configHandlerPromise;
+-        return configHandler.reloadConfig();
+-      }).bind(this),
+-    );
++    this.webviewProtocol = new VsCodeWebviewProtocol();
+   }
+ 
+   getSidebarContent(
+diff --git a/extensions/vscode/src/extension/VsCodeExtension.ts b/extensions/vscode/src/extension/VsCodeExtension.ts
+index 0bc47f90dc9..f0137bd0c86 100644
+--- a/extensions/vscode/src/extension/VsCodeExtension.ts
++++ b/extensions/vscode/src/extension/VsCodeExtension.ts
+@@ -100,7 +100,6 @@ export class VsCodeExtension {
+       resolveConfigHandler = resolve;
+     });
+     this.sidebar = new ContinueGUIWebviewViewProvider(
+-      configHandlerPromise,
+       this.windowId,
+       this.extensionContext,
+     );
+@@ -147,8 +146,10 @@ export class VsCodeExtension {
+     );
+     resolveVerticalDiffManager?.(this.verticalDiffManager);
+ 
+-    void setupRemoteConfigSync(
+-      this.configHandler.reloadConfig.bind(this.configHandler),
++    void setupRemoteConfigSync(() =>
++      this.configHandler.reloadConfig.bind(this.configHandler)(
++        "Remote config sync",
++      ),
+     );
+ 
+     void this.configHandler.loadConfig().then(({ config }) => {
+@@ -284,7 +285,9 @@ export class VsCodeExtension {
+       if (stats.size === 0) {
+         return;
+       }
+-      await this.configHandler.reloadConfig();
++      await this.configHandler.reloadConfig(
++        "Global JSON config updated - fs file watch",
++      );
+     });
+ 
+     fs.watchFile(
+@@ -294,7 +297,9 @@ export class VsCodeExtension {
+         if (stats.size === 0) {
+           return;
+         }
+-        await this.configHandler.reloadConfig();
++        await this.configHandler.reloadConfig(
++          "Global YAML config updated - fs file watch",
++        );
+       },
+     );
+ 
+@@ -302,7 +307,7 @@ export class VsCodeExtension {
+       if (stats.size === 0) {
+         return;
+       }
+-      void this.configHandler.reloadConfig();
++      void this.configHandler.reloadConfig("config.ts updated - fs file watch");
+     });
+ 
+     vscode.workspace.onDidChangeTextDocument(async (event) => {
+@@ -363,7 +368,7 @@ export class VsCodeExtension {
+         );
+ 
+         if (e.provider.id === "github") {
+-          this.configHandler.reloadConfig();
++          this.configHandler.reloadConfig("Github sign-in status changed");
+         }
+       }
+     });
+diff --git a/extensions/vscode/src/stubs/WorkOsAuthProvider.ts b/extensions/vscode/src/stubs/WorkOsAuthProvider.ts
+index f8914f31e80..fef0e4ba796 100644
+--- a/extensions/vscode/src/stubs/WorkOsAuthProvider.ts
++++ b/extensions/vscode/src/stubs/WorkOsAuthProvider.ts
+@@ -8,6 +8,7 @@ import {
+ } from "core/control-plane/AuthTypes";
+ import { getControlPlaneEnvSync } from "core/control-plane/env";
+ import fetch from "node-fetch";
++import { EventEmitter as NodeEventEmitter } from "node:events";
+ import { v4 as uuidv4 } from "uuid";
+ import {
+   authentication,
+@@ -101,6 +102,10 @@ export class WorkOsAuthProvider implements AuthenticationProvider, Disposable {
+     this.secretStorage = new SecretStorage(context);
+ 
+     // Immediately refresh any existing sessions
++    this.attemptEmitter = new NodeEventEmitter();
++    WorkOsAuthProvider.hasAttemptedRefresh = new Promise((resolve) => {
++      this.attemptEmitter.on("attempted", resolve);
++    });
+     void this.refreshSessions();
+ 
+     // Set up a regular interval to refresh tokens
+@@ -147,6 +152,7 @@ export class WorkOsAuthProvider implements AuthenticationProvider, Disposable {
+   public async getSessions(
+     scopes?: string[],
+   ): Promise<ContinueAuthenticationSession[]> {
++    // await this.hasAttemptedRefresh;
+     const data = await this.secretStorage.get(SESSIONS_SECRET_KEY);
+     if (!data) {
+       return [];
+@@ -182,6 +188,8 @@ export class WorkOsAuthProvider implements AuthenticationProvider, Disposable {
+     return this.ideRedirectUri;
+   }
+ 
++  public static hasAttemptedRefresh: Promise<void>;
++  private attemptEmitter: NodeEventEmitter;
+   async refreshSessions() {
+     // Prevent concurrent refresh operations
+     if (this._isRefreshing) {
+@@ -198,9 +206,12 @@ export class WorkOsAuthProvider implements AuthenticationProvider, Disposable {
+     }
+   }
+ 
++  // It is important that every path in this function emits the attempted event
++  // As config loading in core will be locked until refresh is attempted
+   private async _refreshSessions(): Promise<void> {
+     const sessions = await this.getSessions();
+     if (!sessions.length) {
++      this.attemptEmitter.emit("attempted");
+       return;
+     }
+ 
+@@ -247,6 +258,7 @@ export class WorkOsAuthProvider implements AuthenticationProvider, Disposable {
+     try {
+       return await this._refreshSession(refreshToken);
+     } catch (error: any) {
++      this.attemptEmitter.emit("attempted");
+       // Don't retry for auth errors
+       if (
+         error.message?.includes("401") ||
+@@ -270,6 +282,8 @@ export class WorkOsAuthProvider implements AuthenticationProvider, Disposable {
+             .catch(reject);
+         }, delay);
+       });
++    } finally {
++      this.attemptEmitter.emit("attempted");
+     }
+   }
+ 
+@@ -553,7 +567,7 @@ export async function getControlPlaneSessionInfo(
+     if (useOnboarding) {
+       WorkOsAuthProvider.useOnboardingUri = true;
+     }
+-
++    await WorkOsAuthProvider.hasAttemptedRefresh;
+     const session = await authentication.getSession(
+       controlPlaneEnv.AUTH_TYPE,
+       [],
+diff --git a/extensions/vscode/src/webviewProtocol.ts b/extensions/vscode/src/webviewProtocol.ts
+index 013e10d039c..324219a516c 100644
+--- a/extensions/vscode/src/webviewProtocol.ts
++++ b/extensions/vscode/src/webviewProtocol.ts
+@@ -152,7 +152,7 @@ export class VsCodeWebviewProtocol
+     this._webviewListener = this._webview.onDidReceiveMessage(handleMessage);
+   }
+ 
+-  constructor(private readonly reloadConfig: () => void) {}
++  constructor() {}
+ 
+   invoke<T extends keyof FromWebviewProtocol>(
+     messageType: T,
+diff --git a/gui/src/context/Auth.tsx b/gui/src/context/Auth.tsx
+index 6e95cf6b5d5..05bac4ad750 100644
+--- a/gui/src/context/Auth.tsx
++++ b/gui/src/context/Auth.tsx
+@@ -1,6 +1,6 @@
+ import {
+-  OrganizationDescription,
+   ProfileDescription,
++  SerializedOrgWithProfiles,
+ } from "core/config/ProfileLifecycleManager";
+ import { ControlPlaneSessionInfo } from "core/control-plane/AuthTypes";
+ import React, {
+@@ -28,7 +28,7 @@ interface AuthContextType {
+   selectedProfile: ProfileDescription | null;
+   profiles: ProfileDescription[] | null;
+   refreshProfiles: () => Promise<void>;
+-  organizations: OrganizationDescription[];
++  organizations: SerializedOrgWithProfiles[];
+ }
+ 
+ const AuthContext = createContext<AuthContextType | undefined>(undefined);
+@@ -95,7 +95,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+     "sessionUpdate",
+     async (data) => {
+       setSession(data.sessionInfo);
+-      void refreshProfiles();
+     },
+     [],
+   );
+diff --git a/gui/src/hooks/ParallelListeners.tsx b/gui/src/hooks/ParallelListeners.tsx
+index b6d70787637..6118d221325 100644
+--- a/gui/src/hooks/ParallelListeners.tsx
++++ b/gui/src/hooks/ParallelListeners.tsx
+@@ -101,8 +101,9 @@ function ParallelListeners() {
+     [dispatch, hasDoneInitialConfigLoad],
+   );
+ 
+-  const initialLoadAuthAndConfig = useCallback(
+-    async (initial: boolean) => {
++  // Load config from the IDE
++  useEffect(() => {
++    async function initialLoadConfig() {
+       dispatch(setIsSessionMetadataLoading(true));
+       dispatch(setConfigLoading(true));
+       const result = await ideMessenger.request(
+@@ -110,16 +111,11 @@ function ParallelListeners() {
+         undefined,
+       );
+       if (result.status === "success") {
+-        await handleConfigUpdate(initial, result.content);
++        await handleConfigUpdate(true, result.content);
+       }
+       dispatch(setConfigLoading(false));
+-    },
+-    [ideMessenger, handleConfigUpdate],
+-  );
+-
+-  // Load config from the IDE
+-  useEffect(() => {
+-    void initialLoadAuthAndConfig(true);
++    }
++    void initialLoadConfig();
+     const interval = setInterval(() => {
+       if (hasDoneInitialConfigLoad.current) {
+         // Init to run on initial config load
+@@ -130,12 +126,12 @@ function ParallelListeners() {
+         // This triggers sending pending status to the GUI for relevant docs indexes
+         clearInterval(interval);
+       } else {
+-        void initialLoadAuthAndConfig(true);
++        void initialLoadConfig();
+       }
+     }, 2_000);
+ 
+     return () => clearInterval(interval);
+-  }, [hasDoneInitialConfigLoad, initialLoadAuthAndConfig, ideMessenger]);
++  }, [hasDoneInitialConfigLoad, ideMessenger]);
+ 
+   useWebviewListener(
+     "configUpdate",
+diff --git a/gui/src/redux/store.ts b/gui/src/redux/store.ts
+index 10ecdd2e59a..0bd38f1fd0d 100644
+--- a/gui/src/redux/store.ts
++++ b/gui/src/redux/store.ts
+@@ -52,7 +52,7 @@ const saveSubsetFilters = [
+     "lastNonEditSessionWasEmpty",
+     "codeToEdit",
+   ]),
+-  cr

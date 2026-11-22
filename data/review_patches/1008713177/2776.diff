@@ -1,0 +1,593 @@
+diff --git a/docs/users/features/commands.md b/docs/users/features/commands.md
+index faa3ec32343..05311e95718 100644
+--- a/docs/users/features/commands.md
++++ b/docs/users/features/commands.md
+@@ -70,7 +70,75 @@ Commands for managing AI tools and models.
+ | `/extensions`    | List all active extensions in current session | `/extensions`                                 |
+ | `/memory`        | Manage AI's instruction context               | `/memory add Important Info`                  |
+ 
+-### 1.5 Information, Settings, and Help
++### 1.5 Side Question (`/btw`)
++
++The `/btw` command allows you to ask quick side questions without interrupting or affecting the main conversation flow.
++
++| Command                | Description                           |
++| ---------------------- | ------------------------------------- |
++| `/btw <your question>` | Ask a quick side question             |
++| `?btw <your question>` | Alternative syntax for side questions |
++
++**How It Works:**
++
++- The side question is sent as a separate API call with recent conversation context (up to the last 20 messages)
++- The response is displayed above the Composer — you can continue typing while waiting
++- The main conversation is **not blocked** — it continues independently
++- The side question response does **not** become part of the main conversation history
++- Answers are rendered with full Markdown support (code blocks, lists, tables, etc.)
++
++**Keyboard Shortcuts (Interactive Mode):**
++
++| Shortcut             | Action                                              |
++| -------------------- | --------------------------------------------------- |
++| `Escape`             | Cancel (while loading) or dismiss (after completed) |
++| `Space` or `Enter`   | Dismiss the answer (when input is empty)            |
++| `Ctrl+C` or `Ctrl+D` | Cancel an in-flight side question                   |
++
++**Example:**
++
++```
++(While the main conversation is about refactoring code)
++
++> /btw What's the difference between let and var in JavaScript?
++
++  ╭──────────────────────────────────────────╮
++  │ /btw What's the difference between let   │
++  │     and var in JavaScript?               │
++  │                                          │
++  │ + Answering...                           │
++  │ Press Escape, Ctrl+C, or Ctrl+D to cancel│
++  ╰──────────────────────────────────────────╯
++  > (Composer remains active — keep typing)
++
++(After the answer arrives)
++
++  ╭──────────────────────────────────────────╮
++  │ /btw What's the difference between let   │
++  │     and var in JavaScript?               │
++  │                                          │
++  │ `let` is block-scoped, while `var` is    │
++  │ function-scoped. `let` was introduced    │
++  │ in ES6 and doesn't hoist the same way.   │
++  │                                          │
++  │ Press Space, Enter, or Escape to dismiss │
++  ╰──────────────────────────────────────────╯
++  > (Composer still active)
++```
++
++**Supported Execution Modes:**
++
++| Mode                 | Behavior                                     |
++| -------------------- | -------------------------------------------- |
++| Interactive          | Shows above Composer with Markdown rendering |
++| Non-interactive      | Returns text result: `btw> question\nanswer` |
++| ACP (Agent Protocol) | Returns stream_messages async generator      |
++
++> [!tip]
++>
++> Use `/btw` when you need a quick answer without derailing your main task. It's especially useful for clarifying concepts, checking facts, or getting quick explanations while staying focused on your primary workflow.
++
++### 1.6 Information, Settings, and Help
+ 
+ Commands for obtaining information and performing system settings.
+ 
+@@ -85,7 +153,7 @@ Commands for obtaining information and performing system settings.
+ | `/copy`     | Copy last output content to clipboard           | `/copy`                          |
+ | `/quit`     | Exit Qwen Code immediately                      | `/quit` or `/exit`               |
+ 
+-### 1.6 Common Shortcuts
++### 1.7 Common Shortcuts
+ 
+ | Shortcut           | Function                | Note                   |
+ | ------------------ | ----------------------- | ---------------------- |
+@@ -95,7 +163,7 @@ Commands for obtaining information and performing system settings.
+ | `Ctrl/cmd+Z`       | Undo input              | Text editing           |
+ | `Ctrl/cmd+Shift+Z` | Redo input              | Text editing           |
+ 
+-### 1.7 CLI Auth Subcommands
++### 1.8 CLI Auth Subcommands
+ 
+ In addition to the in-session `/auth` slash command, Qwen Code provides standalone CLI subcommands for managing authentication directly from the terminal:
+ 
+diff --git a/packages/cli/src/i18n/locales/de.js b/packages/cli/src/i18n/locales/de.js
+index 1b5ff45d370..8ec6748e95d 100644
+--- a/packages/cli/src/i18n/locales/de.js
++++ b/packages/cli/src/i18n/locales/de.js
+@@ -599,6 +599,10 @@ export default {
+   'Loading hooks...': 'Hooks werden geladen...',
+   'Error loading hooks:': 'Fehler beim Laden der Hooks:',
+   'Press Escape to close': 'Escape zum Schließen drücken',
++  'Press Escape, Ctrl+C, or Ctrl+D to cancel':
++    'Escape, Ctrl+C oder Ctrl+D zum Abbrechen',
++  'Press Space, Enter, or Escape to dismiss':
++    'Leertaste, Enter oder Escape zum Schließen',
+   'No hook selected': 'Kein Hook ausgewählt',
+   // Hooks - List Step
+   'No hook events found.': 'Keine Hook-Ereignisse gefunden.',
+diff --git a/packages/cli/src/i18n/locales/en.js b/packages/cli/src/i18n/locales/en.js
+index d86c31b84ec..fc3db483957 100644
+--- a/packages/cli/src/i18n/locales/en.js
++++ b/packages/cli/src/i18n/locales/en.js
+@@ -673,6 +673,10 @@ export default {
+   'Loading hooks...': 'Loading hooks...',
+   'Error loading hooks:': 'Error loading hooks:',
+   'Press Escape to close': 'Press Escape to close',
++  'Press Escape, Ctrl+C, or Ctrl+D to cancel':
++    'Press Escape, Ctrl+C, or Ctrl+D to cancel',
++  'Press Space, Enter, or Escape to dismiss':
++    'Press Space, Enter, or Escape to dismiss',
+   'No hook selected': 'No hook selected',
+   // Hooks - List Step
+   'No hook events found.': 'No hook events found.',
+diff --git a/packages/cli/src/i18n/locales/ja.js b/packages/cli/src/i18n/locales/ja.js
+index d384f2ac587..cd7cfe13ce8 100644
+--- a/packages/cli/src/i18n/locales/ja.js
++++ b/packages/cli/src/i18n/locales/ja.js
+@@ -385,6 +385,9 @@ export default {
+   'Loading hooks...': 'フックを読み込んでいます...',
+   'Error loading hooks:': 'フックの読み込みエラー：',
+   'Press Escape to close': 'Escape キーで閉じる',
++  'Press Escape, Ctrl+C, or Ctrl+D to cancel':
++    'Escape、Ctrl+C、Ctrl+D でキャンセル',
++  'Press Space, Enter, or Escape to dismiss': 'Space、Enter、Escape で閉じる',
+   'No hook selected': 'フックが選択されていません',
+   // Hooks - List Step
+   'No hook events found.': 'フックイベントが見つかりません。',
+diff --git a/packages/cli/src/i18n/locales/pt.js b/packages/cli/src/i18n/locales/pt.js
+index c6e07c50843..788deea530d 100644
+--- a/packages/cli/src/i18n/locales/pt.js
++++ b/packages/cli/src/i18n/locales/pt.js
+@@ -604,6 +604,10 @@ export default {
+   'Loading hooks...': 'Carregando hooks...',
+   'Error loading hooks:': 'Erro ao carregar hooks:',
+   'Press Escape to close': 'Pressione Escape para fechar',
++  'Press Escape, Ctrl+C, or Ctrl+D to cancel':
++    'Pressione Escape, Ctrl+C ou Ctrl+D para cancelar',
++  'Press Space, Enter, or Escape to dismiss':
++    'Pressione Espaço, Enter ou Escape para dispensar',
+   'No hook selected': 'Nenhum hook selecionado',
+   // Hooks - List Step
+   'No hook events found.': 'Nenhum evento de hook encontrado.',
+diff --git a/packages/cli/src/i18n/locales/ru.js b/packages/cli/src/i18n/locales/ru.js
+index 96653c01964..beeac0709a1 100644
+--- a/packages/cli/src/i18n/locales/ru.js
++++ b/packages/cli/src/i18n/locales/ru.js
+@@ -610,6 +610,10 @@ export default {
+   'Loading hooks...': 'Загрузка хуков...',
+   'Error loading hooks:': 'Ошибка загрузки хуков:',
+   'Press Escape to close': 'Нажмите Escape для закрытия',
++  'Press Escape, Ctrl+C, or Ctrl+D to cancel':
++    'Нажмите Escape, Ctrl+C или Ctrl+D для отмены',
++  'Press Space, Enter, or Escape to dismiss':
++    'Нажмите Пробел, Enter или Escape для закрытия',
+   'No hook selected': 'Хук не выбран',
+   // Hooks - List Step
+   'No hook events found.': 'События хуков не найдены.',
+diff --git a/packages/cli/src/i18n/locales/zh.js b/packages/cli/src/i18n/locales/zh.js
+index 42c648db1a7..d4ed257a33d 100644
+--- a/packages/cli/src/i18n/locales/zh.js
++++ b/packages/cli/src/i18n/locales/zh.js
+@@ -637,6 +637,9 @@ export default {
+   'Loading hooks...': '正在加载 Hook...',
+   'Error loading hooks:': '加载 Hook 出错：',
+   'Press Escape to close': '按 Escape 关闭',
++  'Press Escape, Ctrl+C, or Ctrl+D to cancel':
++    '按 Escape、Ctrl+C 或 Ctrl+D 取消',
++  'Press Space, Enter, or Escape to dismiss': '按空格、回车或 Escape 关闭',
+   'No hook selected': '未选择 Hook',
+   // Hooks - List Step
+   'No hook events found.': '未找到 Hook 事件。',
+diff --git a/packages/cli/src/ui/AppContainer.tsx b/packages/cli/src/ui/AppContainer.tsx
+index 37dc325180f..7284849459a 100644
+--- a/packages/cli/src/ui/AppContainer.tsx
++++ b/packages/cli/src/ui/AppContainer.tsx
+@@ -1197,13 +1197,19 @@ export const AppContainer = (props: AppContainerProps) => {
+         return; // Dialog closed, end processing
+       }
+ 
+-      // 3. Cancel ongoing requests
++      // 3. Cancel in-flight btw side-question
++      if (btwItem && btwItem.btw.isPending && !dialogsVisibleRef.current) {
++        cancelBtw();
++        return; // Btw cancelled, end processing
++      }
++
++      // 4. Cancel ongoing requests
+       if (streamingState === StreamingState.Responding) {
+         cancelOngoingRequest?.();
+         return; // Request cancelled, end processing
+       }
+ 
+-      // 4. Clear input buffer (if has content)
++      // 5. Clear input buffer (if has content)
+       if (buffer.text.length > 0) {
+         buffer.setText('');
+         return; // Input cleared, end processing
+@@ -1219,6 +1225,8 @@ export const AppContainer = (props: AppContainerProps) => {
+       isAuthDialogOpen,
+       handleSlashCommand,
+       closeAnyOpenDialog,
++      btwItem,
++      cancelBtw,
+       streamingState,
+       cancelOngoingRequest,
+       buffer,
+@@ -1250,6 +1258,11 @@ export const AppContainer = (props: AppContainerProps) => {
+         handleExit(ctrlCPressedOnce, setCtrlCPressedOnce, ctrlCTimerRef);
+         return;
+       } else if (keyMatchers[Command.EXIT](key)) {
++        // Cancel in-flight btw even when buffer has text (Ctrl+D)
++        if (btwItem && btwItem.btw.isPending && !dialogsVisibleRef.current) {
++          cancelBtw();
++          return;
++        }
+         if (buffer.text.length > 0) {
+           return;
+         }
+@@ -1318,6 +1331,9 @@ export const AppContainer = (props: AppContainerProps) => {
+         }
+       }
+ 
++      // Note: Ctrl+C/D btw cancellation is handled inside handleExit
++      // (step 3), not here, because Command.QUIT/EXIT match first.
++
+       let enteringConstrainHeightMode = false;
+       if (!constrainHeight) {
+         enteringConstrainHeightMode = true;
+diff --git a/packages/cli/src/ui/commands/btwCommand.test.ts b/packages/cli/src/ui/commands/btwCommand.test.ts
+index 99dfa40d32f..0e140cd8c56 100644
+--- a/packages/cli/src/ui/commands/btwCommand.test.ts
++++ b/packages/cli/src/ui/commands/btwCommand.test.ts
+@@ -186,6 +186,55 @@ describe('btwCommand', () => {
+       );
+     });
+ 
++    it('should trim history to last 20 messages for long conversations', async () => {
++      // Build 24 history entries — exceeds the 20-message limit
++      const longHistory = Array.from({ length: 12 }, (_, i) => [
++        { role: 'user', parts: [{ text: `Q${i}` }] },
++        { role: 'model', parts: [{ text: `A${i}` }] },
++      ]).flat();
++      mockGetHistory.mockReturnValue(longHistory);
++      mockGenerateContent.mockResolvedValue({
++        candidates: [{ content: { parts: [{ text: 'answer' }] } }],
++      });
++
++      await btwCommand.action!(mockContext, 'test');
++      await flushPromises();
++
++      const calledContents = mockGenerateContent.mock.calls[0][0];
++      // 20 history entries + 1 btw question = 21
++      expect(calledContents).toHaveLength(21);
++      // First entry should be user (Q2, since slice(-20) on 24 starts at index 4)
++      expect(calledContents[0].role).toBe('user');
++      expect(calledContents[0].parts[0].text).toBe('Q2');
++    });
++
++    it('should trim history and skip leading model entry to preserve alternation', async () => {
++      // Build 21 entries: 10 full turns + 1 trailing user message.
++      // slice(-20) yields [M0, U1, M1, ..., U9, M9, U10] — starts with model.
++      // trimHistory should drop that leading model entry.
++      const oddHistory = [
++        ...Array.from({ length: 11 }, (_, i) => [
++          { role: 'user', parts: [{ text: `Q${i}` }] },
++          { role: 'model', parts: [{ text: `A${i}` }] },
++        ]).flat(),
++      ].slice(0, 21); // [U0, M0, U1, M1, ..., U9, M9, U10]
++      expect(oddHistory).toHaveLength(21);
++
++      mockGetHistory.mockReturnValue(oddHistory);
++      mockGenerateContent.mockResolvedValue({
++        candidates: [{ content: { parts: [{ text: 'answer' }] } }],
++      });
++
++      await btwCommand.action!(mockContext, 'test');
++      await flushPromises();
++
++      const calledContents = mockGenerateContent.mock.calls[0][0];
++      // slice(-20) = 20 entries starting with M0 (model) → slice(1) = 19, + 1 btw = 20
++      expect(calledContents).toHaveLength(20);
++      expect(calledContents[0].role).toBe('user');
++      expect(calledContents[0].parts[0].text).toBe('Q1');
++    });
++
+     it('should add error item on failure and clear btwItem', async () => {
+       mockGenerateContent.mockRejectedValue(new Error('API error'));
+ 
+diff --git a/packages/cli/src/ui/commands/btwCommand.ts b/packages/cli/src/ui/commands/btwCommand.ts
+index 60a3ab8dd46..3af3a3c1fb6 100644
+--- a/packages/cli/src/ui/commands/btwCommand.ts
++++ b/packages/cli/src/ui/commands/btwCommand.ts
+@@ -14,6 +14,7 @@ import { MessageType } from '../types.js';
+ import type { HistoryItemBtw } from '../types.js';
+ import { t } from '../../i18n/index.js';
+ import type { GeminiClient } from '@qwen-code/qwen-code-core';
++import type { Content } from '@google/genai';
+ 
+ function makeBtwPromptId(sessionId: string): string {
+   return `${sessionId}########btw-${Date.now()}`;
+@@ -26,6 +27,24 @@ function formatBtwError(error: unknown): string {
+   });
+ }
+ 
++// Keep only the most recent history messages to limit token usage for side
++// questions. MAX_BTW_HISTORY_MESSAGES caps the number of history Content
++// entries included as context before the /btw question is appended.
++const MAX_BTW_HISTORY_MESSAGES = 20;
++
++function trimHistory(history: Content[]): Content[] {
++  if (history.length <= MAX_BTW_HISTORY_MESSAGES) {
++    return history;
++  }
++  // Slice from the end, ensuring we start on a 'user' message so the
++  // alternating user/model pattern is preserved.
++  const sliced = history.slice(-MAX_BTW_HISTORY_MESSAGES);
++  if (sliced[0]?.role === 'model' && sliced.length > 1) {
++    return sliced.slice(1);
++  }
++  return sliced;
++}
++
+ /**
+  * Helper to make the ephemeral generateContent call and extract the answer.
+  * Uses a snapshot of the current conversation history as context.
+@@ -37,8 +56,13 @@ async function askBtw(
+   abortSignal: AbortSignal,
+   promptId: string,
+ ): Promise<string> {
+-  const history = geminiClient.getHistory();
++  const history = trimHistory(geminiClient.getHistory(true));
+ 
++  // Side-question guidance sent as a user message (not a system instruction).
++  // Inspired by Claude Code's design:
++  // - Emphasizes direct answering without tools
++  // - Clarifies the isolated nature of the side question
++  // - Prevents the model from promising actions it can't take
+   const response = await geminiClient.generateContent(
+     [
+       ...history,
+@@ -46,7 +70,23 @@ async function askBtw(
+         role: 'user',
+         parts: [
+           {
+-            text: `[Side question - answer briefly and concisely, this is a "by the way" question that doesn't need to be part of our main conversation]\n\n${question}`,
++            text: `[This is a side question - answer directly and concisely.
++
++IMPORTANT:
++- You are a separate, lightweight agent spawned to answer this one question
++- The main conversation continues independently in the background
++- Do NOT reference being interrupted or what you were "previously doing"
++
++CRITICAL CONSTRAINTS:
++- You have NO tools available - you cannot read files, run commands, search, or take any actions
++- This is a one-off response in a single turn
++- You can ONLY provide information based on what you already know from the conversation context
++- NEVER say things like "Let me try...", "I'll now...", "Let me check...", or promise to take any action
++- If you don't know the answer, say so - do not offer to look it up or investigate
++
++Simply answer the question directly with the information you have.]
++
++${question}`,
+           },
+         ],
+       },
+diff --git a/packages/cli/src/ui/components/HistoryItemDisplay.tsx b/packages/cli/src/ui/components/HistoryItemDisplay.tsx
+index 5af5cdfe097..775eb3e455f 100644
+--- a/packages/cli/src/ui/components/HistoryItemDisplay.tsx
++++ b/packages/cli/src/ui/components/HistoryItemDisplay.tsx
+@@ -235,7 +235,7 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
+         <InsightProgressMessage progress={itemForDisplay.progress} />
+       )}
+       {itemForDisplay.type === 'btw' && itemForDisplay.btw && (
+-        <BtwMessage btw={itemForDisplay.btw} />
++        <BtwMessage btw={itemForDisplay.btw} containerWidth={contentWidth} />
+       )}
+       {itemForDisplay.type === 'user_prompt_submit_blocked' && (
+         <Box flexDirection="column">
+diff --git a/packages/cli/src/ui/components/messages/BtwMessage.test.tsx b/packages/cli/src/ui/components/messages/BtwMessage.test.tsx
+index da784dc0dba..1de2f76bc21 100644
+--- a/packages/cli/src/ui/components/messages/BtwMessage.test.tsx
++++ b/packages/cli/src/ui/components/messages/BtwMessage.test.tsx
+@@ -5,7 +5,7 @@
+  */
+ 
+ import { describe, expect, it } from 'vitest';
+-import { render } from 'ink-testing-library';
++import { renderWithProviders } from '../../../test-utils/render.js';
+ import { BtwMessage } from './BtwMessage.js';
+ 
+ describe('BtwMessage', () => {
+@@ -16,7 +16,7 @@ describe('BtwMessage', () => {
+   });
+ 
+   it('renders the side question and answer', () => {
+-    const { lastFrame } = render(
++    const { lastFrame } = renderWithProviders(
+       <BtwMessage
+         btw={{
+           question: 'side question',
+@@ -31,4 +31,57 @@ describe('BtwMessage', () => {
+     expect(output).toContain('side question');
+     expect(output).toContain('side answer');
+   });
++
++  it('renders pending state with cancel hint', () => {
++    const { lastFrame } = renderWithProviders(
++      <BtwMessage
++        btw={{
++          question: 'pending question',
++          answer: '',
++          isPending: true,
++        }}
++      />,
++    );
++
++    const output = lastFrame() ?? '';
++    expect(output).toContain('/btw');
++    expect(output).toContain('pending question');
++    expect(output).toContain('Answering...');
++    expect(output).toContain('Ctrl+C');
++    expect(output).toContain('Ctrl+D');
++  });
++
++  it('accepts containerWidth prop for content width calculation', () => {
++    const { lastFrame } = renderWithProviders(
++      <BtwMessage
++        btw={{
++          question: 'q',
++          answer: 'some answer text',
++          isPending: false,
++        }}
++        containerWidth={60}
++      />,
++    );
++
++    const output = lastFrame() ?? '';
++    expect(output).toContain('some answer text');
++  });
++
++  it('renders dismiss hint when answer is complete', () => {
++    const { lastFrame } = renderWithProviders(
++      <BtwMessage
++        btw={{
++          question: 'q',
++          answer: 'a',
++          isPending: false,
++        }}
++      />,
++    );
++
++    const output = lastFrame() ?? '';
++    expect(output).toContain('Space');
++    expect(output).toContain('Enter');
++    expect(output).toContain('Escape');
++    expect(output).toContain('dismiss');
++  });
+ });
+diff --git a/packages/cli/src/ui/components/messages/BtwMessage.tsx b/packages/cli/src/ui/components/messages/BtwMessage.tsx
+index 9b28ecc494c..c8b7d3d9fe0 100644
+--- a/packages/cli/src/ui/components/messages/BtwMessage.tsx
++++ b/packages/cli/src/ui/components/messages/BtwMessage.tsx
+@@ -9,46 +9,80 @@ import { Box, Text } from 'ink';
+ import type { BtwProps } from '../../types.js';
+ import { Colors } from '../../colors.js';
+ import { t } from '../../../i18n/index.js';
++import { MarkdownDisplay } from '../../utils/MarkdownDisplay.js';
++import { useTerminalSize } from '../../hooks/useTerminalSize.js';
+ 
+ export interface BtwDisplayProps {
+   btw: BtwProps;
++  /** Width of the parent container. Used to compute Markdown content width.
++   *  Falls back to terminal width when not provided. */
++  containerWidth?: number;
+ }
+ 
+-const BtwMessageInternal: React.FC<BtwDisplayProps> = ({ btw }) => (
+-  <Box
+-    flexDirection="column"
+-    borderStyle="round"
+-    borderColor={Colors.AccentYellow}
+-    paddingX={1}
+-    width="100%"
+-  >
+-    <Box flexDirection="row">
+-      <Text color={Colors.AccentYellow} bold>
+-        {'/btw '}
+-      </Text>
+-      <Text wrap="wrap" color={Colors.AccentYellow}>
+-        {btw.question}
+-      </Text>
+-    </Box>
+-    {btw.isPending ? (
+-      <Box flexDirection="column" marginTop={1}>
+-        <Box>
+-          <Text color={Colors.AccentYellow}>{'+ '}</Text>
+-          <Text color={Colors.AccentYellow}>{t('Answering...')}</Text>
+-        </Box>
+-        <Box marginTop={1}>
+-          <Text dimColor>{t('Press Escape to cancel')}</Text>
+-        </Box>
++// border(1)*2 + paddingX(1)*2 = 4
++const BTW_SELF_CHROME = 4;
++
++/**
++ * Ensure code fences (``` or ~~~) start on their own line so that
++ * MarkdownDisplay's line-based parser can detect them.  Models sometimes
++ * emit the opening fence right after prose text without a preceding newline.
++ */
++function normalizeCodeFences(text: string): string {
++  return text.replace(/([^\n])(```|~~~)/g, '$1\n$2');
++}
++
++const BtwMessageInternal: React.FC<BtwDisplayProps> = ({
++  btw,
++  containerWidth,
++}) => {
++  const { columns: terminalWidth } = useTerminalSize();
++  const baseWidth = containerWidth ?? terminalWidth;
++  const contentWidth = Math.max(2, baseWidth - BTW_SELF_CHROME);
++
++  return (
++    <Box
++      flexDirection="column"
++      borderStyle="round"
++      borderColor={Colors.AccentYellow}
++      paddingX={1}
++      width="100%"
++    >
++      <Box flexDirection="row">
++        <Text color={Colors.AccentYellow} bold>
++          {'/btw '}
++        </Text>
++        <Text wrap="wrap" color={Colors.AccentYellow}>
++          {btw.question}
++        </Text>
+       </Box>
+-    ) : (
+-      <Box flexDirection="column" marginTop={1}>
+-        <Text wrap="wrap">{btw.answer}</Text>
+-        <Box marginTop={1}>
+-          <Text dimColor>{t('Press Space, Enter, or Escape to dismiss')}</Text>
++      {btw.isPending ? (
++        <Box flexDirection="column" marginTop={1}>
++          <Box>
++            <Text color={Colors.AccentYellow}>{'+ '}</Text>
++            <Text color={Colors.AccentYellow}>{t('Answering...')}</Text>
++          </Box>
++          <Box marginTop={1}>
++            <Text dimColor>
++              {t('Press Escape, Ctrl+C, or Ctrl+D to cancel')}
++            </Text>
++          </Box>
+         </Box>
+-      </Box>
+-    )}
+-  </Box>
+-);
++      ) : (
++        <Box flexDirection="column" marginTop={1}>
++          <MarkdownDisplay
++            text={normalizeCodeFences(btw.answer)}
++            isPending={false}
++            contentWidth={contentWidth}
++          />
++          <Box marginTop={1}>
++            <Text dimColor>
++              {t('Press Space, Enter, or Escape to dismiss')}
++            </Text>
++          </Box>
++        </Box>
++      )}
++    </Box>
++  );
++};
+ 
+ export const BtwMess

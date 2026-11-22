@@ -1,0 +1,165 @@
+diff --git a/docs/reference/agent_config.md b/docs/reference/agent_config.md
+index 372ab1449c..e152cb7d18 100644
+--- a/docs/reference/agent_config.md
++++ b/docs/reference/agent_config.md
+@@ -13,11 +13,14 @@ It might be easiest to simply look at some of our example configurations in the
+ ```
+ </details>
+ 
+-Currently, there are two main agent classes:
++Currently, there are three main agent classes:
+ 
+ * `DefaultAgentConfig`: This is the default agent.
+ * `RetryAgentConfig`: A "meta agent" that instantiates multiple agents for multiple attempts and then picks the best solution.
++* `ShellAgentConfig`: Config for `ShellAgent` (invoked with `sweagent sh`), which is an experimental mode for quick & interactive (human-in-the-loop) workflows.
+ 
+ ::: sweagent.agent.agents.RetryAgentConfig
+ 
+-::: sweagent.agent.agents.DefaultAgentConfig
+\ No newline at end of file
++::: sweagent.agent.agents.DefaultAgentConfig
++
++::: sweagent.agent.agents.ShellAgentConfig
+\ No newline at end of file
+diff --git a/docs/reference/batch_instances.md b/docs/reference/batch_instances.md
+index 06faebd029..bb3b385d55 100644
+--- a/docs/reference/batch_instances.md
++++ b/docs/reference/batch_instances.md
+@@ -1,3 +1,7 @@
++# Batch instances
++
++This page documents the batch instances functionality for running SWE-agent on multiple problems.
++
+ ::: sweagent.run.batch_instances
+     options:
+         members_order: source
+diff --git a/docs/reference/bundle_config.md b/docs/reference/bundle_config.md
+index d80b499b96..1567f022cb 100644
+--- a/docs/reference/bundle_config.md
++++ b/docs/reference/bundle_config.md
+@@ -3,7 +3,7 @@
+ !!! note "Tool bundle configuration"
+ 
+     This is the page for configuring a tool bundle, not for setting up the tools that are being used for the agent.
+-    For the latter, see [tools configuration](./tools_config.md).
++    For the latter, see [tools configuration](tools_config.md).
+ 
+ ::: sweagent.tools.bundle.BundleConfig
+ 
+diff --git a/docs/reference/env.md b/docs/reference/env.md
+index ef0182b4cb..f7b3fa2f5a 100644
+--- a/docs/reference/env.md
++++ b/docs/reference/env.md
+@@ -1,5 +1,9 @@
+ # The environment class
+ 
++This page documents the `SWEEnv` class, which provides the environment for the agent to interact with.
++To learn about the configuration objects used to specify the behavior of the environment,
++see the [environment configuration reference page](env_config.md).
++
+ ::: sweagent.environment.swe_env.SWEEnv
+     options:
+       allow_inspection: false
+\ No newline at end of file
+diff --git a/docs/reference/model_config.md b/docs/reference/model_config.md
+index d9e8a334d6..e03cfd0e3b 100644
+--- a/docs/reference/model_config.md
++++ b/docs/reference/model_config.md
+@@ -18,6 +18,7 @@ In most cases, you will want to use the `GenericAPIModelConfig` object.
+     options:
+         heading_level: 3
+ 
++
+ ## Manual models for testing
+ 
+ The following two models allow you to test your environment by prompting you for actions.
+@@ -27,12 +28,28 @@ This can also be very useful to create your first [demonstrations](../config/dem
+     options:
+         heading_level: 3
+ 
++::: sweagent.agent.models.HumanModelConfig
++    options:
++        heading_level: 3
++
+ ::: sweagent.agent.models.HumanThoughtModel
+     options:
+         heading_level: 3
+ 
++::: sweagent.agent.models.HumanThoughtModelConfig
++    options:
++        heading_level: 3
++
+ ## Replay model for testing and demonstrations
+ 
+ ::: sweagent.agent.models.ReplayModel
+     options:
+         heading_level: 3
++
++::: sweagent.agent.models.ReplayModelConfig
++    options:
++        heading_level: 3
++
++::: sweagent.agent.models.InstantEmptySubmitModelConfig
++    options:
++        heading_level: 3
+diff --git a/docs/reference/parsers.md b/docs/reference/parsers.md
+index d9fd8df49b..cb508b8cb0 100644
+--- a/docs/reference/parsers.md
++++ b/docs/reference/parsers.md
+@@ -1,3 +1,5 @@
+ # Action parsers
+ 
++Action parsers interpret the output of the LM and return actions (tool calls/commands to execute) and thoughts (any other output of the LM, e.g., justifying the tool calls).
++
+ ::: sweagent.tools.parsing
+\ No newline at end of file
+diff --git a/docs/reference/run_batch_config.md b/docs/reference/run_batch_config.md
+index abc46cabc2..f6e8e4870d 100644
+--- a/docs/reference/run_batch_config.md
++++ b/docs/reference/run_batch_config.md
+@@ -1 +1,5 @@
++# Batch run configuration
++
++This page documents the configuration options for running SWE-agent in batch mode on multiple problems.
++
+ ::: sweagent.run.run_batch.RunBatchConfig
+\ No newline at end of file
+diff --git a/docs/reference/run_single_config.md b/docs/reference/run_single_config.md
+index 6b08c2bab0..8b9fad2da9 100644
+--- a/docs/reference/run_single_config.md
++++ b/docs/reference/run_single_config.md
+@@ -1,3 +1,7 @@
++# Single run configuration
++
++This page documents the configuration options for running SWE-agent on a single problem.
++
+ ::: sweagent.run.run_single.RunSingleConfig
+ 
+ ::: sweagent.run.run_single.RunSingleActionConfig
+\ No newline at end of file
+diff --git a/docs/reference/template_config.md b/docs/reference/template_config.md
+index a72de6fd05..9e2bf012a0 100644
+--- a/docs/reference/template_config.md
++++ b/docs/reference/template_config.md
+@@ -1,3 +1,7 @@
+ # Template configuration
+ 
++This page documents the template configuration used by SWE-agent to define message templates and formatting.
++
++Templates are used to format inputs and outputs into prompts/messages to query the LM.
++
+ ::: sweagent.agent.agents.TemplateConfig
+\ No newline at end of file
+diff --git a/docs/reference/tools_config.md b/docs/reference/tools_config.md
+index d2a9736fb5..25c3e4b8e4 100644
+--- a/docs/reference/tools_config.md
++++ b/docs/reference/tools_config.md
+@@ -5,7 +5,7 @@ This shows how to configure tools for SWE-agent.
+ !!! note "Tool configuration"
+ 
+     This is the page for configuring tools for SWE-agent, not for setting up the tools that are being used for the agent.
+-    For the latter, see [tool bundles](./bundle_config.md).
++    For the latter, see [tool bundles](bundle_config.md).
+ 
+ ::: sweagent.tools.tools.ToolConfig
+ 

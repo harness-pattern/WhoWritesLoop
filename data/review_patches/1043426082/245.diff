@@ -1,0 +1,97 @@
+diff --git a/openhands/tools/execute_bash/terminal/subprocess_terminal.py b/openhands/tools/execute_bash/terminal/subprocess_terminal.py
+index 44b4e2f9a54..2e8a203b0c1 100644
+--- a/openhands/tools/execute_bash/terminal/subprocess_terminal.py
++++ b/openhands/tools/execute_bash/terminal/subprocess_terminal.py
+@@ -67,6 +67,7 @@ def initialize(self) -> None:
+         if self._initialized:
+             return
+ 
++        # Inherit environment variables from the parent process
+         env = os.environ.copy()
+         env["PS1"] = self.PS1
+         env["PS2"] = ""
+diff --git a/openhands/tools/execute_bash/terminal/tmux_terminal.py b/openhands/tools/execute_bash/terminal/tmux_terminal.py
+index f6eef1958fa..ecdc5883558 100644
+--- a/openhands/tools/execute_bash/terminal/tmux_terminal.py
++++ b/openhands/tools/execute_bash/terminal/tmux_terminal.py
+@@ -1,5 +1,6 @@
+ """Tmux-based terminal backend implementation."""
+ 
++import os
+ import time
+ import uuid
+ 
+@@ -34,6 +35,9 @@ def initialize(self) -> None:
+         if self._initialized:
+             return
+ 
++        # Inherit environment variables from the parent process
++        env = os.environ.copy()
++
+         self.server = libtmux.Server()
+         _shell_command = "/bin/bash"
+         if self.username in ["root", "openhands"]:
+@@ -50,6 +54,7 @@ def initialize(self) -> None:
+             kill_session=True,
+             x=1000,
+             y=1000,
++            environment=env,
+         )
+ 
+         # Set history limit to a large number to avoid losing history
+@@ -63,6 +68,7 @@ def initialize(self) -> None:
+             window_name="bash",
+             window_shell=window_command,
+             start_directory=self.work_dir,
++            environment=env,
+         )
+         self.pane = self.window.active_pane
+         assert isinstance(self.pane, libtmux.Pane)
+diff --git a/tests/tools/execute_bash/test_bash_session.py b/tests/tools/execute_bash/test_bash_session.py
+index 0c6521180a4..12d1538248a 100644
+--- a/tests/tools/execute_bash/test_bash_session.py
++++ b/tests/tools/execute_bash/test_bash_session.py
+@@ -141,6 +141,43 @@ def test_environment_variable_persistence(terminal_type):
+     session.close()
+ 
+ 
++@parametrize_terminal_types
++def test_environment_variable_inheritance_from_parent(terminal_type):
++    """Test that environment variables from parent process are inherited."""
++    # Set an environment variable in the current process
++    test_var_name = "OPENHANDS_TEST_INHERITANCE_VAR"
++    test_var_value = "inherited_from_parent_12345"
++    original_value = os.environ.get(test_var_name)
++
++    try:
++        # Set the environment variable in the parent process
++        os.environ[test_var_name] = test_var_value
++
++        # Create a new terminal session
++        session = create_terminal_session(
++            work_dir=os.getcwd(), terminal_type=terminal_type
++        )
++        session.initialize()
++
++        # Check if the environment variable is available in the terminal
++        obs = session.execute(
++            ExecuteBashAction(command=f"echo ${test_var_name}", security_risk="LOW")
++        )
++        assert test_var_value in obs.output, (
++            f"Expected '{test_var_value}' in output, but got: {obs.output}"
++        )
++        assert obs.metadata.exit_code == 0
++
++        session.close()
++
++    finally:
++        # Clean up: restore original environment variable value
++        if original_value is not None:
++            os.environ[test_var_name] = original_value
++        else:
++            os.environ.pop(test_var_name, None)
++
++
+ def test_long_running_command_follow_by_execute():
+     session = create_terminal_session(work_dir=os.getcwd(), no_change_timeout_seconds=2)
+     session.initialize()

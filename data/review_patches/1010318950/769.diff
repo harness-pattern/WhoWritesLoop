@@ -1,0 +1,30 @@
+diff --git a/src/minisweagent/agents/default.py b/src/minisweagent/agents/default.py
+index da54249a8..0f04a814b 100644
+--- a/src/minisweagent/agents/default.py
++++ b/src/minisweagent/agents/default.py
+@@ -76,6 +76,7 @@ def handle_uncaught_exception(self, e: Exception) -> list[dict]:
+ 
+     def run(self, task: str = "", **kwargs) -> dict:
+         """Run step() until agent is finished. Returns dictionary with exit_status, submission keys."""
++        print("hello world")
+         self.extra_template_vars |= {"task": task, **kwargs}
+         self.messages = []
+         self.add_messages(
+diff --git a/tests/agents/test_default.py b/tests/agents/test_default.py
+index 2b62ecf13..9c0f3a5af 100644
+--- a/tests/agents/test_default.py
++++ b/tests/agents/test_default.py
+@@ -423,3 +423,13 @@ def test_empty_actions_handling(model_factory):
+     assert info["exit_status"] == "Submitted"
+     assert info["submission"] == "done\n"
+     assert agent.n_calls == 2
++
++
++def test_hello_world_printed_before_task(model_factory, capsys):
++    """Test that 'hello world' is printed before each task starts."""
++    factory, config = model_factory
++    outputs = [("Done", [{"command": "echo 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT'\necho 'ok'"}])]
++    for _ in range(2):
++        DefaultAgent(model=factory(outputs), env=LocalEnvironment(), **config).run("task")
++    captured = capsys.readouterr()
++    assert captured.out.count("hello world\n") == 2

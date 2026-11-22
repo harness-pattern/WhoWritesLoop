@@ -1,0 +1,63 @@
+diff --git a/sweagent/tools/parsing.py b/sweagent/tools/parsing.py
+index d2af956ca..4a3d461b9 100644
+--- a/sweagent/tools/parsing.py
++++ b/sweagent/tools/parsing.py
+@@ -528,9 +528,11 @@ def __call__(self, model_response: dict, commands: list[Command], strict=False):
+                         if _should_quote(value, command):
+                             value = quote(value)
+                         formatted_args[arg.name] = Template(arg.argument_format).render(value=value)
+-                    elif strict and arg.required:
++                    elif arg.required:
+                         msg = f"Required argument '{arg.name}' missing for command '{command.name}'"
+                         raise FormatError(msg)
++                    else:
++                        formatted_args[arg.name] = ""
+ 
+             # Use the formatted arguments with invoke_format
+             action = command.invoke_format.format(**formatted_args).strip()
+diff --git a/tests/test_parsing.py b/tests/test_parsing.py
+index c66d07a1b..9d34ccadc 100644
+--- a/tests/test_parsing.py
++++ b/tests/test_parsing.py
+@@ -4,7 +4,7 @@
+ from jinja2 import Template
+ 
+ from sweagent.exceptions import FormatError, FunctionCallingFormatError
+-from sweagent.tools.commands import Command
++from sweagent.tools.commands import Argument, Command
+ from sweagent.tools.parsing import (
+     ActionParser,
+     EditFormat,
+@@ -80,6 +80,32 @@ def test_json_parser():
+         parser({"message": missing_keys}, [])
+ 
+ 
++@pytest.mark.parametrize("strict", [False, True])
++def test_json_parser_optional_argument(strict):
++    command = Command(
++        name="show",
++        docstring="",
++        arguments=[
++            Argument(name="path", type="string", description="", required=True),
++            Argument(name="line", type="string", description="", required=False, argument_format="--line {{value}}"),
++        ],
++    )
++    message = '{"thought": "Show the file", "command": {"name": "show", "arguments": {"path": "notes.txt"}}}'
++    assert JsonParser()({"message": message}, [command], strict=strict) == ("Show the file", "show notes.txt")
++
++
++@pytest.mark.parametrize("strict", [False, True])
++def test_json_parser_missing_required_argument(strict):
++    command = Command(
++        name="show",
++        docstring="",
++        arguments=[Argument(name="path", type="string", description="", required=True)],
++    )
++    message = '{"thought": "Show the file", "command": {"name": "show", "arguments": {}}}'
++    with pytest.raises(FormatError, match="Required argument 'path' missing for command 'show'"):
++        JsonParser()({"message": message}, [command], strict=strict)
++
++
+ def test_function_calling_parser():
+     parser = FunctionCallingParser()
+     command = Command(name="ls", docstring="", arguments=[])

@@ -1,0 +1,13 @@
+diff --git a/docs/customize/browser/remote.mdx b/docs/customize/browser/remote.mdx
+index 9cf0a0ed0c0..aa21115b93e 100644
+--- a/docs/customize/browser/remote.mdx
++++ b/docs/customize/browser/remote.mdx
+@@ -44,7 +44,7 @@ agent = Agent(
+ ```
+ 
+ **Prerequisites:**
+-1. Get a API key from [cloud.browser-use.com](https://cloud.browser-use.com)
++1. Get an API key from [cloud.browser-use.com](https://cloud.browser-use.com)
+ 2. Set BROWSER_USE_API_KEY environment variable
+ 
+ **Benefits:**

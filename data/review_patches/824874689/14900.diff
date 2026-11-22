@@ -1,0 +1,502 @@
+diff --git a/apps/cli/README.md b/apps/cli/README.md
+index 5a6a4695b98..52a16026bb0 100644
+--- a/apps/cli/README.md
++++ b/apps/cli/README.md
+@@ -291,6 +291,23 @@ Schedules can route results back to chat surfaces with `--delivery-adapter`, `--
+ - `cline hub` - Manage the local hub daemon
+ - `cline kanban` - Run the external `kanban` app, installing it first when needed
+ 
++## Hub dashboard
++
++Run `cline hub` to list hub subcommands. To start the browser dashboard:
++
++```sh
++cline hub dashboard
++```
++
++The dashboard opens in your default browser and stays running until you press Ctrl+C. Use `--no-open` to print the URL without opening a browser, or `--port` to change the dashboard's HTTP/WebSocket port (default: `8787`):
++
++```sh
++cline hub dashboard --port 9090 --no-open
++cline hub dashboard --help
++```
++
++Dashboard options also include `--cwd`, `--config`, `--data-dir`, `--host`, `--public-url`, and `--room-secret`. For LAN or tunnel access, see the [Cline Hub configuration and security guidance](../cline-hub/README.md). The old `cline dashboard` invocation remains a hidden compatibility alias; use `cline hub dashboard` in new scripts.
++
+ ## Zen mode
+ 
+ `--zen` (alias `-z`) runs a task in the background hub daemon and exits the CLI immediately. It is intended for long-running tasks you want to fire off and walk away from.
+diff --git a/apps/cli/src/cli.e2e.test.ts b/apps/cli/src/cli.e2e.test.ts
+index 40ee017cc91..ca0fb9a662b 100644
+--- a/apps/cli/src/cli.e2e.test.ts
++++ b/apps/cli/src/cli.e2e.test.ts
+@@ -265,9 +265,40 @@ describe("cli e2e", () => {
+ 		expect(result.status).toBe(0);
+ 		expect(asText(result.stdout)).toContain("Usage: hub [options] [command]");
+ 		expect(asText(result.stdout)).toContain("status");
++		expect(asText(result.stdout)).toContain("dashboard");
+ 		expect(asText(result.stderr)).toBe("");
+ 	});
+ 
++	it("prints hub dashboard help without starting a server", () => {
++		const result = runCli(["hub", "dashboard", "--help"], {
++			env: createIsolatedEnv({ CLINE_RUN_AS_HUB_DAEMON: undefined }),
++		});
++		expect(result.status).toBe(0);
++		const output = asText(result.stdout);
++		expect(output).toContain("Usage: hub dashboard [options]");
++		for (const option of [
++			"--config",
++			"--cwd",
++			"--data-dir",
++			"--host",
++			"--port",
++			"--public-url",
++			"--room-secret",
++			"--no-open",
++		]) {
++			expect(output).toContain(option);
++		}
++		expect(output).not.toContain("listening at");
++		expect(asText(result.stderr)).toBe("");
++	});
++
++	it("does not advertise dashboard as a top-level command", () => {
++		const result = runCli(["--help"], { env: createIsolatedEnv() });
++		expect(result.status).toBe(0);
++		expect(asText(result.stdout)).toContain("hub");
++		expect(asText(result.stdout)).not.toContain("dashboard");
++	});
++
+ 	it("returns an error for interactive auth when no TTY is available", () => {
+ 		const homeDir = mkdtempSync(path.join(os.tmpdir(), "cli-e2e-home-"));
+ 		const dataDir = mkdtempSync(path.join(os.tmpdir(), "cli-e2e-data-"));
+diff --git a/apps/cli/src/commands/dashboard-command.ts b/apps/cli/src/commands/dashboard-command.ts
+new file mode 100644
+index 00000000000..d0b1eb138f2
+--- /dev/null
++++ b/apps/cli/src/commands/dashboard-command.ts
+@@ -0,0 +1,49 @@
++import { Command } from "commander";
++import type { RunDashboardCommandOptions } from "./dashboard";
++
++export function createDashboardCommand(
++	io: RunDashboardCommandOptions["io"],
++	setExitCode: (code: number) => void,
++): Command {
++	const dashboardCmd = new Command("dashboard")
++		.description("Start the Cline Hub dashboard and open it in a browser")
++		.option("--config <dir>", "configuration directory")
++		.option("-c, --cwd <path>", "Workspace root", process.cwd())
++		.option(
++			"--data-dir <dir>",
++			"Use isolated local state at <dir> instead of ~/.cline (enables sandbox mode)",
++		)
++		.option("--host <host>", "Dashboard bind host")
++		.option("--port <port>", "Dashboard HTTP/WebSocket port")
++		.option("--public-url <url>", "Public dashboard URL")
++		.option("--room-secret <secret>", "Invite secret for browser access")
++		.option("--no-open", "Start the dashboard without opening a browser")
++		.action(async () => {
++			const opts = dashboardCmd.opts<{
++				config?: string;
++				cwd?: string;
++				dataDir?: string;
++				host?: string;
++				port?: string;
++				publicUrl?: string;
++				roomSecret?: string;
++				open?: boolean;
++			}>();
++			const { runDashboardCommand } = await import("./dashboard");
++			setExitCode(
++				await runDashboardCommand({
++					configDir: opts.config,
++					cwd: opts.cwd,
++					dataDir: opts.dataDir,
++					host: opts.host,
++					port: opts.port,
++					publicUrl: opts.publicUrl,
++					roomSecret: opts.roomSecret,
++					openBrowser: opts.open !== false,
++					io,
++				}),
++			);
++		});
++
++	return dashboardCmd;
++}
+diff --git a/apps/cli/src/commands/hub.test.ts b/apps/cli/src/commands/hub.test.ts
+index 4215059a087..adc4a154318 100644
+--- a/apps/cli/src/commands/hub.test.ts
++++ b/apps/cli/src/commands/hub.test.ts
+@@ -126,6 +126,39 @@ describe("createHubCommand", () => {
+ 		};
+ 	}
+ 
++	it.each([
++		"ensure",
++		"start",
++		"upgrade",
++	])("accepts daemon options before or after %s", async (subcommand) => {
++		mockReadHubDiscovery.mockResolvedValue(undefined);
++		mockEnsureDetachedHubServer.mockResolvedValue({
++			url: "ws://localhost:9090/custom",
++		});
++		const options = [
++			"--cwd",
++			"/tmp/workspace",
++			"--host",
++			"localhost",
++			"--port",
++			"9090",
++			"--pathname",
++			"/custom",
++		];
++		for (const args of [
++			[...options, subcommand],
++			[subcommand, ...options],
++		]) {
++			const { cmd, exitCode } = createCommand();
++			await cmd.parseAsync(args, { from: "user" });
++			expect(exitCode()).toBe(0);
++			expect(mockEnsureDetachedHubServer).toHaveBeenLastCalledWith(
++				"/tmp/workspace",
++				{ host: "localhost", port: 9090, pathname: "/custom" },
++			);
++		}
++	});
++
+ 	it("sends an un-drain request with drain --off", async () => {
+ 		mockReadHubDiscovery.mockResolvedValue({
+ 			url: "ws://127.0.0.1:25463/hub",
+diff --git a/apps/cli/src/commands/hub.ts b/apps/cli/src/commands/hub.ts
+index 22fca33c7a6..08af0273c56 100644
+--- a/apps/cli/src/commands/hub.ts
++++ b/apps/cli/src/commands/hub.ts
+@@ -12,12 +12,28 @@ import {
+ import { formatUptime, resolveClineBuildEnv } from "@cline/shared";
+ import { Command, InvalidArgumentError } from "commander";
+ import { version as cliVersion } from "../../package.json";
++import { createDashboardCommand } from "./dashboard-command";
+ 
+ interface HubCommandIo {
+ 	writeln: (text?: string) => void;
+ 	writeErr: (text: string) => void;
+ }
+ 
++interface HubOptions {
++	cwd: string;
++	host?: string;
++	port?: number;
++	pathname?: string;
++}
++
++function addHubOptions(command: Command, defaultCwd?: string): Command {
++	return command
++		.option("--cwd <path>", "Workspace root", defaultCwd)
++		.option("--host <host>", "Hub host")
++		.option("--port <port>", "Hub port", (value) => Number.parseInt(value, 10))
++		.option("--pathname <path>", "Hub websocket path");
++}
++
+ async function stopHubServer(_workspaceRoot: string): Promise<boolean> {
+ 	const owner = resolveCliHubOwnerContext();
+ 	const discovery = await readHubDiscovery(owner.discoveryPath);
+@@ -88,22 +104,20 @@ export function createHubCommand(
+ 	const hub = new Command("hub")
+ 		.description("Manage the local hub daemon")
+ 		.exitOverride()
++		// Subcommands may use the same flag names for different services.
++		.enablePositionalOptions()
+ 		.hook("postAction", () => {
+ 			setExitCode(actionExitCode);
+-		})
+-		.option("--cwd <path>", "Workspace root", process.cwd())
+-		.option("--host <host>", "Hub host")
+-		.option("--port <port>", "Hub port", (value) => Number.parseInt(value, 10))
+-		.option("--pathname <path>", "Hub websocket path");
++		});
++	addHubOptions(hub, process.cwd());
++	const resolveOptions = (options: Partial<HubOptions>): HubOptions => ({
++		...hub.opts<HubOptions>(),
++		...options,
++	});
+ 
+ 	hub.command("ensure").action(
+-		action(async () => {
+-			const opts = hub.opts<{
+-				cwd: string;
+-				host?: string;
+-				port?: number;
+-				pathname?: string;
+-			}>();
++		action(async (options: Partial<HubOptions>) => {
++			const opts = resolveOptions(options);
+ 			const { url } = await ensureDetachedHubServer(opts.cwd, {
+ 				host: opts.host,
+ 				port: opts.port,
+@@ -114,13 +128,8 @@ export function createHubCommand(
+ 	);
+ 
+ 	hub.command("start").action(
+-		action(async () => {
+-			const opts = hub.opts<{
+-				cwd: string;
+-				host?: string;
+-				port?: number;
+-				pathname?: string;
+-			}>();
++		action(async (options: Partial<HubOptions>) => {
++			const opts = resolveOptions(options);
+ 			const { url } = await ensureDetachedHubServer(opts.cwd, {
+ 				host: opts.host,
+ 				port: opts.port,
+@@ -155,8 +164,8 @@ export function createHubCommand(
+ 	);
+ 
+ 	hub.command("stop").action(
+-		action(async () => {
+-			const opts = hub.opts<{ cwd: string }>();
++		action(async (options: Partial<HubOptions>) => {
++			const opts = resolveOptions(options);
+ 			const stopped = await stopHubServer(opts.cwd);
+ 			io.writeln(JSON.stringify({ stopped }));
+ 		}),
+@@ -209,13 +218,8 @@ export function createHubCommand(
+ 			120,
+ 		)
+ 		.action(
+-			action(async (cmdOptions: { wait: number }) => {
+-				const opts = hub.opts<{
+-					cwd: string;
+-					host?: string;
+-					port?: number;
+-					pathname?: string;
+-				}>();
++			action(async (cmdOptions: Partial<HubOptions> & { wait: number }) => {
++				const opts = resolveOptions(cmdOptions);
+ 				const owner = resolveCliHubOwnerContext();
+ 				const discovery = await readHubDiscovery(owner.discoveryPath);
+ 				if (discovery?.url) {
+@@ -274,5 +278,16 @@ export function createHubCommand(
+ 			}),
+ 		);
+ 
++	// Keep daemon options accepted before or after existing subcommands.
++	for (const command of hub.commands) {
++		addHubOptions(command);
++	}
++
++	hub.addCommand(
++		createDashboardCommand(io, (code) => {
++			actionExitCode = code;
++		}),
++	);
++
+ 	return hub;
+ }
+diff --git a/apps/cli/src/main.test.ts b/apps/cli/src/main.test.ts
+index 2713980b2d6..f0f5d9f9724 100644
+--- a/apps/cli/src/main.test.ts
++++ b/apps/cli/src/main.test.ts
+@@ -1428,17 +1428,28 @@ describe("runCli lightweight command dispatch", () => {
+ 		expect(process.exitCode).toBe(0);
+ 	});
+ 
+-	it("runs dashboard before loading runtime modules", async () => {
++	it.each([
++		["hub", "dashboard"],
++		["dashboard"],
++	])("runs %s dashboard before loading runtime modules", async (...command) => {
+ 		process.argv = [
+ 			"bun",
+ 			"src/index.ts",
+-			"dashboard",
++			...command,
+ 			"--config",
+ 			"/tmp/cline-config",
++			"--cwd",
++			"/tmp/workspace",
+ 			"--data-dir",
+ 			".cline-dashboard-data",
++			"--host",
++			"127.0.0.1",
+ 			"--port",
+ 			"9090",
++			"--public-url",
++			"https://dashboard.example",
++			"--room-secret",
++			"test-invite-secret",
+ 			"--no-open",
+ 		];
+ 
+@@ -1448,8 +1459,12 @@ describe("runCli lightweight command dispatch", () => {
+ 		expect(dashboardMocks.runDashboardCommand).toHaveBeenCalledWith(
+ 			expect.objectContaining({
+ 				configDir: "/tmp/cline-config",
++				cwd: "/tmp/workspace",
+ 				dataDir: ".cline-dashboard-data",
++				host: "127.0.0.1",
+ 				port: "9090",
++				publicUrl: "https://dashboard.example",
++				roomSecret: "test-invite-secret",
+ 				openBrowser: false,
+ 				io: expect.any(Object),
+ 			}),
+@@ -1459,6 +1474,27 @@ describe("runCli lightweight command dispatch", () => {
+ 		expect(process.exitCode).toBe(0);
+ 	});
+ 
++	it("opens the hub dashboard in a browser by default", async () => {
++		process.argv = ["bun", "src/index.ts", "hub", "dashboard"];
++		const { runCli } = await import("./main");
++		await runCli();
++		expect(dashboardMocks.runDashboardCommand).toHaveBeenCalledWith(
++			expect.objectContaining({ cwd: process.cwd(), openBrowser: true }),
++		);
++		expect(process.exitCode).toBe(0);
++	});
++
++	it("preserves the hub dashboard failure exit code", async () => {
++		dashboardMocks.runDashboardCommand.mockResolvedValue(1);
++		process.argv = ["bun", "src/index.ts", "hub", "dashboard", "--no-open"];
++		const { runCli } = await import("./main");
++		await runCli();
++		expect(dashboardMocks.runDashboardCommand).toHaveBeenCalledTimes(1);
++		expect(process.exitCode).toBe(1);
++		expect(mockState.runAgentImports).toBe(0);
++		expect(mockState.runInteractiveImports).toBe(0);
++	});
++
+ 	it("prints an install hint when kanban is missing", async () => {
+ 		const stderrWrite = vi
+ 			.spyOn(process.stderr, "write")
+diff --git a/apps/cli/src/main.ts b/apps/cli/src/main.ts
+index 9590be4a2b7..5b09fe36d97 100644
+--- a/apps/cli/src/main.ts
++++ b/apps/cli/src/main.ts
+@@ -5,6 +5,7 @@ import type { ToolPolicy } from "@cline/core";
+ 
+ import { registerDisposable } from "@cline/shared";
+ import type { Command } from "commander";
++import { createDashboardCommand } from "./commands/dashboard-command";
+ import { registerHistoryCommand } from "./commands/history-command";
+ import {
+ 	CommanderError,
+@@ -615,44 +616,13 @@ export async function runCli(): Promise<void> {
+ 			await hubCmd.parseAsync(cmd.args, { from: "user" });
+ 		});
+ 
+-	const dashboardCmd = program
+-		.command("dashboard")
+-		.description("Start the Cline Hub dashboard and open it in a browser")
+-		.option("--config <dir>", "configuration directory")
+-		.option("-c, --cwd <path>", "Workspace root", process.cwd())
+-		.option(
+-			"--data-dir <dir>",
+-			"Use isolated local state at <dir> instead of ~/.cline (enables sandbox mode)",
+-		)
+-		.option("--host <host>", "Dashboard bind host")
+-		.option("--port <port>", "Dashboard HTTP/WebSocket port")
+-		.option("--public-url <url>", "Public dashboard URL")
+-		.option("--room-secret <secret>", "Invite secret for browser access")
+-		.option("--no-open", "Start the dashboard without opening a browser")
+-		.action(async () => {
+-			const opts = dashboardCmd.opts<{
+-				config?: string;
+-				cwd?: string;
+-				dataDir?: string;
+-				host?: string;
+-				port?: string;
+-				publicUrl?: string;
+-				roomSecret?: string;
+-				open?: boolean;
+-			}>();
+-			const { runDashboardCommand } = await import("./commands/dashboard");
+-			ctx.exitCode = await runDashboardCommand({
+-				configDir: opts.config,
+-				cwd: opts.cwd,
+-				dataDir: opts.dataDir,
+-				host: opts.host,
+-				port: opts.port,
+-				publicUrl: opts.publicUrl,
+-				roomSecret: opts.roomSecret,
+-				openBrowser: opts.open !== false,
+-				io,
+-			});
+-		});
++	// Keep the old invocation working without advertising it in root help.
++	program.addCommand(
++		createDashboardCommand(io, (code) => {
++			ctx.exitCode = code;
++		}),
++		{ hidden: true },
++	);
+ 
+ 	const updateCmd = program
+ 		.command("update")
+diff --git a/apps/cline-hub/README.md b/apps/cline-hub/README.md
+index 7ee9aee3e0c..34e478fd88d 100644
+--- a/apps/cline-hub/README.md
++++ b/apps/cline-hub/README.md
+@@ -16,6 +16,16 @@ The dashboard registers two clients with the hub: a `cline-hub-server` (via `Cli
+ 
+ ## Run
+ 
++With the Cline CLI installed:
++
++```bash
++cline hub dashboard
++```
++
++The command opens the dashboard in your default browser and stays running until you press Ctrl+C. Use `cline hub dashboard --no-open` to print the URL without opening a browser. Run `cline hub dashboard --help` for options, including `--host`, `--port`, `--public-url`, and `--room-secret`.
++
++From a source checkout:
++
+ ```bash
+ cd apps/cline-hub
+ bun run start
+diff --git a/docs/cli/cli-reference.mdx b/docs/cli/cli-reference.mdx
+index 3e8cfcd7eea..a12e83c1d75 100644
+--- a/docs/cli/cli-reference.mdx
++++ b/docs/cli/cli-reference.mdx
+@@ -202,12 +202,37 @@ cline schedule
+ 
+ ### `hub`
+ 
+-Manage the local hub daemon.
++Manage the local hub daemon. Running `cline hub` without a subcommand prints help.
+ 
+ ```bash
+ cline hub
+ ```
+ 
++#### `hub dashboard [options]`
++
++Start the Cline Hub browser dashboard to view connected clients and sessions, send messages, and restart the hub. The command opens your default browser and stays running until you press Ctrl+C.
++
++```bash
++cline hub dashboard
++cline hub dashboard --port 9090 --no-open
++cline hub dashboard --help
++```
++
++| Option | Description |
++| --- | --- |
++| `-c, --cwd <path>` | Workspace root (default: current directory). |
++| `--config <dir>` | Configuration directory. |
++| `--data-dir <dir>` | Use isolated local state and enable sandbox mode. |
++| `--host <host>` | Dashboard bind host (default: `127.0.0.1`). |
++| `--port <port>` | Dashboard HTTP/WebSocket port (default: `8787`). |
++| `--public-url <url>` | Public dashboard URL for LAN or tunnel access. |
++| `--room-secret <secret>` | Invite secret for browser access; required when binding to a non-local host. |
++| `--no-open` | Print the dashboard URL without opening a browser. |
++
++Anyone with access to the dashboard can drive sessions and restart the hub. For LAN or tunnel access, use a strong room secret and share the printed invite URL only with trusted people.
++
++The old `cline dashboard` invocation remains a hidden compatibility alias. Use `cline hub dashboard` in new scripts.
++
+ ### `update [options]`
+ 
+ Check for updates and install if available.
