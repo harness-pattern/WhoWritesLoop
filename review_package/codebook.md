@@ -1,6 +1,6 @@
 # Codebook — human audit of harness mining and attribution
 
-This codebook is for reviewers who did **not** build the rule engine. Read it once, then work record by record in `review.html` or `review_form.csv`. The goal is to catch mining errors, not to reproduce the original labels.
+This codebook is for reviewers who did **not** build the rule engine. Read it once, then work record by record in `review.html` or `review_form.csv`. The goal is to catch mining errors, not to reproduce the original labels. `INSTRUCTIONS.md` gives the full protocol; `EXAMPLES.md` gives ten worked records, five of which are deliberate rule errors.
 
 ---
 
@@ -64,7 +64,7 @@ Apply this precedence; the first match wins.
 | **L0 product** | Webview/UI, TUI rendering, desktop shell, website, examples, i18n. |
 | **LD docs** | README, docs site, changelog, comment-only markdown. |
 
-**Primary layer** is the layer with the largest line weight (`additions + deletions`), excluding GEN. If a PR touches only docs and tests, tests (L4) wins by precedence. If two layers tie, prefer L1 > L2 > L3 > L4 > L0 > LD.
+**Primary layer** is the layer of the substantive implementation change. First decide whether the PR is *test-only* or *docs-only*; if it is, the layer is L4 or LD. If it is mixed, **ignore test, documentation, and generated files when computing line weight**—a 1-line UI change plus a 300-line test is L0, not L4. Then choose the layer with the largest implementation line weight (`additions + deletions`, excluding GEN, tests, and docs). If two layers tie, prefer L1 > L2 > L3 > L4 > L0 > LD.
 
 ### Layer edge cases
 

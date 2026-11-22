@@ -323,7 +323,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       <summary>How to judge each field (short codebook)</summary>
       <p><b>Title / merge status:</b> open the GitHub link and confirm the title matches and whether the PR is merged, closed-unmerged, or open.</p>
       <p><b>Tier:</b> T1 = bot account or explicit end-to-end autonomous declaration; T2 = co-author trailer or tool signature (Claude Code, Copilot, Devin, Cursor, Aider, Codex, Gemini); T3 = no explicit marker. A human using an unmarked assistant is still T3.</p>
-      <p><b>Layer:</b> L1 core loop/state machine/scheduling/retry; L2 prompts/context/memory/config/skills; L3 tools/MCP/sandbox/permissions/providers; L4 tests/CI/eval/telemetry; L0 UI/examples/website; LD docs only.</p>
+      <p><b>Layer:</b> L1 core loop/state machine/scheduling/retry; L2 prompts/context/memory/config/skills; L3 tools/MCP/sandbox/permissions/providers; L4 tests/CI/eval/telemetry; L0 UI/examples/website; LD docs only. In a mixed PR, ignore tests/docs when choosing the primary layer; tests decide only when the PR is test-only.</p>
       <p><b>Change type:</b> structural = core refactor, interface/base-class change, concurrency or security boundary, or cross-layer change with deletions/renames; additive = new files/adapters/tests with little deletion; fix = bug fix that is not structural; docs; test_only; ui.</p>
       <p><b>Confidence:</b> 1 = guess, 5 = certain. Use 2–3 freely; do not force certainty.</p>
     </details>
@@ -331,6 +331,15 @@ HTML_TEMPLATE = r"""<!doctype html>
       <summary>Full codebook (embedded)</summary>
       <pre class="codebook">__CODEBOOK__</pre>
     </details>
+    <details>
+      <summary>Worked examples (10 records; E6–E10 are deliberate rule errors)</summary>
+      <table class="table" style="font-size:12.5px;margin-top:8px">
+        <thead><tr><th>#</th><th>Record</th><th>Rule</th><th>Correct</th><th>Lesson</th></tr></thead>
+        <tbody><tr><td>E1</td><td>S012</td><td><code>T1/LD/docs</code></td><td><code>agree</code></td><td>explicit AI declaration → T1; README only → LD</td></tr><tr><td>E2</td><td>S001</td><td><code>T3/L2/fix</code></td><td><code>agree</code></td><td>tool descriptions are L2, not L3</td></tr><tr><td>E3</td><td>S003</td><td><code>T2/L3/additive</code></td><td><code>agree</code></td><td>Claude trailer + new tool adapter</td></tr><tr><td>E4</td><td>S016</td><td><code>T1/L1/structural</code></td><td><code>agree</code></td><td>355-line deletion in core/task</td></tr><tr><td>E5</td><td>S015</td><td><code>T1/L0/ui</code></td><td><code>agree</code></td><td>CSS/TSX only</td></tr><tr><td>E6</td><td>S026</td><td><code>T1/L4/fix</code></td><td><code>T1/L4/test_only</code></td><td>only a test file changed</td></tr><tr><td>E7</td><td>S002</td><td><code>T1/L1/additive</code></td><td><code>T1/L3/additive</code></td><td>provider catalog is not the loop</td></tr><tr><td>E8</td><td>S014</td><td><code>T1/L4/fix</code></td><td><code>T1/L0/ui</code></td><td>tests do not set the primary layer</td></tr><tr><td>E9</td><td>S022</td><td><code>T2/L1/structural</code></td><td><code>T2/L2/structural</code></td><td>skills loader is context, not loop</td></tr><tr><td>E10</td><td>S046</td><td><code>T2/LD/structural</code></td><td><code>T2/LD/docs</code></td><td>planning markdown is not code</td></tr></tbody>
+      </table>
+      <p class="note">Open the record by id, decide first, then compare. Full reasoning is in <code>EXAMPLES.md</code>; the review protocol is in <code>INSTRUCTIONS.md</code>.</p>
+    </details>
+
   </div>
 </main>
 <script>

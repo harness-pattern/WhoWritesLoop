@@ -73,7 +73,7 @@
       <summary>How to judge each field (short codebook)</summary>
       <p><b>Title / merge status:</b> open the GitHub link and confirm the title matches and whether the PR is merged, closed-unmerged, or open.</p>
       <p><b>Tier:</b> T1 = bot account or explicit end-to-end autonomous declaration; T2 = co-author trailer or tool signature (Claude Code, Copilot, Devin, Cursor, Aider, Codex, Gemini); T3 = no explicit marker. A human using an unmarked assistant is still T3.</p>
-      <p><b>Layer:</b> L1 core loop/state machine/scheduling/retry; L2 prompts/context/memory/config/skills; L3 tools/MCP/sandbox/permissions/providers; L4 tests/CI/eval/telemetry; L0 UI/examples/website; LD docs only.</p>
+      <p><b>Layer:</b> L1 core loop/state machine/scheduling/retry; L2 prompts/context/memory/config/skills; L3 tools/MCP/sandbox/permissions/providers; L4 tests/CI/eval/telemetry; L0 UI/examples/website; LD docs only. In a mixed PR, ignore tests/docs when choosing the primary layer; tests decide only when the PR is test-only.</p>
       <p><b>Change type:</b> structural = core refactor, interface/base-class change, concurrency or security boundary, or cross-layer change with deletions/renames; additive = new files/adapters/tests with little deletion; fix = bug fix that is not structural; docs; test_only; ui.</p>
       <p><b>Confidence:</b> 1 = guess, 5 = certain. Use 2–3 freely; do not force certainty.</p>
     </details>
@@ -81,7 +81,7 @@
       <summary>Full codebook (embedded)</summary>
       <pre class="codebook"># Codebook — human audit of harness mining and attribution
 
-This codebook is for reviewers who did **not** build the rule engine. Read it once, then work record by record in `review.html` or `review_form.csv`. The goal is to catch mining errors, not to reproduce the original labels.
+This codebook is for reviewers who did **not** build the rule engine. Read it once, then work record by record in `review.html` or `review_form.csv`. The goal is to catch mining errors, not to reproduce the original labels. `INSTRUCTIONS.md` gives the full protocol; `EXAMPLES.md` gives ten worked records, five of which are deliberate rule errors.
 
 ---
 
@@ -145,7 +145,7 @@ Apply this precedence; the first match wins.
 | **L0 product** | Webview/UI, TUI rendering, desktop shell, website, examples, i18n. |
 | **LD docs** | README, docs site, changelog, comment-only markdown. |
 
-**Primary layer** is the layer with the largest line weight (`additions + deletions`), excluding GEN. If a PR touches only docs and tests, tests (L4) wins by precedence. If two layers tie, prefer L1 &gt; L2 &gt; L3 &gt; L4 &gt; L0 &gt; LD.
+**Primary layer** is the layer of the substantive implementation change. First decide whether the PR is *test-only* or *docs-only*; if it is, the layer is L4 or LD. If it is mixed, **ignore test, documentation, and generated files when computing line weight**—a 1-line UI change plus a 300-line test is L0, not L4. Then choose the layer with the largest implementation line weight (`additions + deletions`, excluding GEN, tests, and docs). If two layers tie, prefer L1 &gt; L2 &gt; L3 &gt; L4 &gt; L0 &gt; LD.
 
 ### Layer edge cases
 
@@ -197,6 +197,15 @@ Do not inflate confidence to make the agreement look better. A low-confidence di
 - Write notes for every disagreement, citing the file or hunk that changed your mind.
 </pre>
     </details>
+    <details>
+      <summary>Worked examples (10 records; E6–E10 are deliberate rule errors)</summary>
+      <table class="table" style="font-size:12.5px;margin-top:8px">
+        <thead><tr><th>#</th><th>Record</th><th>Rule</th><th>Correct</th><th>Lesson</th></tr></thead>
+        <tbody><tr><td>E1</td><td>S012</td><td><code>T1/LD/docs</code></td><td><code>agree</code></td><td>explicit AI declaration → T1; README only → LD</td></tr><tr><td>E2</td><td>S001</td><td><code>T3/L2/fix</code></td><td><code>agree</code></td><td>tool descriptions are L2, not L3</td></tr><tr><td>E3</td><td>S003</td><td><code>T2/L3/additive</code></td><td><code>agree</code></td><td>Claude trailer + new tool adapter</td></tr><tr><td>E4</td><td>S016</td><td><code>T1/L1/structural</code></td><td><code>agree</code></td><td>355-line deletion in core/task</td></tr><tr><td>E5</td><td>S015</td><td><code>T1/L0/ui</code></td><td><code>agree</code></td><td>CSS/TSX only</td></tr><tr><td>E6</td><td>S026</td><td><code>T1/L4/fix</code></td><td><code>T1/L4/test_only</code></td><td>only a test file changed</td></tr><tr><td>E7</td><td>S002</td><td><code>T1/L1/additive</code></td><td><code>T1/L3/additive</code></td><td>provider catalog is not the loop</td></tr><tr><td>E8</td><td>S014</td><td><code>T1/L4/fix</code></td><td><code>T1/L0/ui</code></td><td>tests do not set the primary layer</td></tr><tr><td>E9</td><td>S022</td><td><code>T2/L1/structural</code></td><td><code>T2/L2/structural</code></td><td>skills loader is context, not loop</td></tr><tr><td>E10</td><td>S046</td><td><code>T2/LD/structural</code></td><td><code>T2/LD/docs</code></td><td>planning markdown is not code</td></tr></tbody>
+      </table>
+      <p class="note">Open the record by id, decide first, then compare. Full reasoning is in <code>EXAMPLES.md</code>; the review protocol is in <code>INSTRUCTIONS.md</code>.</p>
+    </details>
+
   </div>
 </main>
 <script>

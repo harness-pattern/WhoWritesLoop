@@ -13,7 +13,9 @@ The paper reports 135,331 retained PRs, 7,205 detail records, and a 120-record m
 | `review.html` | Self-contained review app. Opens in any browser; no server, no network calls except the GitHub links you click. Exports `review_form_filled.csv`. |
 | `review_sample.csv` | The 120 sampled PRs with rule labels and GitHub URLs. Do not edit. |
 | `review_form.csv` | Blank CSV form, one row per sampled PR. Use this if you prefer a spreadsheet to the HTML app. |
-| `codebook.md` | Definitions, precedence rules, edge cases, and worked examples. Read this first. |
+| `codebook.md` | Definitions, precedence rules, and edge cases. Read this first. |
+| `INSTRUCTIONS.md` | Full reviewer protocol: six decisions, hard-case matrix, two-reviewer and adjudication rules, common mistakes. |
+| `EXAMPLES.md` | Ten worked records from this sample, including five deliberate rule errors. |
 | `repo_counts.csv` | Expected PR count per repository plus a GitHub search URL. Fill `observed_prs` after checking. |
 | `revert_sample.csv` | 15 revert PRs. Verify the claimed target exists and is the PR that was actually reverted. |
 | `pattern_sample.csv` | 16 PRs that matched RQ3 pattern keywords. Judge whether the pattern is substantively present. |
