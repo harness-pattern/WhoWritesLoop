@@ -306,33 +306,43 @@ HTML_TEMPLATE = r"""<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Human Review — Harness Mining Audit</h1>
+  <h1 id="apptitle">Human Review — Harness Mining Audit</h1>
   <div class="bar"><i id="progress"></i></div>
   <span class="counter" id="counter">0 / 0</span>
   <div class="grow"></div>
-  <label class="counter"><input type="checkbox" id="blind"> hide rule labels (blind mode)</label>
+  <label class="counter"><input type="checkbox" id="blind"> <span id="blindlabel">hide rule labels (blind mode)</span></label>
+  <button id="lang">中文</button>
   <button id="agree">Agreement</button>
   <button id="export" class="primary">Export CSV</button>
 </header>
 <main>
-  <div class="warn">Work through the records in order. Answers autosave in this browser, so you can refresh safely. <b>Export CSV</b> writes <code>review_form_filled.csv</code>; send it back with your reviewer name.</div>
+  <div class="warn" id="warn">Work through the records in order. Answers autosave in this browser, so you can refresh safely. <b>Export CSV</b> writes <code>review_form_filled.csv</code>; send it back with your reviewer name.</div>
   <div id="app"></div>
   <div id="agreement" class="card agreebox hidden"></div>
   <div class="card" style="margin-top:16px">
     <details>
-      <summary>How to judge each field (short codebook)</summary>
+      <summary id="sumshort">How to judge each field (short codebook)</summary>
+      <div class="cb-en">
       <p><b>Title / merge status:</b> open the GitHub link and confirm the title matches and whether the PR is merged, closed-unmerged, or open.</p>
       <p><b>Tier:</b> T1 = bot account or explicit end-to-end autonomous declaration; T2 = co-author trailer or tool signature (Claude Code, Copilot, Devin, Cursor, Aider, Codex, Gemini); T3 = no explicit marker. A human using an unmarked assistant is still T3.</p>
       <p><b>Layer:</b> L1 core loop/state machine/scheduling/retry; L2 prompts/context/memory/config/skills; L3 tools/MCP/sandbox/permissions/providers; L4 tests/CI/eval/telemetry; L0 UI/examples/website; LD docs only. In a mixed PR, ignore tests/docs when choosing the primary layer; tests decide only when the PR is test-only.</p>
       <p><b>Change type:</b> structural = core refactor, interface/base-class change, concurrency or security boundary, or cross-layer change with deletions/renames; additive = new files/adapters/tests with little deletion; fix = bug fix that is not structural; docs; test_only; ui.</p>
       <p><b>Confidence:</b> 1 = guess, 5 = certain. Use 2–3 freely; do not force certainty.</p>
+      </div>
+      <div class="cb-zh" style="display:none">
+      <p><b>标题 / 合并状态：</b>打开 GitHub 链接，确认标题、编号一致，以及 PR 是 merged、closed-unmerged 还是 open。</p>
+      <p><b>Tier：</b>T1 = bot 账号或明确端到端自主声明；T2 = co-author trailer 或工具签名（Claude Code、Copilot、Devin、Cursor、Aider、Codex、Gemini）；T3 = 无显式标记。人类用未标记助手仍是 T3。</p>
+      <p><b>Layer：</b>L1 核心循环/状态机/调度/重试；L2 prompt/上下文/记忆/配置/skills；L3 工具/MCP/沙箱/权限/provider；L4 测试/CI/评测/遥测；L0 UI/示例/官网；LD 纯文档。混合 PR 忽略 tests/docs 选主层；只有 test-only 才是 L4。</p>
+      <p><b>Change type：</b>structural = 核心重构、接口/基类变化、并发或安全边界、跨层删除/重命名；additive = 新增文件/适配器/测试且删除少；fix = 非结构性的 bug 修复；docs；test_only；ui。</p>
+      <p><b>Confidence：</b>1 = 猜，5 = 确定。放心用 2–3，不要强行确定。</p>
+      </div>
     </details>
     <details>
-      <summary>Full codebook (embedded)</summary>
+      <summary id="sumfull">Full codebook (embedded)</summary>
       <pre class="codebook">__CODEBOOK__</pre>
     </details>
     <details>
-      <summary>Worked examples (10 records; E6–E10 are deliberate rule errors)</summary>
+      <summary id="sumex">Worked examples (10 records; E6–E10 are deliberate rule errors)</summary>
       <table class="table" style="font-size:12.5px;margin-top:8px">
         <thead><tr><th>#</th><th>Record</th><th>Rule</th><th>Correct</th><th>Lesson</th></tr></thead>
         <tbody><tr><td>E1</td><td>S012</td><td><code>T1/LD/docs</code></td><td><code>agree</code></td><td>explicit AI declaration → T1; README only → LD</td></tr><tr><td>E2</td><td>S001</td><td><code>T3/L2/fix</code></td><td><code>agree</code></td><td>tool descriptions are L2, not L3</td></tr><tr><td>E3</td><td>S003</td><td><code>T2/L3/additive</code></td><td><code>agree</code></td><td>Claude trailer + new tool adapter</td></tr><tr><td>E4</td><td>S016</td><td><code>T1/L1/structural</code></td><td><code>agree</code></td><td>355-line deletion in core/task</td></tr><tr><td>E5</td><td>S015</td><td><code>T1/L0/ui</code></td><td><code>agree</code></td><td>CSS/TSX only</td></tr><tr><td>E6</td><td>S026</td><td><code>T1/L4/fix</code></td><td><code>T1/L4/test_only</code></td><td>only a test file changed</td></tr><tr><td>E7</td><td>S002</td><td><code>T1/L1/additive</code></td><td><code>T1/L3/additive</code></td><td>provider catalog is not the loop</td></tr><tr><td>E8</td><td>S014</td><td><code>T1/L4/fix</code></td><td><code>T1/L0/ui</code></td><td>tests do not set the primary layer</td></tr><tr><td>E9</td><td>S022</td><td><code>T2/L1/structural</code></td><td><code>T2/L2/structural</code></td><td>skills loader is context, not loop</td></tr><tr><td>E10</td><td>S046</td><td><code>T2/LD/structural</code></td><td><code>T2/LD/docs</code></td><td>planning markdown is not code</td></tr></tbody>
@@ -344,6 +354,54 @@ HTML_TEMPLATE = r"""<!doctype html>
 </main>
 <script>
 const DATA = __DATA__;
+let LANG = (()=>{try{return localStorage.getItem("wwl_lang")||"en"}catch(e){return "en"}})();
+const T = {
+ en:{
+  title:"Human Review — Harness Mining Audit", blind:"hide rule labels (blind mode)", agreeBtn:"Agreement", exportBtn:"Export CSV",
+  warn:"Work through the records in order. Answers autosave in this browser, so you can refresh safely. <b>Export CSV</b> writes <code>review_form_filled.csv</code>; send it back with your reviewer name.",
+  q1:"1. Identity check", q2:"2. Tier attribution", q3:"3. Primary architecture layer", q4:"4. Change type", q5:"5. Confidence and notes",
+  titleMatches:"Title matches", merge:"Merge status matches", yes:"yes", no:"no",
+  agreeTier:"agree (T1/T2/T3)", disagreeTier:"disagree → correct label", agree:"agree",
+  disagreeLayer:"disagree → correct layer", disagreeCt:"disagree → correct type",
+  confidence:"confidence", notesPh:"optional: why the rule is wrong, or what is ambiguous",
+  unrev:"unreviewable (deleted repo, empty diff, or impossible to judge)",
+  complete:"record complete", required:"five judgements required", prev:"← Previous", next:"Next →", finish:"Finish",
+  why:"Why the rule said this", evidence:"Evidence: files, commits, PR body (embedded; GitHub link optional)",
+  diff:"Diff excerpt (first 7 KB, embedded)", short:"How to judge each field (short codebook)",
+  full:"Full codebook (embedded)", ex:"Worked examples (10 records; E6–E10 are deliberate rule errors)",
+  agreeTitle:"Agreement with rule engine", agreeNote:"Computed in this browser from completed records. For the formal report, use <code>compute_agreement.py</code>.",
+  dim:"Dimension", n:"n", acc:"Accuracy", kap:"Cohen's κ", tier:"Tier", layer:"Primary layer", ctype:"Change type"
+ },
+ zh:{
+  title:"人工复核 —— Harness 挖掘审计", blind:"隐藏规则标签（盲审模式）", agreeBtn:"一致性", exportBtn:"导出 CSV",
+  warn:"按顺序完成记录。答案会自动保存在本浏览器，可安全刷新。<b>导出 CSV</b> 生成 <code>review_form_filled.csv</code>，连同 reviewer 名字一起返回。",
+  q1:"1. 身份核对", q2:"2. Tier 归因", q3:"3. 主架构层", q4:"4. 变更类型", q5:"5. 置信度与备注",
+  titleMatches:"标题一致", merge:"合并状态一致", yes:"是", no:"否",
+  agreeTier:"同意（T1/T2/T3）", disagreeTier:"不同意 → 选择正确标签", agree:"同意",
+  disagreeLayer:"不同意 → 选择正确层", disagreeCt:"不同意 → 选择正确类型",
+  confidence:"置信度", notesPh:"可选：规则哪里错了，或哪里有歧义",
+  unrev:"不可评审（仓库已删除、diff 为空、或确实无法判断）",
+  complete:"本条已完成", required:"还需五项判断", prev:"← 上一条", next:"下一条 →", finish:"完成",
+  why:"规则为什么这样判", evidence:"证据：文件、commit、PR 正文（已内嵌；GitHub 链接可选）",
+  diff:"Diff 摘要（前 7 KB，已内嵌）", short:"各字段怎么判（简版 codebook）",
+  full:"完整 codebook（已内嵌）", ex:"完整示例（10 条；E6–E10 是故意的规则错误）",
+  agreeTitle:"与规则引擎的一致性", agreeNote:"由浏览器根据已完成记录计算。正式报告请用 <code>compute_agreement.py</code>。",
+  dim:"维度", n:"n", acc:"准确率", kap:"Cohen's κ", tier:"Tier", layer:"主层", ctype:"变更类型"
+ }
+};
+const t=k=>T[LANG][k]||T.en[k];
+function applyLang(){
+  document.documentElement.lang = LANG==="zh" ? "zh-CN" : "en";
+  const set=(id,html)=>{const e=document.getElementById(id); if(e) e.innerHTML=html;};
+  set("apptitle",t("title")); set("blindlabel",t("blind")); set("warn",t("warn"));
+  set("sumshort",t("short")); set("sumfull",t("full")); set("sumex",t("ex"));
+  document.querySelectorAll(".cb-en").forEach(e=>e.style.display=LANG==="zh"?"none":"block");
+  document.querySelectorAll(".cb-zh").forEach(e=>e.style.display=LANG==="zh"?"block":"none");
+  const a=document.getElementById("agree"); if(a) a.textContent=t("agreeBtn");
+  const x=document.getElementById("export"); if(x) x.textContent=t("exportBtn");
+  const l=document.getElementById("lang"); if(l) l.textContent=LANG==="zh"?"EN":"中文";
+  try{localStorage.setItem("wwl_lang",LANG)}catch(e){}
+}
 const FIELDS = ["title_matches","merge_status_matches","tier_correct","tier_corrected",
   "layer_correct","layer_corrected","change_type_correct","change_type_corrected",
   "confidence_1_5","unreviewable","notes"];
@@ -405,11 +463,11 @@ function render(){
       <span>all layers: ${r.layers_rule}</span>
     </div>
     <details class="evidence">
-      <summary>Why the rule said this</summary>
+      <summary>${t("why")}</summary>
       <p class="note">${ruleWhy(r)}</p>
     </details>
     <details class="evidence">
-      <summary>Evidence: files, commits, PR body (embedded; GitHub link optional)</summary>
+      <summary>${t("evidence")}</summary>
       ${r.body_excerpt ? `<div class="bodytext">${escapeHtml(r.body_excerpt)}</div>` : ""}
       <table><thead><tr><th>file</th><th>layer</th><th>status</th><th>+</th><th>−</th></tr></thead><tbody>
       ${(r.files||[]).map(f=>`<tr><td class="path">${escapeHtml(f.path)}</td><td>${escapeHtml(f.layer||"")}</td><td>${escapeHtml(f.status||"")}</td><td>${f.a??""}</td><td>${f.d??""}</td></tr>`).join("")}
@@ -417,36 +475,36 @@ function render(){
       ${(r.commit_messages||[]).length ? `<ul class="commits">${r.commit_messages.map(c=>`<li>${escapeHtml(c)}</li>`).join("")}</ul>` : ""}
     </details>
     <details class="evidence">
-      <summary>Diff excerpt (first 7 KB, embedded)</summary>
+      <summary>${t("diff")}</summary>
       ${r.patch ? `<pre class="diff">${escapeHtml(r.patch)}</pre>` : `<p class="note">No diff cached for this record; use the GitHub link. Mark it unreviewable if the page is gone.</p>`}
     </details>
-    <div class="q"><h3>1. Identity check</h3>
-      <div class="opts">Title matches ${opt("title_matches","Y","yes",s.title_matches)}${opt("title_matches","N","no",s.title_matches)}</div>
-      <div class="opts" style="margin-top:8px">Merge status matches ${opt("merge_status_matches","Y","yes",s.merge_status_matches)}${opt("merge_status_matches","N","no",s.merge_status_matches)}</div>
+    <div class="q"><h3>${t("q1")}</h3>
+      <div class="opts">${t("titleMatches")} ${opt("title_matches","Y",t("yes"),s.title_matches)}${opt("title_matches","N",t("no"),s.title_matches)}</div>
+      <div class="opts" style="margin-top:8px">${t("merge")} ${opt("merge_status_matches","Y",t("yes"),s.merge_status_matches)}${opt("merge_status_matches","N",t("no"),s.merge_status_matches)}</div>
     </div>
-    <div class="q"><h3>2. Tier attribution</h3>
-      <div class="opts">${opt("tier_correct","Y","agree (T1/T2/T3)",s.tier_correct)}${opt("tier_correct","N","disagree → correct label",s.tier_correct)}</div>
+    <div class="q"><h3>${t("q2")}</h3>
+      <div class="opts">${opt("tier_correct","Y",t("agreeTier"),s.tier_correct)}${opt("tier_correct","N",t("disagreeTier"),s.tier_correct)}</div>
       <div class="opts" style="margin-top:8px"><select id="tier_fix">${tierFix}</select></div>
     </div>
-    <div class="q"><h3>3. Primary architecture layer</h3>
-      <div class="opts">${opt("layer_correct","Y","agree",s.layer_correct)}${opt("layer_correct","N","disagree → correct layer",s.layer_correct)}</div>
+    <div class="q"><h3>${t("q3")}</h3>
+      <div class="opts">${opt("layer_correct","Y",t("agree"),s.layer_correct)}${opt("layer_correct","N",t("disagreeLayer"),s.layer_correct)}</div>
       <div class="opts" style="margin-top:8px"><select id="layer_fix">${layerFix}</select></div>
     </div>
-    <div class="q"><h3>4. Change type</h3>
-      <div class="opts">${opt("change_type_correct","Y","agree",s.change_type_correct)}${opt("change_type_correct","N","disagree → correct type",s.change_type_correct)}</div>
+    <div class="q"><h3>${t("q4")}</h3>
+      <div class="opts">${opt("change_type_correct","Y",t("agree"),s.change_type_correct)}${opt("change_type_correct","N",t("disagreeCt"),s.change_type_correct)}</div>
       <div class="opts" style="margin-top:8px"><select id="ct_fix">${ctFix}</select></div>
     </div>
-    <div class="q"><h3>5. Confidence and notes</h3>
-      <div class="opts">confidence
+    <div class="q"><h3>${t("q5")}</h3>
+      <div class="opts">${t("confidence")}
         <select id="conf">${[1,2,3,4,5].map(v=>`<option value="${v}" ${String(s.confidence_1_5)===String(v)?"selected":""}>${v}</option>`).join("")}</select>
       </div>
-      <div style="margin-top:8px"><textarea id="notes" placeholder="optional: why the rule is wrong, or what is ambiguous">${escapeHtml(s.notes||"")}</textarea></div>
-      <label class="counter" style="display:block;margin-top:8px"><input type="checkbox" id="unrev" ${s.unreviewable==="Y"?"checked":""}> unreviewable (deleted repo, empty diff, or impossible to judge)</label>
+      <div style="margin-top:8px"><textarea id="notes" placeholder="${t("notesPh")}">${escapeHtml(s.notes||"")}</textarea></div>
+      <label class="counter" style="display:block;margin-top:8px"><input type="checkbox" id="unrev" ${s.unreviewable==="Y"?"checked":""}> ${t("unrev")}</label>
     </div>
     <div class="foot">
-      <button id="prev" ${idx===0?"disabled":""}>← Previous</button>
-      <span class="counter">${filled(r.id)?"<span class='done'>record complete</span>":"five judgements required"}</span>
-      <button id="next" class="primary">${idx===DATA.length-1?"Finish":"Next →"}</button>
+      <button id="prev" ${idx===0?"disabled":""}>${t("prev")}</button>
+      <span class="counter">${filled(r.id)?`<span class='done'>${t("complete")}</span>`:t("required")}</span>
+      <button id="next" class="primary">${idx===DATA.length-1?t("finish"):t("next")}</button>
     </div>
   </div>`;
 
@@ -478,6 +536,8 @@ function updateCounter(){
 
 function escapeHtml(s){ return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
+$("#lang").addEventListener("click", ()=>{ LANG = LANG==="zh" ? "en" : "zh"; applyLang(); render(); });
+
 $("#blind").addEventListener("change", e=>{
   const box=document.getElementById("rulebox");
   if(box) box.classList.toggle("hidden", e.target.checked);
@@ -503,10 +563,10 @@ function finalLabel(r, dim){
 }
 
 $("#agree").addEventListener("click", ()=>{
-  const rows=[["Tier","tier"],["Primary layer","layer"],["Change type","change_type"]];
-  let html = `<h3 style="margin-top:0">Agreement with rule engine</h3>
-    <p class="counter">Computed in this browser from completed records. For the formal report, use <code>compute_agreement.py</code>.</p>
-    <table><thead><tr><th>Dimension</th><th>n</th><th>Accuracy</th><th>Cohen's κ</th></tr></thead><tbody>`;
+  const rows=[[t("tier"),"tier"],[t("layer"),"layer"],[t("ctype"),"change_type"]];
+  let html = `<h3 style="margin-top:0">${t("agreeTitle")}</h3>
+    <p class="counter">${t("agreeNote")}</p>
+    <table><thead><tr><th>${t("dim")}</th><th>${t("n")}</th><th>${t("acc")}</th><th>${t("kap")}</th></tr></thead><tbody>`;
   for(const [label, dim] of rows){
     const rule=[], human=[];
     for(const r of DATA){
@@ -521,7 +581,7 @@ $("#agree").addEventListener("click", ()=>{
   }
   html += `</tbody></table>`;
   const done = DATA.filter(r=>filled(r.id)).length;
-  html += `<p class="counter" style="margin-top:10px">${done} of ${DATA.length} records complete. Thresholds: tier κ ≥ 0.80, layer κ ≥ 0.65, change type κ ≥ 0.60.</p>`;
+  html += `<p class="counter" style="margin-top:10px">${done} / ${DATA.length} complete. Thresholds: tier κ ≥ 0.80, layer κ ≥ 0.65, change type κ ≥ 0.60.</p>`;
   const box=$("#agreement"); box.innerHTML=html; box.classList.remove("hidden"); box.scrollIntoView({behavior:"smooth"});
 });
 
@@ -544,8 +604,7 @@ $("#export").addEventListener("click", ()=>{
   URL.revokeObjectURL(a.href);
 });
 
-if(restore()){ document.querySelector(".warn").textContent = "Restored your previous answers from this browser. They autosave as you work; you can refresh safely. Export when done."; }
-render();
+restore(); applyLang(); render();
 </script>
 </body>
 </html>

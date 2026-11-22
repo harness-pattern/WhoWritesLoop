@@ -14,8 +14,10 @@ The paper reports 135,331 retained PRs, 7,205 detail records, and a 120-record m
 | `review_sample.csv` | The 120 sampled PRs with rule labels and GitHub URLs. Do not edit. |
 | `review_form.csv` | Blank CSV form, one row per sampled PR. Use this if you prefer a spreadsheet to the HTML app. |
 | `codebook.md` | Definitions, precedence rules, and edge cases. Read this first. |
-| `INSTRUCTIONS.md` | Full reviewer protocol: six decisions, hard-case matrix, two-reviewer and adjudication rules, common mistakes. |
-| `EXAMPLES.md` | Ten worked records from this sample, including five deliberate rule errors. |
+| `INSTRUCTIONS.md` | Full reviewer protocol (English): six decisions, hard-case matrix, two-reviewer and adjudication rules, common mistakes. |
+| `INSTRUCTIONS.zh.md` | 中文评审手册，与英文版逐节对应。 |
+| `EXAMPLES.md` | Ten worked records (English), including five deliberate rule errors. |
+| `EXAMPLES.zh.md` | 10 条完整中文示例，含 5 条故意保留的规则错误。 |
 | `repo_counts.csv` | Expected PR count per repository plus a GitHub search URL. Fill `observed_prs` after checking. |
 | `revert_sample.csv` | 15 revert PRs. Verify the claimed target exists and is the PR that was actually reverted. |
 | `pattern_sample.csv` | 16 PRs that matched RQ3 pattern keywords. Judge whether the pattern is substantively present. |
@@ -23,6 +25,8 @@ The paper reports 135,331 retained PRs, 7,205 detail records, and a 120-record m
 | `manifest.json` | Seed, sample size, tier counts, and SHA-256 of every generated file. |
 | `generate.py` | Reproduces the package from the database with seed 20261121. |
 | `fetch_patches.py` | Downloads the 120 `.diff` excerpts into `../data/review_patches/`; run once before `generate.py`. |
+
+The app has a **中文 / EN** toggle in the header: it switches the interface, question labels, warning, and the short codebook without reloading. The full codebook and the example index remain English; the Chinese versions of both handbook and examples are embedded as separate markdown files.
 
 **Self-contained mode.** `review.html` embeds all 120 records, each PR's metadata, file list with assigned layers and status, commit subjects, body excerpt, a 7 KB diff excerpt, the rule's evidence string, the full codebook, and a browser-side Cohen's κ calculator. Answers autosave in the browser, so a reviewer can refresh safely; **Export CSV** writes the form. A reviewer only needs this one file plus the GitHub links they choose to open. The CSV files exist for spreadsheet workflows and for the formal agreement script.
 
