@@ -4,6 +4,8 @@ Version 1.1 · 2026-11-22 · companion to `review.html` and `codebook.md`
 
 This document is the operating manual for the 120-record human audit. It tells you exactly what to click, what to compare, how to resolve the hard cases, and how your answers become a Cohen's κ. `EXAMPLES.md` contains ten fully worked records, including five where the rule is wrong on purpose.
 
+**Two modes.** The app opens in **annotator mode**: you assign the author type, layer, and change type directly, and the automated labels stay hidden. A header checkbox, **show automated labels (audit mode)**, reveals the rule's answer and a live match indicator; use it for calibration, not for anchoring. Export always derives the rule-vs-annotator agreement columns, so both modes produce the same analysis file.
+
 ---
 
 ## 1. What this audit is, and is not
@@ -40,7 +42,7 @@ Each record has, from top to bottom:
 | Header line | record id, repo, PR number, created date, merge status | identity check |
 | Title | PR title as captured | identity check |
 | Metadata | author, association, `+adds/−dels`, files, commits, review comments | scale and contributor type |
-| Rule box | rule tier, rule layer, rule change type, all layers | the claim you are auditing |
+| Automated box (optional) | rule tier, rule layer, rule change type, all layers | hidden until you enable audit mode; use it to compare, not to anchor |
 | Why the rule said this | rule name, matched string, account, layer weights | tells you *why* the instrument fired |
 | Evidence | PR body, file table (path, layer, status, +/−), commit subjects | primary evidence for layer and type |
 | Diff excerpt | first 7 KB of the GitHub diff | decisive for change type and ambiguous layers |
@@ -48,7 +50,7 @@ Each record has, from top to bottom:
 | Unreviewable | checkbox | only when the record cannot be judged |
 | Agreement | browser-side κ over completed records | progress check |
 
-The rule box is deliberately visible. This is an **audit**, not a blind replication: you are asked to agree or disagree with a specific claim, and to record the correct value when you disagree.
+The automated labels are hidden by default. Assign your own label first; then, if you want, turn on **show automated labels (audit mode)** to see the rule's answer and whether you matched. The export derives the comparison, so you never have to translate "agree/disagree" into labels.
 
 ---
 
@@ -58,12 +60,12 @@ For every record you produce six values:
 
 1. `title_matches` — Y/N
 2. `merge_status_matches` — Y/N
-3. `tier_correct` — Y/N, plus `tier_corrected` if N
-4. `layer_correct` — Y/N, plus `layer_corrected` if N
-5. `change_type_correct` — Y/N, plus `change_type_corrected` if N
+3. `tier_annotator` — T1 / T2 / T3 (who authored it)
+4. `layer_annotator` — L1 / L2 / L3 / L4 / L0 / LD (which part changed)
+5. `change_type_annotator` — structural / additive / fix / test_only / docs / ui (what kind of change)
 6. `confidence_1_5` and `notes`; optionally `unreviewable`
 
-A record is complete when the five judgements are present, or when `unreviewable` is checked.
+You pick the label; the app compares it with the rule in the background and writes `tier_correct`, `tier_corrected`, and the equivalent columns on export. A record is complete when the five judgements are present, or when `unreviewable` is checked.
 
 ---
 
@@ -186,7 +188,7 @@ An empty patch alone is **not** enough: if the file list and commit subjects are
 
 ## 7. Worked examples
 
-`EXAMPLES.md` contains ten records from this exact sample, with the embedded files, diff excerpt, the correct answers, and the reasoning. Read at least the first five before starting. Five of the ten are deliberate rule errors; they teach you what "disagree" looks like.
+`EXAMPLES.md` contains ten records from this exact sample, with the embedded files, diff excerpt, the correct answers, and the reasoning. Read at least the first five before starting. Five of the ten are deliberate rule errors; the "Correct" column is what you should assign, regardless of what the automated label says.
 
 Quick index:
 
@@ -229,10 +231,13 @@ The HTML app exports `review_form_filled.csv` with these columns:
 
 ```
 id, reviewer, review_date, title_matches, merge_status_matches,
+tier_annotator, layer_annotator, change_type_annotator,
 tier_correct, tier_corrected, layer_correct, layer_corrected,
 change_type_correct, change_type_corrected, confidence_1_5,
 unreviewable, notes
 ```
+
+`tier_annotator` and the other direct labels are what you chose. `tier_correct=Y/N` and `tier_corrected` are derived by the app (and re-derived by the script if missing), so the same CSV works for both annotator and audit workflows.
 
 Run:
 

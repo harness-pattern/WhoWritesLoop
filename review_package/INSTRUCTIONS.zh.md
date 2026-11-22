@@ -4,6 +4,8 @@
 
 这份文档是 120 条人工复核的操作手册。它说明每一步该看什么、怎么判、遇到边界情况怎么处理，以及你的答案如何变成 Cohen's κ。`EXAMPLES.zh.md` 给出 10 条完整示例，其中 5 条是故意保留的规则错误。
 
+**两种模式。** app 默认是 **annotator 模式**：你直接给 author type、layer、change type 打标签，自动标签默认隐藏。顶部勾选 **显示自动标签（审计模式）** 后会显示规则答案和实时匹配情况；它用于校准，不要用来锚定第一判断。无论哪种模式，导出的 CSV 都会自动生成规则 vs 标注的对比列，分析口径一致。
+
 English version: `INSTRUCTIONS.md`.
 
 ---
@@ -42,7 +44,7 @@ English version: `INSTRUCTIONS.md`.
 | 头部 | 记录 id、仓库、PR 编号、创建日期、合并状态 | 身份核对 |
 | 标题 | 抓取到的 PR 标题 | 身份核对 |
 | 元数据 | 作者、association、`+新增/−删除`、文件数、commit 数、review 评论数 | 规模与贡献者类型 |
-| 规则框 | 规则 tier、规则 layer、规则 change type、全部 layers | 你要审计的“声明” |
+| 自动标签框（可选） | 规则 tier、规则 layer、规则 change type、全部 layers | 默认隐藏；打开审计模式后用于对比，不要用来锚定 |
 | Why the rule said this | 规则名、命中的文本、账号、层权重 | 规则为什么触发 |
 | Evidence | PR 正文、文件表（路径、层、状态、增删）、commit 标题 | layer / change type 的主要证据 |
 | Diff excerpt | GitHub diff 的前 7 KB | change type 和边界层的关键证据 |
@@ -50,7 +52,7 @@ English version: `INSTRUCTIONS.md`.
 | Unreviewable | 勾选框 | 只有确实无法判断时才用 |
 | Agreement | 浏览器内 κ | 进度检查 |
 
-规则框是**故意可见**的。这是 audit，不是 blind replication：你要对一条具体声明表示同意或不同意，并在不同意时给出正确值。
+自动标签默认隐藏。先给出你自己的标签；需要时再打开 **显示自动标签（审计模式）** 看规则答案和是否匹配。导出会自动生成对比列，不需要你手动把“同意/不同意”翻译成标签。
 
 ---
 
@@ -60,12 +62,12 @@ English version: `INSTRUCTIONS.md`.
 
 1. `title_matches` — Y/N
 2. `merge_status_matches` — Y/N
-3. `tier_correct` — Y/N；若 N，填 `tier_corrected`
-4. `layer_correct` — Y/N；若 N，填 `layer_corrected`
-5. `change_type_correct` — Y/N；若 N，填 `change_type_corrected`
+3. `tier_annotator` — T1 / T2 / T3（谁写的）
+4. `layer_annotator` — L1 / L2 / L3 / L4 / L0 / LD（改了哪一部分）
+5. `change_type_annotator` — structural / additive / fix / test_only / docs / ui（哪种改动）
 6. `confidence_1_5`、`notes`；可选 `unreviewable`
 
-五个判断都填了，或勾了 unreviewable，这条才算完成。
+你只负责给标签；app 会在后台与规则比较，并在导出时写出 `tier_correct`、`tier_corrected` 等列。五个判断都填了，或勾了 unreviewable，这条才算完成。
 
 ---
 
@@ -188,7 +190,7 @@ Tie-break：
 
 ## 7. 完整示例
 
-`EXAMPLES.zh.md` 用当前样本里的 10 条真实记录，列出内嵌文件、diff 摘要、正确答案和理由。**E6–E10 是故意的规则错误**，用来校准“disagree”的写法。开始前至少读 E1–E5。
+`EXAMPLES.zh.md` 用当前样本里的 10 条真实记录，列出内嵌文件、diff 摘要、正确答案和理由。**E6–E10 是故意的规则错误**，表中“正确答案”是你应该选的标签，不用管自动标签说了什么。开始前至少读 E1–E5。
 
 快速索引：
 
@@ -231,10 +233,13 @@ HTML 导出的 `review_form_filled.csv` 列：
 
 ```
 id, reviewer, review_date, title_matches, merge_status_matches,
+tier_annotator, layer_annotator, change_type_annotator,
 tier_correct, tier_corrected, layer_correct, layer_corrected,
 change_type_correct, change_type_corrected, confidence_1_5,
 unreviewable, notes
 ```
+
+`*_annotator` 是你选的标签；`*_correct` 和 `*_corrected` 是 app/脚本自动推导的对比列，因此 annotator 与 audit 两种流程共用同一份分析文件。
 
 运行：
 

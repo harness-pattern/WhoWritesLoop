@@ -24,6 +24,14 @@
   .rule{background:#f0f4f7;border:1px dashed #b9c7d3;border-radius:7px;padding:9px 12px;margin:12px 0;font-size:12.5px;color:#374151;display:flex;gap:18px;flex-wrap:wrap}
   .rule b{font-weight:650;color:#1f2937}
   .q{border-top:1px solid #eee;padding:14px 0 4px}
+  .qdef{font:12.5px/1.5 var(--sans);color:var(--muted);margin:-2px 0 10px}
+  .choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .choice{border:1px solid var(--line);border-radius:7px;padding:10px 12px;cursor:pointer;background:#fff}
+  .choice b{display:block;font:600 13px/1.35 var(--sans);margin-bottom:2px;color:var(--ink)}
+  .choice span{display:block;font:12px/1.45 var(--sans);color:var(--muted)}
+  .choice:hover{border-color:#9fb3c2}
+  .choice.sel{border-color:var(--accent2);background:#eef4f8;box-shadow:inset 0 0 0 1px var(--accent2)}
+  @media(max-width:700px){.choice-grid{grid-template-columns:1fr}}
   .q h3{font-size:13px;margin:0 0 8px;font-weight:650}
   .opts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   .opt{border:1px solid var(--line);border-radius:999px;padding:5px 11px;cursor:pointer;background:#fff;font-size:13px}
@@ -60,13 +68,17 @@
   <div class="bar"><i id="progress"></i></div>
   <span class="counter" id="counter">0 / 0</span>
   <div class="grow"></div>
-  <label class="counter"><input type="checkbox" id="blind"> <span id="blindlabel">hide rule labels (blind mode)</span></label>
+  <label class="counter"><input type="checkbox" id="showrule"> <span id="blindlabel">show automated labels (audit mode)</span></label>
   <button id="lang">中文</button>
   <button id="agree">Agreement</button>
   <button id="export" class="primary">Export CSV</button>
 </header>
 <main>
   <div class="warn" id="warn">Work through the records in order. Answers autosave in this browser, so you can refresh safely. <b>Export CSV</b> writes <code>review_form_filled.csv</code>; send it back with your reviewer name.</div>
+  <div class="card primer">
+    <h3 style="margin:0 0 6px;font-size:17px">No paper reading required</h3>
+    <p style="margin:0;font-size:14px;color:#3b444e">A <b>harness</b> is the code around a language model: the loop that decides the next step, the context it sees, the tools it can call, the tests, and the UI. You will label 120 pull requests on four dimensions. Every definition and example is on this page; you do not need to read the paper.</p>
+  </div>
   <div id="app"></div>
   <div id="agreement" class="card agreebox hidden"></div>
   <div class="card" style="margin-top:16px">
@@ -223,9 +235,9 @@ const DATA = [{"id": "S001", "repo": "RooCodeInc/Roo-Code", "pr_number": 6877, "
 let LANG = (()=>{try{return localStorage.getItem("wwl_lang")||"en"}catch(e){return "en"}})();
 const T = {
  en:{
-  title:"Human Review — Harness Mining Audit", blind:"hide rule labels (blind mode)", agreeBtn:"Agreement", exportBtn:"Export CSV",
+  title:"Human Review — Harness Mining Audit", blind:"show automated labels (audit mode)", agreeBtn:"Agreement", exportBtn:"Export CSV",
   warn:"Work through the records in order. Answers autosave in this browser, so you can refresh safely. <b>Export CSV</b> writes <code>review_form_filled.csv</code>; send it back with your reviewer name.",
-  q1:"1. Identity check", q2:"2. Tier attribution", q3:"3. Primary architecture layer", q4:"4. Change type", q5:"5. Confidence and notes",
+  q1:"1. Is this the right PR?", q1def:"Open the GitHub link. Confirm the number, title, and whether it is merged, closed, or open.", q2:"2. Who authored this change?", q2def:"Pick the first that applies. A bot account beats a trailer; a trailer beats prose.", q3:"3. Which part of the harness changed?", q3def:"Pick the substantive change. If code and tests are mixed, ignore the tests; if only tests changed, choose Tests.", q4:"4. What kind of change is it?", q4def:"Pick the most specific. A test-only fix is Tests only; a version bump is Fix; a contract rewrite is Structural.", q5:"5. Confidence and notes",
   titleMatches:"Title matches", merge:"Merge status matches", yes:"yes", no:"no",
   agreeTier:"agree (T1/T2/T3)", disagreeTier:"disagree → correct label", agree:"agree",
   disagreeLayer:"disagree → correct layer", disagreeCt:"disagree → correct type",
@@ -239,9 +251,9 @@ const T = {
   dim:"Dimension", n:"n", acc:"Accuracy", kap:"Cohen's κ", tier:"Tier", layer:"Primary layer", ctype:"Change type"
  },
  zh:{
-  title:"人工复核 —— Harness 挖掘审计", blind:"隐藏规则标签（盲审模式）", agreeBtn:"一致性", exportBtn:"导出 CSV",
+  title:"人工复核 —— Harness 挖掘审计", blind:"显示自动标签（审计模式）", agreeBtn:"一致性", exportBtn:"导出 CSV",
   warn:"按顺序完成记录。答案会自动保存在本浏览器，可安全刷新。<b>导出 CSV</b> 生成 <code>review_form_filled.csv</code>，连同 reviewer 名字一起返回。",
-  q1:"1. 身份核对", q2:"2. Tier 归因", q3:"3. 主架构层", q4:"4. 变更类型", q5:"5. 置信度与备注",
+  q1:"1. 这条 PR 抓对了吗？", q1def:"打开 GitHub 链接，确认编号、标题，以及它是 merged、closed 还是 open。", q2:"2. 谁写的这条改动？", q2def:"按顺序选第一个命中的。bot 账号优先于 trailer，trailer 优先于正文描述。", q3:"3. 改的是 harness 的哪一部分？", q3def:"选实质性改动。代码和测试混合时忽略测试；只有测试改了才选 Tests。", q4:"4. 这是哪种改动？", q4def:"选最具体的一项。只改测试的 fix 选 Tests only；版本号调整选 Fix；契约重写选 Structural。", q5:"5. 置信度与备注",
   titleMatches:"标题一致", merge:"合并状态一致", yes:"是", no:"否",
   agreeTier:"同意（T1/T2/T3）", disagreeTier:"不同意 → 选择正确标签", agree:"同意",
   disagreeLayer:"不同意 → 选择正确层", disagreeCt:"不同意 → 选择正确类型",
@@ -255,6 +267,7 @@ const T = {
   dim:"维度", n:"n", acc:"准确率", kap:"Cohen's κ", tier:"Tier", layer:"主层", ctype:"变更类型"
  }
 };
+let SHOW_RULE = (()=>{try{return localStorage.getItem("wwl_showrule")==="1"}catch(e){return false}})();
 const t=k=>T[LANG][k]||T.en[k];
 function applyLang(){
   document.documentElement.lang = LANG==="zh" ? "zh-CN" : "en";
@@ -266,10 +279,11 @@ function applyLang(){
   const a=document.getElementById("agree"); if(a) a.textContent=t("agreeBtn");
   const x=document.getElementById("export"); if(x) x.textContent=t("exportBtn");
   const l=document.getElementById("lang"); if(l) l.textContent=LANG==="zh"?"EN":"中文";
+  const sr=document.getElementById("showrule"); if(sr) sr.checked=SHOW_RULE;
   try{localStorage.setItem("wwl_lang",LANG)}catch(e){}
 }
-const FIELDS = ["title_matches","merge_status_matches","tier_correct","tier_corrected",
-  "layer_correct","layer_corrected","change_type_correct","change_type_corrected",
+const FIELDS = ["title_matches","merge_status_matches","tier_annotator","layer_annotator","change_type_annotator",
+  "tier_correct","tier_corrected","layer_correct","layer_corrected","change_type_correct","change_type_corrected",
   "confidence_1_5","unreviewable","notes"];
 const state = {};
 let idx = 0;
@@ -287,7 +301,7 @@ function restore(){
 const $ = (s) => document.querySelector(s);
 
 function get(id){ if(!state[id]) state[id] = {}; return state[id]; }
-function filled(id){ const s=get(id); return s.unreviewable==="Y" || ["title_matches","merge_status_matches","tier_correct","layer_correct","change_type_correct"].every(k=>s[k]); }
+function filled(id){ const s=get(id); return s.unreviewable==="Y" || ["title_matches","merge_status_matches","tier_label","layer_label","change_label"].every(k=>s[k]); }
 function assocLabel(a){
   const m={OWNER:"owner",MEMBER:"member",COLLABORATOR:"collaborator",CONTRIBUTOR:"contributor",NONE:"external contributor"};
   return m[a] || (a ? a.toLowerCase() : "association unknown");
@@ -309,29 +323,49 @@ function opt(name, value, label, current){
     <input type="radio" name="${name}" value="${value}" ${current===value?"checked":""}>${label}</label>`;
 }
 
+const TIER_ITEMS=[
+ {v:"T1", en:["Autonomous agent","A bot account, or the PR says an AI generated it end-to-end."], zh:["自主 Agent","bot 账号，或 PR 明确说明由 AI 端到端生成。"]},
+ {v:"T2", en:["Human + explicit AI help","A person opened it, but a commit or the PR text credits Claude, Copilot, Cursor, Devin, Aider, Codex, or Gemini."], zh:["人类 + 显式 AI 辅助","人发起的 PR，但 commit 或正文署名 Claude、Copilot、Cursor、Devin、Aider、Codex、Gemini。"]},
+ {v:"T3", en:["No explicit marker","No bot account and no AI credit. A human using an uncredited assistant still goes here."], zh:["无显式标记","没有 bot 账号，也没有 AI 署名。人类用未署名的助手仍归这里。"]}
+];
+const LAYER_ITEMS=[
+ {v:"L1", en:["Core loop","Decides what the agent does next: turn loop, state machine, scheduling, retries, stop condition."], zh:["核心循环","决定 Agent 下一步做什么：turn loop、状态机、调度、重试、终止条件。"]},
+ {v:"L2", en:["Context & memory","What the model sees or remembers: prompts, tool descriptions, compaction, indexing, skills, config."], zh:["上下文与记忆","模型看到/记住什么：prompt、工具描述、压缩、索引、skills、配置。"]},
+ {v:"L3", en:["Tools & sandbox","What the agent can do: tool code, MCP, shell/browser, patch apply, permissions, sandbox, model providers."], zh:["工具与沙箱","Agent 能做什么：工具代码、MCP、shell/浏览器、patch、权限、沙箱、模型 provider。"]},
+ {v:"L4", en:["Tests & infrastructure","Tests, benchmarks, CI, telemetry, build and lint config."], zh:["测试与基建","测试、benchmark、CI、遥测、构建与 lint 配置。"]},
+ {v:"L0", en:["UI","Screens, TUI, CSS, website, examples."], zh:["界面","页面、TUI、CSS、官网、示例。"]},
+ {v:"LD", en:["Docs","README, docs site, changelog."], zh:["文档","README、文档站、changelog。"]}
+];
+const TYPE_ITEMS=[
+ {v:"structural", en:["Structural","Rewrites how the harness works: core refactor, interface/contract change, concurrency or security boundary, or a cross-layer rewrite."], zh:["结构性","重写 harness 的工作方式：核心重构、接口/契约变化、并发或安全边界、跨层重写。"]},
+ {v:"additive", en:["Additive","Adds something new without rewriting: a tool, adapter, test, prompt, or model entry."], zh:["新增型","不重写、只新增：工具、适配器、测试、prompt、模型条目。"]},
+ {v:"fix", en:["Fix","Repairs a bug, crash, regression, or compatibility issue without restructuring."], zh:["修复","修 bug、崩溃、回归或兼容性问题，且不重构。"]},
+ {v:"test_only", en:["Tests only","Only tests, fixtures, or benchmarks changed."], zh:["只改测试","只改测试、fixture 或 benchmark。"]},
+ {v:"docs", en:["Docs only","Only documentation changed."], zh:["只改文档","只改文档。"]},
+ {v:"ui", en:["UI only","Only product surface changed."], zh:["只改界面","只改产品表面。"]}
+];
+function choices(name, items, current){
+  const i = LANG==="zh" ? 2 : 1;
+  return items.map(x=>`<div class="choice ${current===x.v?"sel":""}" data-name="${name}" data-value="${x.v}"><b>${x[LANG]?.[0]||x.en[0]}</b><span>${x[LANG]?.[1]||x.en[1]}</span></div>`).join("");
+}
+const tierChoices=c=>choices("tier_label",TIER_ITEMS,c);
+const layerChoices=c=>choices("layer_label",LAYER_ITEMS,c);
+const typeChoices=c=>choices("change_label",TYPE_ITEMS,c);
+function cmpBox(r,s){
+  const m=(a,b)=>a&&b?(a===b?"✓":"✗"):"—";
+  return `<div class="rule"><b>Automated label:</b> tier <code>${r.tier_rule}</code> · layer <code>${r.primary_layer_rule}</code> · type <code>${r.change_type_rule}</code><br>Your match: tier ${m(s.tier_label,r.tier_rule)} · layer ${m(s.layer_label,r.primary_layer_rule)} · type ${m(s.change_label,r.change_type_rule)}</div>`;
+}
+
 function render(){
   const r = DATA[idx], s = get(r.id);
-  const tierVal = s.tier_corrected || r.tier_rule;
-  const layerVal = s.layer_corrected || r.primary_layer_rule;
-  const ctVal = s.change_type_corrected || r.change_type_rule;
-  const tierFix = ["T1","T2","T3"].map(v=>`<option value="${v}" ${tierVal===v?"selected":""}>${v}</option>`).join("");
-  const layerFix = ["L1","L2","L3","L4","L0","LD","UNCLASSIFIED"].map(v=>`<option value="${v}" ${layerVal===v?"selected":""}>${v}</option>`).join("");
-  const ctFix = ["structural","additive","fix","docs","test_only","ui"].map(v=>`<option value="${v}" ${ctVal===v?"selected":""}>${v}</option>`).join("");
+  const tierVal = s.tier_label || "";
+  const layerVal = s.layer_label || "";
+  const ctVal = s.change_label || "";
   $("#app").innerHTML = `
   <div class="card">
     <div class="meta"><span>${r.id}</span><span>${r.repo} #${r.pr_number}</span><span>${r.created_at}</span><span>${r.merge_status}</span></div>
     <div class="title">${escapeHtml(r.title)}</div>
     <div class="meta"><span>author: <b>${escapeHtml(r.author_login)}</b></span><span>${assocLabel(r.author_association)}</span><span>+${r.additions} / −${r.deletions}</span><span>${r.changed_files} files</span><span>${r.commits_count} commits</span><span>${r.review_comments} review comments</span><a href="${r.url}" target="_blank" rel="noopener">open on GitHub ↗</a></div>
-    <div class="rule" id="rulebox">
-      <span>rule tier: <b>${r.tier_rule}</b></span>
-      <span>rule layer: <b>${r.primary_layer_rule}</b></span>
-      <span>rule change type: <b>${r.change_type_rule}</b></span>
-      <span>all layers: ${r.layers_rule}</span>
-    </div>
-    <details class="evidence">
-      <summary>${t("why")}</summary>
-      <p class="note">${ruleWhy(r)}</p>
-    </details>
     <details class="evidence">
       <summary>${t("evidence")}</summary>
       ${r.body_excerpt ? `<div class="bodytext">${escapeHtml(r.body_excerpt)}</div>` : ""}
@@ -342,24 +376,28 @@ function render(){
     </details>
     <details class="evidence">
       <summary>${t("diff")}</summary>
-      ${r.patch ? `<pre class="diff">${escapeHtml(r.patch)}</pre>` : `<p class="note">No diff cached for this record; use the GitHub link. Mark it unreviewable if the page is gone.</p>`}
+      ${r.patch ? `<pre class="diff">${escapeHtml(r.patch)}</pre>` : `<p class="note">No diff cached for this record; use the GitHub link. Mark it unreviewable only if the page is gone.</p>`}
     </details>
-    <div class="q"><h3>${t("q1")}</h3>
+    ${SHOW_RULE ? `<div class="rule"><span>Automated: tier <b>${r.tier_rule}</b></span><span>layer <b>${r.primary_layer_rule}</b></span><span>type <b>${r.change_type_rule}</b></span><span>all layers ${r.layers_rule}</span></div>
+    <details class="evidence"><summary>${t("why")}</summary><p class="note">${ruleWhy(r)}</p></details>` : ""}
+
+    <div class="q"><h3>${t("q1")}</h3><p class="qdef">${t("q1def")}</p>
       <div class="opts">${t("titleMatches")} ${opt("title_matches","Y",t("yes"),s.title_matches)}${opt("title_matches","N",t("no"),s.title_matches)}</div>
       <div class="opts" style="margin-top:8px">${t("merge")} ${opt("merge_status_matches","Y",t("yes"),s.merge_status_matches)}${opt("merge_status_matches","N",t("no"),s.merge_status_matches)}</div>
     </div>
-    <div class="q"><h3>${t("q2")}</h3>
-      <div class="opts">${opt("tier_correct","Y",t("agreeTier"),s.tier_correct)}${opt("tier_correct","N",t("disagreeTier"),s.tier_correct)}</div>
-      <div class="opts" style="margin-top:8px"><select id="tier_fix">${tierFix}</select></div>
+
+    <div class="q"><h3>${t("q2")}</h3><p class="qdef">${t("q2def")}</p>
+      <div class="choice-grid">${tierChoices(tierVal)}</div>
     </div>
-    <div class="q"><h3>${t("q3")}</h3>
-      <div class="opts">${opt("layer_correct","Y",t("agree"),s.layer_correct)}${opt("layer_correct","N",t("disagreeLayer"),s.layer_correct)}</div>
-      <div class="opts" style="margin-top:8px"><select id="layer_fix">${layerFix}</select></div>
+
+    <div class="q"><h3>${t("q3")}</h3><p class="qdef">${t("q3def")}</p>
+      <div class="choice-grid">${layerChoices(layerVal)}</div>
     </div>
-    <div class="q"><h3>${t("q4")}</h3>
-      <div class="opts">${opt("change_type_correct","Y",t("agree"),s.change_type_correct)}${opt("change_type_correct","N",t("disagreeCt"),s.change_type_correct)}</div>
-      <div class="opts" style="margin-top:8px"><select id="ct_fix">${ctFix}</select></div>
+
+    <div class="q"><h3>${t("q4")}</h3><p class="qdef">${t("q4def")}</p>
+      <div class="choice-grid">${typeChoices(ctVal)}</div>
     </div>
+
     <div class="q"><h3>${t("q5")}</h3>
       <div class="opts">${t("confidence")}
         <select id="conf">${[1,2,3,4,5].map(v=>`<option value="${v}" ${String(s.confidence_1_5)===String(v)?"selected":""}>${v}</option>`).join("")}</select>
@@ -367,9 +405,12 @@ function render(){
       <div style="margin-top:8px"><textarea id="notes" placeholder="${t("notesPh")}">${escapeHtml(s.notes||"")}</textarea></div>
       <label class="counter" style="display:block;margin-top:8px"><input type="checkbox" id="unrev" ${s.unreviewable==="Y"?"checked":""}> ${t("unrev")}</label>
     </div>
+
+    ${SHOW_RULE ? cmpBox(r,s) : ""}
+
     <div class="foot">
       <button id="prev" ${idx===0?"disabled":""}>${t("prev")}</button>
-      <span class="counter">${filled(r.id)?`<span class='done'>${t("complete")}</span>`:t("required")}</span>
+      <span class="counter" id="footcounter">${filled(r.id)?`<span class='done'>${t("complete")}</span>`:t("required")}</span>
       <button id="next" class="primary">${idx===DATA.length-1?t("finish"):t("next")}</button>
     </div>
   </div>`;
@@ -383,9 +424,15 @@ function render(){
       updateCounter(); save();
     });
   });
-  $("#tier_fix").addEventListener("change", e=>{get(r.id).tier_corrected=e.target.value; save();});
-  $("#layer_fix").addEventListener("change", e=>{get(r.id).layer_corrected=e.target.value; save();});
-  $("#ct_fix").addEventListener("change", e=>{get(r.id).change_type_corrected=e.target.value; save();});
+  document.querySelectorAll(".choice").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const name=el.dataset.name, val=el.dataset.value;
+      get(r.id)[name]=val;
+      document.querySelectorAll(`.choice[data-name="${name}"]`).forEach(x=>x.classList.remove("sel"));
+      el.classList.add("sel");
+      updateCounter(); save();
+    });
+  });
   $("#conf").addEventListener("change", e=>{get(r.id).confidence_1_5=e.target.value; save();});
   $("#notes").addEventListener("input", e=>{get(r.id).notes=e.target.value; save();});
   $("#unrev").addEventListener("change", e=>{get(r.id).unreviewable=e.target.checked?"Y":""; updateCounter(); save();});
@@ -395,6 +442,8 @@ function render(){
 }
 
 function updateCounter(){
+  const fc=document.getElementById("footcounter");
+  if(fc){ const r=DATA[idx]; fc.innerHTML = filled(r.id) ? `<span class='done'>${t("complete")}</span>` : t("required"); }
   const done = DATA.filter(r=>filled(r.id)).length;
   $("#counter").textContent = `${done} / ${DATA.length} complete`;
   $("#progress").style.width = `${(done/DATA.length)*100}%`;
@@ -404,10 +453,7 @@ function escapeHtml(s){ return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;
 
 $("#lang").addEventListener("click", ()=>{ LANG = LANG==="zh" ? "en" : "zh"; applyLang(); render(); });
 
-$("#blind").addEventListener("change", e=>{
-  const box=document.getElementById("rulebox");
-  if(box) box.classList.toggle("hidden", e.target.checked);
-});
+$("#showrule").addEventListener("change", e=>{ SHOW_RULE=e.target.checked; try{localStorage.setItem("wwl_showrule",SHOW_RULE?"1":"0")}catch(err){} render(); });
 
 function kappa(a,b){
   const n=a.length; if(!n) return NaN;
@@ -429,15 +475,15 @@ function finalLabel(r, dim){
 }
 
 $("#agree").addEventListener("click", ()=>{
-  const rows=[[t("tier"),"tier"],[t("layer"),"layer"],[t("ctype"),"change_type"]];
+  const rows=[[t("tier"),"tier_rule","tier_label"],[t("layer"),"primary_layer_rule","layer_label"],[t("ctype"),"change_type_rule","change_label"]];
   let html = `<h3 style="margin-top:0">${t("agreeTitle")}</h3>
     <p class="counter">${t("agreeNote")}</p>
     <table><thead><tr><th>${t("dim")}</th><th>${t("n")}</th><th>${t("acc")}</th><th>${t("kap")}</th></tr></thead><tbody>`;
-  for(const [label, dim] of rows){
+  for(const [label, rk, hk] of rows){
     const rule=[], human=[];
     for(const r of DATA){
-      const h=finalLabel(r,dim);
-      if(h){ rule.push(dim==="layer" ? r.primary_layer_rule : r[dim+"_rule"]); human.push(h); }
+      const h=(state[r.id]||{})[hk]||"";
+      if(h){ rule.push(r[rk]); human.push(h); }
     }
     if(!rule.length){ html += `<tr><td>${label}</td><td>0</td><td>—</td><td>—</td></tr>`; continue; }
     let acc=0; for(let i=0;i<rule.length;i++) if(rule[i]===human[i]) acc++;
@@ -457,9 +503,14 @@ $("#export").addEventListener("click", ()=>{
   const header = ["id","reviewer","review_date",...FIELDS];
   const lines = [header.join(",")];
   const today = new Date().toISOString().slice(0,10);
+  const mk=(a,b)=>(a? (a===b?"Y":"N") : "");
   for(const r of DATA){
     const s = state[r.id] || {};
-    const row = [r.id, reviewer, today, ...FIELDS.map(k=>s[k]??"")];
+    const ta=s.tier_label||"", la=s.layer_label||"", ca=s.change_label||"";
+    const row = [r.id, reviewer, today, s.title_matches||"", s.merge_status_matches||"",
+      ta, la, ca,
+      mk(ta,r.tier_rule), ta, mk(la,r.primary_layer_rule), la, mk(ca,r.change_type_rule), ca,
+      s.confidence_1_5||"", s.unreviewable||"", s.notes||""];
     lines.push(row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","));
   }
   const blob = new Blob([lines.join("\n")], {type:"text/csv;charset=utf-8"});

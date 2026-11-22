@@ -39,6 +39,10 @@ def kappa(a, b):
 
 
 def final_label(row, dim):
+    # annotator mode writes the label directly
+    direct = (row.get(f"{dim}_annotator") or "").strip()
+    if direct:
+        return direct
     ok = (row.get(f"{dim}_correct") or "").strip().upper()
     if ok == "Y":
         return row.get(f"{dim}_rule", "")

@@ -26,6 +26,8 @@ The paper reports 135,331 retained PRs, 7,205 detail records, and a 120-record m
 | `generate.py` | Reproduces the package from the database with seed 20261121. |
 | `fetch_patches.py` | Downloads the 120 `.diff` excerpts into `../data/review_patches/`; run once before `generate.py`. |
 
+**Annotator mode is the default.** A reviewer does not need to read the paper: every question carries its definition, examples, and negative cases inline. The automated labels are hidden until **show automated labels (audit mode)** is enabled; export always derives the rule-vs-annotator agreement columns.
+
 The app has a **中文 / EN** toggle in the header: it switches the interface, question labels, warning, and the short codebook without reloading. The full codebook and the example index remain English; the Chinese versions of both handbook and examples are embedded as separate markdown files.
 
 **Self-contained mode.** `review.html` embeds all 120 records, each PR's metadata, file list with assigned layers and status, commit subjects, body excerpt, a 7 KB diff excerpt, the rule's evidence string, the full codebook, and a browser-side Cohen's κ calculator. Answers autosave in the browser, so a reviewer can refresh safely; **Export CSV** writes the form. A reviewer only needs this one file plus the GitHub links they choose to open. The CSV files exist for spreadsheet workflows and for the formal agreement script.
