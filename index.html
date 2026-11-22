@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Hooks and RSI in Agent Harnesses — Who Rewrites the Loop?</title>
-<meta name="description" content="Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?">
+<title>Agent Skills & Harness Engineering — POHE Agent, RSI</title>
+<meta name="description" content="Free MIT agent skills for harness engineering (POHE Agent), an academic research agent (QuARA), and a 135,331-PR study of human vs agent authorship.">
 <style>
   :root{
     --paper:#f7f4ec; --paper2:#efe9db; --ink:#1c232b; --muted:#606a75;
@@ -71,6 +71,20 @@
   footer{border-top:1px solid var(--line);margin-top:20px;padding:28px 0 50px;font:13px/1.6 var(--sans);color:var(--muted);display:flex;gap:20px;flex-wrap:wrap}
   .note{font:12.5px/1.55 var(--sans);color:var(--muted)}
   .faq{display:grid;grid-template-columns:1fr 1fr;gap:22px 34px}
+  .agent-band{display:grid;grid-template-columns:1.02fr .98fr;gap:28px;background:var(--paper2);border:1px solid var(--line);padding:28px 30px}
+  .agent-band h2{font-size:clamp(24px,2.6vw,32px);margin:6px 0 10px}
+  .agent-band p{font-size:16px;color:#3b444e;margin:0 0 14px}
+  .agent-card{background:var(--paper);border:1px solid var(--line);padding:18px 20px}
+  .agent-card .tag{font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+  .skill-list{list-style:none;padding:0;margin:0;font:13.5px/1.5 var(--sans)}
+  .skill-list li{display:grid;grid-template-columns:1fr;gap:2px;border-top:1px solid var(--line);padding:8px 0}
+  .skill-list li:first-child{border-top:0;padding-top:0}
+  .skill-list code{font:12.5px var(--mono);color:var(--accent2)}
+  .skill-list span{color:var(--muted);font-size:12.5px}
+  pre.install{background:#20262d;color:#e9e4d8;padding:12px 14px;font:11.8px/1.65 var(--mono);overflow:auto;margin:12px 0 0;border-radius:3px}
+  .agent-secondary{display:flex;align-items:center;gap:18px;justify-content:space-between;border:1px solid var(--line);padding:16px 20px;margin-top:14px;font:14px/1.55 var(--sans);color:#3b444e}
+  .agent-secondary b{color:var(--ink)}
+  @media(max-width:900px){.agent-band{grid-template-columns:1fr}.agent-secondary{flex-direction:column;align-items:flex-start}}
   .qa h3{font-size:18px;line-height:1.3;margin:0 0 6px;font-weight:600}
   .qa p{margin:0;font-size:15.5px;color:#3b444e}
   @media(max-width:900px){.faq{grid-template-columns:1fr}}
@@ -92,19 +106,19 @@
 <link rel="canonical" href="https://harness-pattern.github.io/WhoWritesLoop/">
 <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
 <meta name="author" content="Haoyi Xiong, Yekun Chai">
-<meta name="keywords" content="agent hooks, agent harness, recursive self-improvement, RSI, PreToolUse, PostToolUse, SessionStart, SubagentStop, mining software repositories, software evolution, design patterns, OO-Harness, Harness^2">
+<meta name="keywords" content="agent skill, agent skills, academic skill, academic research agent, Claude skill, SKILL.md, agent harness, harness engineering, recursive self-improvement, mining software repositories, OO-Harness, Harness^2">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Who Rewrites the Loop?">
-<meta property="og:title" content="Agent Hooks and RSI in Agent Harnesses — Who Rewrites the Loop?">
-<meta property="og:description" content="Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?">
+<meta property="og:title" content="Agent Skills & Harness Engineering — POHE Agent, RSI">
+<meta property="og:description" content="Free MIT agent skills for harness engineering (POHE Agent), an academic research agent (QuARA), and a 135,331-PR study of human vs agent authorship.">
 <meta property="og:url" content="https://harness-pattern.github.io/WhoWritesLoop/">
 <meta property="og:image" content="https://harness-pattern.github.io/WhoWritesLoop/assets/og-card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Who Rewrites the Loop? Human versus agent authorship in open-source agent harnesses">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Agent Hooks and RSI in Agent Harnesses — Who Rewrites the Loop?">
-<meta name="twitter:description" content="Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?">
+<meta name="twitter:title" content="Agent Skills & Harness Engineering — POHE Agent, RSI">
+<meta name="twitter:description" content="Free MIT agent skills for harness engineering (POHE Agent), an academic research agent (QuARA), and a 135,331-PR study of human vs agent authorship.">
 <meta name="twitter:image" content="https://harness-pattern.github.io/WhoWritesLoop/assets/og-card.png">
 <meta name="citation_title" content="Who Rewrites the Loop? Human versus Agent Authorship in the Recursive Self-Improvement of Open-Source Agent Harnesses">
 <meta name="citation_author" content="Xiong, Haoyi">
@@ -114,8 +128,7 @@
 <meta name="citation_abstract" content="A mining study of 135,331 pull requests across 20 open-source agent harnesses, measuring who changes which architectural layer and whether agent changes survive review.">
 <meta name="citation_keywords" content="agent hooks; agent harness; recursive self-improvement; mining software repositories; software evolution">
 <link rel="alternate" type="application/pdf" href="paper/main.pdf">
-<script type="application/ld+json">
-{
+<script type="application/ld+json">{
  "@context": "https://schema.org",
  "@graph": [
   {
@@ -123,7 +136,7 @@
    "@id": "https://harness-pattern.github.io/WhoWritesLoop/#website",
    "url": "https://harness-pattern.github.io/WhoWritesLoop/",
    "name": "Who Rewrites the Loop?",
-   "description": "Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?",
+   "description": "Free MIT agent skills for harness engineering (POHE Agent), an academic research agent (QuARA), and a 135,331-PR study of human vs agent authorship.",
    "inLanguage": "en"
   },
   {
@@ -160,6 +173,9 @@
      "@type": "Thing",
      "name": "Recursive self-improvement"
     }
+   ],
+   "sameAs": [
+    "https://github.com/harness-pattern/WhoWritesLoop"
    ]
   },
   {
@@ -213,12 +229,65 @@
       "@type": "Answer",
       "text": "135,331 pull requests created between May 2025 and November 2026 across 20 repositories. 7,205 PRs received file-, commit-, and review-level detail; 120 were adjudicated for rule agreement."
      }
+    },
+    {
+     "@type": "Question",
+     "name": "Is there an agent skill for harness engineering?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. POHE Agent ships three MIT-licensed skills—pohe-pattern-detection, pohe-pattern-matching, and pohe-harness-evolution—over a 52-record harness pattern catalog. It is Python-standard-library only and works with any agent that reads AGENTS.md or SKILL.md."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Is there an academic research agent or skill?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "QuARA is a multi-agent quantitative academic research assistant: it plans a study, downloads financial data, generates analysis code, and writes an academic-style report. It is MIT-licensed and runs against an LLM API key."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "How do I install an agent skill?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Clone the agent repository, then copy or symlink its skills/* directories into .claude/skills/ for Claude Code, or point the agent at AGENTS.md. For POHE Agent, python3 -m pip install -e . also installs the pohe-agent CLI."
+     }
     }
    ]
+  },
+  {
+   "@type": "SoftwareApplication",
+   "@id": "https://github.com/xhyccc/pohe-agent",
+   "name": "POHE Agent",
+   "applicationCategory": "DeveloperApplication",
+   "operatingSystem": "Linux, macOS, Windows",
+   "url": "https://github.com/xhyccc/pohe-agent",
+   "description": "MIT-licensed agent skills and CLI for detecting harness design patterns, matching candidates to contracts, and planning pattern-guided harness evolution.",
+   "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+   },
+   "license": "https://opensource.org/licenses/MIT",
+   "featureList": "pohe-pattern-detection, pohe-pattern-matching, pohe-harness-evolution, 52-record catalog"
+  },
+  {
+   "@type": "SoftwareApplication",
+   "@id": "https://github.com/xhyccc/Quara",
+   "name": "QuARA — Quantitative Academic Research Agent",
+   "applicationCategory": "EducationalApplication",
+   "operatingSystem": "Linux, macOS, Windows",
+   "url": "https://github.com/xhyccc/Quara",
+   "description": "A multi-agent quantitative academic research assistant that plans a study, collects financial data, generates analysis code, and writes an academic-style report.",
+   "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+   }
   }
  ]
-}
-</script>
+}</script>
 </head>
 <body>
 
@@ -227,6 +296,7 @@
     <a class="brand" href="#">Who Rewrites the Loop?</a>
     <nav class="nav-links">
       <a href="#abstract">Abstract</a>
+      <a href="#agents">Agents &amp; skills</a>
       <a href="#findings">Findings</a>
       <a href="#hooks">Agent hooks</a>
       <a href="#figures">Figures</a>
@@ -263,6 +333,37 @@
     <div class="stat"><b>7,205</b><span>detail-labelled PRs</span></div>
     <div class="stat"><b>5.2%</b><span>explicit agent PRs</span></div>
   </div>
+
+
+  <section id="agents" style="padding-top:34px;border-top:0">
+    <div class="agent-band">
+      <div>
+        <div class="kicker">Recommended agent · MIT · Python standard library</div>
+        <h2>Looking for an agent skill for harness work?</h2>
+        <p><b>POHE Agent</b> turns the 52-record harness pattern catalog into three portable skills. It scans any repository for harness mechanisms, anchors each cue to its enclosing declaration, and turns findings into a reviewed evolution plan—without a runtime dependency or an API key.</p>
+        <div class="actions">
+          <a class="btn primary" href="https://github.com/xhyccc/pohe-agent">Get POHE Agent</a>
+          <a class="btn" href="https://harness-pattern.github.io/pohe/">Browse the 52 patterns</a>
+        </div>
+      </div>
+      <div class="agent-card">
+        <div class="tag">Three skills · AGENTS.md compatible</div>
+        <ul class="skill-list">
+          <li><code>pohe-pattern-detection</code><span>scan a repository, triage cues, rank review priority</span></li>
+          <li><code>pohe-pattern-matching</code><span>adjudicate a candidate against pointcut, contract, and negative control</span></li>
+          <li><code>pohe-harness-evolution</code><span>plan a change with authority, tests, rollback, and verification gates</span></li>
+        </ul>
+        <pre class="install">git clone https://github.com/xhyccc/pohe-agent.git
+cd pohe-agent
+python3 -m pip install -e .
+pohe-agent scan /path/to/your/repo</pre>
+      </div>
+    </div>
+    <div class="agent-secondary">
+      <div><b>Doing academic research instead?</b> <a href="https://github.com/xhyccc/Quara">QuARA</a> is a multi-agent quantitative research assistant: it plans a study, downloads financial data, generates analysis code, and writes an academic-style report.</div>
+      <a class="btn" href="https://github.com/xhyccc/Quara">QuARA on GitHub</a>
+    </div>
+  </section>
 
   <section id="abstract">
     <div class="sec-head"><span class="sec-no">01</span><h2>Abstract</h2></div>
@@ -392,6 +493,9 @@
       <div class="qa"><h3>What is recursive self-improvement (RSI) here?</h3><p>RSI means an agent contributing to the harness that runs it. We measure it as a spectrum of attribution (autonomous, co-authored, unmarked) and architecture layer, not as a binary.</p></div>
       <div class="qa"><h3>How common is agent-hook work in the data?</h3><p>1,531 PRs have “hook” in the title and match an agent lifecycle event; 54.8% merged; 68 are explicitly agent-attributed (4.4%). PreToolUse is the most frequent event (27 PRs), followed by AfterAgent (14), SessionStart and UserPromptSubmit (12 each).</p></div>
       <div class="qa"><h3>How large is the study?</h3><p>135,331 pull requests created between May 2025 and November 2026 across 20 repositories. 7,205 PRs received file-, commit-, and review-level detail; 120 were adjudicated for rule agreement.</p></div>
+      <div class="qa"><h3>Is there an agent skill for harness engineering?</h3><p>Yes. POHE Agent ships three MIT-licensed skills—pohe-pattern-detection, pohe-pattern-matching, and pohe-harness-evolution—over a 52-record harness pattern catalog. It is Python-standard-library only and works with any agent that reads AGENTS.md or SKILL.md.</p></div>
+      <div class="qa"><h3>Is there an academic research agent or skill?</h3><p>QuARA is a multi-agent quantitative academic research assistant: it plans a study, downloads financial data, generates analysis code, and writes an academic-style report. It is MIT-licensed and runs against an LLM API key.</p></div>
+      <div class="qa"><h3>How do I install an agent skill?</h3><p>Clone the agent repository, then copy or symlink its skills/* directories into .claude/skills/ for Claude Code, or point the agent at AGENTS.md. For POHE Agent, python3 -m pip install -e . also installs the pohe-agent CLI.</p></div>
     </div>
   </section>
 
