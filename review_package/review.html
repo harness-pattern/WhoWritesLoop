@@ -295,6 +295,13 @@ function restore(){
     const d=JSON.parse(localStorage.getItem(STORE)||"null");
     if(!d) return false;
     Object.assign(state, d.state||{}); idx=d.idx||0; reviewer=d.reviewer||"";
+    // migrate labels saved by the earlier agree/disagree UI
+    for(const r of (typeof DATA!=="undefined"?DATA:[])){
+      const x=state[r.id]; if(!x) continue;
+      if(!x.tier_label) x.tier_label = x.tier_corrected || (x.tier_correct==="Y" ? r.tier_rule : "");
+      if(!x.layer_label) x.layer_label = x.layer_corrected || (x.layer_correct==="Y" ? r.primary_layer_rule : "");
+      if(!x.change_label) x.change_label = x.change_type_corrected || (x.change_type_correct==="Y" ? r.change_type_rule : "");
+    }
     return true;
   }catch(e){ return false; }
 }
