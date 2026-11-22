@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Who Rewrites the Loop? — Human vs. Agent Authorship in Agent Harnesses</title>
-<meta name="description" content="An empirical study of 20 open-source agent harnesses: who rewrites the harness, which layer agents reach, and how harness patterns diffuse.">
+<title>Agent Hooks and RSI in Agent Harnesses — Who Rewrites the Loop?</title>
+<meta name="description" content="Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?">
 <style>
   :root{
     --paper:#f7f4ec; --paper2:#efe9db; --ink:#1c232b; --muted:#606a75;
@@ -70,6 +70,10 @@
   pre.bib{background:#20262d;color:#e9e4d8;padding:20px 22px;overflow:auto;font:12.5px/1.6 var(--mono);border-radius:4px}
   footer{border-top:1px solid var(--line);margin-top:20px;padding:28px 0 50px;font:13px/1.6 var(--sans);color:var(--muted);display:flex;gap:20px;flex-wrap:wrap}
   .note{font:12.5px/1.55 var(--sans);color:var(--muted)}
+  .faq{display:grid;grid-template-columns:1fr 1fr;gap:22px 34px}
+  .qa h3{font-size:18px;line-height:1.3;margin:0 0 6px;font-weight:600}
+  .qa p{margin:0;font-size:15.5px;color:#3b444e}
+  @media(max-width:900px){.faq{grid-template-columns:1fr}}
   @media(max-width:980px){
     .hero{grid-template-columns:1fr;gap:28px;padding-top:56px}
     .stats{grid-template-columns:1fr 1fr}
@@ -84,6 +88,137 @@
     .nav-links{display:none}
   }
 </style>
+
+<link rel="canonical" href="https://harness-pattern.github.io/WhoWritesLoop/">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
+<meta name="author" content="Haoyi Xiong, Yekun Chai">
+<meta name="keywords" content="agent hooks, agent harness, recursive self-improvement, RSI, PreToolUse, PostToolUse, SessionStart, SubagentStop, mining software repositories, software evolution, design patterns, OO-Harness, Harness^2">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Who Rewrites the Loop?">
+<meta property="og:title" content="Agent Hooks and RSI in Agent Harnesses — Who Rewrites the Loop?">
+<meta property="og:description" content="Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?">
+<meta property="og:url" content="https://harness-pattern.github.io/WhoWritesLoop/">
+<meta property="og:image" content="https://harness-pattern.github.io/WhoWritesLoop/assets/og-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Who Rewrites the Loop? Human versus agent authorship in open-source agent harnesses">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agent Hooks and RSI in Agent Harnesses — Who Rewrites the Loop?">
+<meta name="twitter:description" content="Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?">
+<meta name="twitter:image" content="https://harness-pattern.github.io/WhoWritesLoop/assets/og-card.png">
+<meta name="citation_title" content="Who Rewrites the Loop? Human versus Agent Authorship in the Recursive Self-Improvement of Open-Source Agent Harnesses">
+<meta name="citation_author" content="Xiong, Haoyi">
+<meta name="citation_author" content="Chai, Yekun">
+<meta name="citation_publication_date" content="2026/11/22">
+<meta name="citation_pdf_url" content="https://harness-pattern.github.io/WhoWritesLoop/paper/main.pdf">
+<meta name="citation_abstract" content="A mining study of 135,331 pull requests across 20 open-source agent harnesses, measuring who changes which architectural layer and whether agent changes survive review.">
+<meta name="citation_keywords" content="agent hooks; agent harness; recursive self-improvement; mining software repositories; software evolution">
+<link rel="alternate" type="application/pdf" href="paper/main.pdf">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://harness-pattern.github.io/WhoWritesLoop/#website",
+   "url": "https://harness-pattern.github.io/WhoWritesLoop/",
+   "name": "Who Rewrites the Loop?",
+   "description": "Mining 135,331 PRs in 20 open-source agent harnesses: who writes agent hooks, tools, and the core loop — humans or agents?",
+   "inLanguage": "en"
+  },
+  {
+   "@type": "ScholarlyArticle",
+   "@id": "https://harness-pattern.github.io/WhoWritesLoop/#paper",
+   "headline": "Who Rewrites the Loop? Human versus Agent Authorship in the Recursive Self-Improvement of Open-Source Agent Harnesses",
+   "name": "Who Rewrites the Loop?",
+   "author": [
+    {
+     "@type": "Person",
+     "name": "Haoyi Xiong"
+    },
+    {
+     "@type": "Person",
+     "name": "Yekun Chai"
+    }
+   ],
+   "datePublished": "2026-11-22",
+   "abstract": "A mining study of 135,331 pull requests across 20 open-source agent harnesses, covering three-tier attribution, a six-layer pointcut taxonomy, merge outcomes, and harness-pattern diffusion.",
+   "url": "https://harness-pattern.github.io/WhoWritesLoop/",
+   "image": "https://harness-pattern.github.io/WhoWritesLoop/assets/og-card.png",
+   "isAccessibleForFree": true,
+   "keywords": "agent hooks, agent harness, recursive self-improvement, mining software repositories, software evolution",
+   "about": [
+    {
+     "@type": "Thing",
+     "name": "Agent hooks"
+    },
+    {
+     "@type": "Thing",
+     "name": "Agent harness"
+    },
+    {
+     "@type": "Thing",
+     "name": "Recursive self-improvement"
+    }
+   ]
+  },
+  {
+   "@type": "FAQPage",
+   "@id": "https://harness-pattern.github.io/WhoWritesLoop/#faq",
+   "mainEntity": [
+    {
+     "@type": "Question",
+     "name": "What is an agent hook?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "An agent hook is a lifecycle interception point in an agent harness. It fires before or after a model, tool, or session event—such as PreToolUse, PostToolUse, SessionStart, or SubagentStop—and can observe, allow, deny, or rewrite the action before the harness continues."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "What is an agent harness?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "An agent harness is the executable layer around a language model: the turn loop, context assembly, tool interfaces, permissions, sandbox, and evaluation hooks. It determines what the model can do, see, and remember."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Do agents write their own harnesses?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Only partly. In 135,331 PRs across 20 harnesses, 5.2% are explicitly agent-attributable. Autonomous agents touch the core loop at 13.2%, versus 26.0% for unmarked PRs; co-authored PRs reach 28.8%. Agents maintain the harness, but humans retain the core."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "What is recursive self-improvement (RSI) here?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "RSI means an agent contributing to the harness that runs it. We measure it as a spectrum of attribution (autonomous, co-authored, unmarked) and architecture layer, not as a binary."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "How common is agent-hook work in the data?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "1,531 PRs have “hook” in the title and match an agent lifecycle event; 54.8% merged; 68 are explicitly agent-attributed (4.4%). PreToolUse is the most frequent event (27 PRs), followed by AfterAgent (14), SessionStart and UserPromptSubmit (12 each)."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "How large is the study?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "135,331 pull requests created between May 2025 and November 2026 across 20 repositories. 7,205 PRs received file-, commit-, and review-level detail; 120 were adjudicated for rule agreement."
+     }
+    }
+   ]
+  }
+ ]
+}
+</script>
 </head>
 <body>
 
@@ -93,9 +228,11 @@
     <nav class="nav-links">
       <a href="#abstract">Abstract</a>
       <a href="#findings">Findings</a>
+      <a href="#hooks">Agent hooks</a>
       <a href="#figures">Figures</a>
       <a href="#data">Data &amp; code</a>
       <a href="#review">Review</a>
+      <a href="#faq">FAQ</a>
       <a href="#cite">Cite</a>
     </nav>
   </div>
@@ -167,24 +304,53 @@
     </div>
   </section>
 
+
+  <section id="hooks">
+    <div class="sec-head"><span class="sec-no">03</span><h2>Agent hooks: where the harness meets control</h2></div>
+    <p class="lede">Hooks are the interception points that let a harness observe, deny, or rewrite an agent action: <code>PreToolUse</code>, <code>PostToolUse</code>, <code>SessionStart</code>, <code>SessionEnd</code>, <code>UserPromptSubmit</code>, <code>SubagentStop</code>, <code>Notification</code>, <code>PreCompact</code>, <code>BeforeAgent</code>, and <code>AfterAgent</code>. They are the cheapest place to enforce a contract without touching the core loop.</p>
+    <div class="grid2" style="margin-top:26px">
+      <div>
+        <p>In the 20-repository census, <b>1,531 PRs</b> carry “hook” in the title and match an agent lifecycle event, after excluding webhook and React-hook noise. They merge at <b>54.8%</b>, close to the 57.5% overall rate. Only <b>68</b> are explicitly agent-attributed (<b>4.4%</b>), slightly below the 5.2% agent share overall.</p>
+        <p>Hook work is concentrated in harnesses that expose a formal event model: OpenCode (237), Qwen Code (231), Gemini CLI (218), Codex (188), Cline (129), Mastra (109), OpenHands (107), crewAI (74), software-agent-sdk (68), and Goose (45).</p>
+        <p>Hooks sit at the boundary between L2 (context and rules) and L3 (tools and permissions), not L1. That is exactly the variation seam where our layer results predict agent contribution should be both useful and governable.</p>
+        <p class="note">Caveat: title matching still includes a small amount of non-agent hook usage. The counts are a discovery aid, not a prevalence estimate; the full dataset is in the repository.</p>
+      </div>
+      <table class="table">
+        <thead><tr><th>Hook event in PR title</th><th>PRs</th></tr></thead>
+        <tbody>
+          <tr><td><code>PreToolUse</code></td><td>27</td></tr>
+          <tr><td><code>AfterAgent</code></td><td>14</td></tr>
+          <tr><td><code>SessionStart</code></td><td>12</td></tr>
+          <tr><td><code>UserPromptSubmit</code></td><td>12</td></tr>
+          <tr><td><code>Notification</code></td><td>11</td></tr>
+          <tr><td><code>SubagentStop</code></td><td>9</td></tr>
+          <tr><td><code>PostToolUse</code></td><td>7</td></tr>
+          <tr><td><code>BeforeAgent</code></td><td>6</td></tr>
+          <tr><td><code>SessionEnd</code></td><td>4</td></tr>
+          <tr><td><code>PreCompact</code></td><td>3</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <section id="figures">
-    <div class="sec-head"><span class="sec-no">03</span><h2>Figures</h2></div>
+    <div class="sec-head"><span class="sec-no">04</span><h2>Figures</h2></div>
     <figure>
-      <img src="paper/figures/fig_merge_diff_en.png" alt="Within-repository merge-rate gap between agent and unmarked PRs">
+      <img src="paper/figures/fig_merge_diff_en.png" width="1408" height="1144" loading="lazy" decoding="async" alt="Within-repository merge-rate gap between agent and unmarked PRs">
       <figcaption><b>Figure 1.</b> Within-repository difference in merge rate between explicitly agent-attributed PRs (T1+T2) and unmarked PRs. Negative values mean agent PRs are less likely to merge.</figcaption>
     </figure>
     <figure>
-      <img src="paper/figures/fig_layer_heatmap_en.png" alt="Layer touch rate by repository and attribution group">
+      <img src="paper/figures/fig_layer_heatmap_en.png" width="1803" height="1496" loading="lazy" decoding="async" alt="Layer touch rate by repository and attribution group">
       <figcaption><b>Figure 2.</b> Repository-by-layer touch rates. Each cell is the share of PRs in that group touching the layer. L4 dominates agent activity; L1 activity is sparse and repository-dependent.</figcaption>
     </figure>
     <figure>
-      <img src="paper/figures/fig_diffusion_en.png" alt="Quarterly intensity of harness patterns">
+      <img src="paper/figures/fig_diffusion_en.png" width="1540" height="880" loading="lazy" decoding="async" alt="Quarterly intensity of harness patterns">
       <figcaption><b>Figure 3.</b> Quarterly share of PRs mentioning each harness pattern. Patterns already present in 2025Q2 are left-censored; the curves measure change intensity, not confirmed adoption.</figcaption>
     </figure>
   </section>
 
   <section id="data">
-    <div class="sec-head"><span class="sec-no">04</span><h2>Data, code, and method</h2></div>
+    <div class="sec-head"><span class="sec-no">05</span><h2>Data, code, and method</h2></div>
     <div class="grid2">
       <div>
         <p class="lede">The pipeline crawls PR metadata for all 20 repositories, samples 7,205 PRs for file/commit/review detail, and labels every PR with a three-tier attribution and a six-layer pointcut taxonomy.</p>
@@ -206,7 +372,7 @@
   </section>
 
   <section id="review">
-    <div class="sec-head"><span class="sec-no">05</span><h2>Help audit the mining</h2></div>
+    <div class="sec-head"><span class="sec-no">06</span><h2>Help audit the mining</h2></div>
     <div class="callout">
       <div>
         <h3>A self-contained human-review app</h3>
@@ -216,8 +382,21 @@
     </div>
   </section>
 
+
+  <section id="faq">
+    <div class="sec-head"><span class="sec-no">07</span><h2>FAQ: agent hooks, harnesses, and RSI</h2></div>
+    <div class="faq">
+      <div class="qa"><h3>What is an agent hook?</h3><p>An agent hook is a lifecycle interception point in an agent harness. It fires before or after a model, tool, or session event—such as PreToolUse, PostToolUse, SessionStart, or SubagentStop—and can observe, allow, deny, or rewrite the action before the harness continues.</p></div>
+      <div class="qa"><h3>What is an agent harness?</h3><p>An agent harness is the executable layer around a language model: the turn loop, context assembly, tool interfaces, permissions, sandbox, and evaluation hooks. It determines what the model can do, see, and remember.</p></div>
+      <div class="qa"><h3>Do agents write their own harnesses?</h3><p>Only partly. In 135,331 PRs across 20 harnesses, 5.2% are explicitly agent-attributable. Autonomous agents touch the core loop at 13.2%, versus 26.0% for unmarked PRs; co-authored PRs reach 28.8%. Agents maintain the harness, but humans retain the core.</p></div>
+      <div class="qa"><h3>What is recursive self-improvement (RSI) here?</h3><p>RSI means an agent contributing to the harness that runs it. We measure it as a spectrum of attribution (autonomous, co-authored, unmarked) and architecture layer, not as a binary.</p></div>
+      <div class="qa"><h3>How common is agent-hook work in the data?</h3><p>1,531 PRs have “hook” in the title and match an agent lifecycle event; 54.8% merged; 68 are explicitly agent-attributed (4.4%). PreToolUse is the most frequent event (27 PRs), followed by AfterAgent (14), SessionStart and UserPromptSubmit (12 each).</p></div>
+      <div class="qa"><h3>How large is the study?</h3><p>135,331 pull requests created between May 2025 and November 2026 across 20 repositories. 7,205 PRs received file-, commit-, and review-level detail; 120 were adjudicated for rule agreement.</p></div>
+    </div>
+  </section>
+
   <section id="cite">
-    <div class="sec-head"><span class="sec-no">06</span><h2>Cite</h2></div>
+    <div class="sec-head"><span class="sec-no">08</span><h2>Cite</h2></div>
     <pre class="bib">@misc{xiong2026whowrites,
   title  = {Who Rewrites the Loop? Human versus Agent Authorship in the
             Recursive Self-Improvement of Open-Source Agent Harnesses},
