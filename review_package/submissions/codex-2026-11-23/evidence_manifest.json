@@ -1,0 +1,1092 @@
+{
+  "reviewer": "Codex (AI-assisted review)",
+  "review_date": "2026-11-23",
+  "review_timezone": "Asia/Shanghai",
+  "record_count": 120,
+  "form_sha256": "4c21dc92d964ba203983bbdebf49eeb03f88a2ea81f25ac2a52e080d40ea3bbe",
+  "sample_sha256": "4cc263be4b57f56cd40a1394fdaa4e243c39a39c56810b377be9ba2776d40716",
+  "identity_check_method": "GitHub REST pull request metadata, complete paginated file lists and commit messages",
+  "review_scope": "Single AI-assisted annotation submission; not independent human double-coding or adjudication.",
+  "records": [
+    {
+      "id": "S001",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/6877",
+      "head_sha": "414e615dd94d7259a2d29b98f18a87873ffea72d",
+      "fetched_at_utc": "2026-11-22T16:13:52.390765+00:00",
+      "files_checked": 2,
+      "commits_checked": 4,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S002",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/8655",
+      "head_sha": "19d7a388606e2e792aa94a295c49da833d7575ac",
+      "fetched_at_utc": "2026-11-22T16:13:50.073046+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S003",
+      "url": "https://github.com/SWE-agent/mini-swe-agent/pull/770",
+      "head_sha": "e2cf9e93b682662446ba296f2f6aa055f5589c11",
+      "fetched_at_utc": "2026-11-22T16:13:52.376976+00:00",
+      "files_checked": 5,
+      "commits_checked": 1,
+      "files_with_api_patch": 5
+    },
+    {
+      "id": "S004",
+      "url": "https://github.com/google-gemini/gemini-cli/pull/22337",
+      "head_sha": "3df431ebec8ae84c44f0350c75aa26d3c06e9023",
+      "fetched_at_utc": "2026-11-22T16:13:52.858426+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S005",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/3208",
+      "head_sha": "455fdd6541b28053f2d483e01de68490dbf42c66",
+      "fetched_at_utc": "2026-11-22T16:13:52.432335+00:00",
+      "files_checked": 3,
+      "commits_checked": 1,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S006",
+      "url": "https://github.com/continuedev/continue/pull/6595",
+      "head_sha": "e0cc65ea2e336896771842182295c47597dd16c6",
+      "fetched_at_utc": "2026-11-22T16:13:51.163298+00:00",
+      "files_checked": 10,
+      "commits_checked": 17,
+      "files_with_api_patch": 10
+    },
+    {
+      "id": "S007",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/188",
+      "head_sha": "d4c5b34109927738878f929dfc57db29c60e29a5",
+      "fetched_at_utc": "2026-11-22T16:13:54.787599+00:00",
+      "files_checked": 21,
+      "commits_checked": 11,
+      "files_with_api_patch": 21
+    },
+    {
+      "id": "S008",
+      "url": "https://github.com/crewAIInc/crewAI/pull/4216",
+      "head_sha": "3add062b4bae029e373bd4006b140c3c152b292a",
+      "fetched_at_utc": "2026-11-22T16:13:55.959125+00:00",
+      "files_checked": 2,
+      "commits_checked": 2,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S009",
+      "url": "https://github.com/langchain-ai/langgraph/pull/7516",
+      "head_sha": "a01c1224521d60b5cffc635d4e8378ca4fd49ce2",
+      "fetched_at_utc": "2026-11-22T16:13:57.638783+00:00",
+      "files_checked": 4,
+      "commits_checked": 1,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S010",
+      "url": "https://github.com/Aider-AI/aider/pull/4938",
+      "head_sha": "70b5c4d4357fee9d69091dd36338b4d84c835846",
+      "fetched_at_utc": "2026-11-22T16:13:57.210607+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S011",
+      "url": "https://github.com/QwenLM/qwen-code/pull/4468",
+      "head_sha": "b7ab58061fb11390f3f45df6e805e05d38fb4a64",
+      "fetched_at_utc": "2026-11-22T16:13:55.276670+00:00",
+      "files_checked": 3,
+      "commits_checked": 1,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S012",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/2952",
+      "head_sha": "bc89967af76b859d3ee376a44a7327fdf98cd497",
+      "fetched_at_utc": "2026-11-22T16:13:57.851914+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S013",
+      "url": "https://github.com/continuedev/continue/pull/8360",
+      "head_sha": "8f1a4ff231c80b9ed92fda323d27c58bdcd627dd",
+      "fetched_at_utc": "2026-11-22T16:13:59.160114+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S014",
+      "url": "https://github.com/anomalyco/opencode/pull/37674",
+      "head_sha": "870a10a7baf7e540789148719acbeb1bb6dcb4de",
+      "fetched_at_utc": "2026-11-22T16:13:57.686740+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S015",
+      "url": "https://github.com/anomalyco/opencode/pull/45486",
+      "head_sha": "2efe6cf71eecd1188a50014cd5e09702fa5a1b42",
+      "fetched_at_utc": "2026-11-22T16:13:59.382289+00:00",
+      "files_checked": 3,
+      "commits_checked": 1,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S016",
+      "url": "https://github.com/cline/cline/pull/14881",
+      "head_sha": "3f89c2a11db57d90895f864019bb2e202b4a885d",
+      "fetched_at_utc": "2026-11-22T16:14:03.095170+00:00",
+      "files_checked": 6,
+      "commits_checked": 3,
+      "files_with_api_patch": 6
+    },
+    {
+      "id": "S017",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/9259",
+      "head_sha": "a136ac20286c7fb78261c1ca28b78a330826185e",
+      "fetched_at_utc": "2026-11-22T16:14:03.082277+00:00",
+      "files_checked": 5,
+      "commits_checked": 2,
+      "files_with_api_patch": 5
+    },
+    {
+      "id": "S018",
+      "url": "https://github.com/google-gemini/gemini-cli/pull/8711",
+      "head_sha": "3cbeb04a41b866d96a5c1d09e994f319366d884e",
+      "fetched_at_utc": "2026-11-22T16:14:01.907206+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S019",
+      "url": "https://github.com/cline/cline/pull/7483",
+      "head_sha": "33e6dcc26c8ab80b3676233cdbbecac4a11aaf7d",
+      "fetched_at_utc": "2026-11-22T16:14:03.091946+00:00",
+      "files_checked": 4,
+      "commits_checked": 1,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S020",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/4984",
+      "head_sha": "098176c05f065a3aeddf2b95940306ccd77f839f",
+      "fetched_at_utc": "2026-11-22T16:14:04.935562+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S021",
+      "url": "https://github.com/aaif-goose/goose/pull/4800",
+      "head_sha": "440de7083e4369d1ef6d6d8069c06953bf0f5bb8",
+      "fetched_at_utc": "2026-11-22T16:14:03.085100+00:00",
+      "files_checked": 78,
+      "commits_checked": 1,
+      "files_with_api_patch": 78
+    },
+    {
+      "id": "S022",
+      "url": "https://github.com/cline/cline/pull/9956",
+      "head_sha": "cff728b16107929850fd9b19f5ca9869ff27bdb0",
+      "fetched_at_utc": "2026-11-22T16:14:06.255606+00:00",
+      "files_checked": 1,
+      "commits_checked": 2,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S023",
+      "url": "https://github.com/anomalyco/opencode/pull/16131",
+      "head_sha": "38b131556d5740ee7c11790539941d1862469112",
+      "fetched_at_utc": "2026-11-22T16:14:09.558346+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S024",
+      "url": "https://github.com/cline/cline/pull/14223",
+      "head_sha": "15618baf284be2ba6f9eb3a91a4d25647909cfa8",
+      "fetched_at_utc": "2026-11-22T16:14:07.836261+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S025",
+      "url": "https://github.com/cline/cline/pull/14900",
+      "head_sha": "9358ebc4b5150caa96ef7b272671dfc9e74f4900",
+      "fetched_at_utc": "2026-11-22T16:14:07.091656+00:00",
+      "files_checked": 9,
+      "commits_checked": 2,
+      "files_with_api_patch": 9
+    },
+    {
+      "id": "S026",
+      "url": "https://github.com/QwenLM/qwen-code/pull/3784",
+      "head_sha": "69d71a69730e5840f9e70a74a5c67e582b159a2f",
+      "fetched_at_utc": "2026-11-22T16:14:06.663992+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S027",
+      "url": "https://github.com/anomalyco/opencode/pull/4771",
+      "head_sha": "d3f5f9fc7941ae9dd0a4654886f8adf998888b58",
+      "fetched_at_utc": "2026-11-22T16:14:08.612169+00:00",
+      "files_checked": 3,
+      "commits_checked": 2,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S028",
+      "url": "https://github.com/continuedev/continue/pull/9270",
+      "head_sha": "f644c8873e09f8efa912eefeb1a03e5d8708f24f",
+      "fetched_at_utc": "2026-11-22T16:14:10.204974+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S029",
+      "url": "https://github.com/Aider-AI/aider/pull/4977",
+      "head_sha": "84df006a2ea56f93529de98dd9364a887ec8a4ec",
+      "fetched_at_utc": "2026-11-22T16:14:11.448064+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S030",
+      "url": "https://github.com/SWE-agent/mini-swe-agent/pull/769",
+      "head_sha": "ae47a3d52fdd1bbeae31a5187101b5c7a5060706",
+      "fetched_at_utc": "2026-11-22T16:14:11.509112+00:00",
+      "files_checked": 2,
+      "commits_checked": 2,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S031",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1222",
+      "head_sha": "81f74283ad20d6103498184a1a29cc734d07de33",
+      "fetched_at_utc": "2026-11-22T16:14:11.188865+00:00",
+      "files_checked": 10,
+      "commits_checked": 2,
+      "files_with_api_patch": 10
+    },
+    {
+      "id": "S032",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/245",
+      "head_sha": "fa96b30faff572ff5a62aae39a2ea00552e75eed",
+      "fetched_at_utc": "2026-11-22T16:14:14.955212+00:00",
+      "files_checked": 3,
+      "commits_checked": 5,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S033",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/5853",
+      "head_sha": "71e271c5fc48c8f9d6ea215cd0e024bbc2792df2",
+      "fetched_at_utc": "2026-11-22T16:14:14.354142+00:00",
+      "files_checked": 3,
+      "commits_checked": 1,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S034",
+      "url": "https://github.com/crewAIInc/crewAI/pull/5721",
+      "head_sha": "119a041d18cada05bdcf4f26b7b537025be116db",
+      "fetched_at_utc": "2026-11-22T16:14:13.439446+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S035",
+      "url": "https://github.com/google-gemini/gemini-cli/pull/26238",
+      "head_sha": "7c0603ce0a76c343eddd0f061f9cfcf8422d23e1",
+      "fetched_at_utc": "2026-11-22T16:14:18.467726+00:00",
+      "files_checked": 4,
+      "commits_checked": 1,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S036",
+      "url": "https://github.com/OpenHands/OpenHands/pull/8625",
+      "head_sha": "20cbda237ce9ebacdd68a15fbb93378fbcc16ea1",
+      "fetched_at_utc": "2026-11-22T16:14:14.273937+00:00",
+      "files_checked": 4,
+      "commits_checked": 1,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S037",
+      "url": "https://github.com/QwenLM/qwen-code/pull/7722",
+      "head_sha": "f3a28c6056069c4df1306922fdcdc933b30e3304",
+      "fetched_at_utc": "2026-11-22T16:14:14.558246+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S038",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/11367",
+      "head_sha": "e1336df6338964bf4bea5a1fae3a67fe9c0f267f",
+      "fetched_at_utc": "2026-11-22T16:14:20.679747+00:00",
+      "files_checked": 2,
+      "commits_checked": 2,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S039",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/3633",
+      "head_sha": "2daa3f83fd8ad4745e04f1740a1028512979d55c",
+      "fetched_at_utc": "2026-11-22T16:14:20.228774+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S040",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/5334",
+      "head_sha": "642bf6638f208763cba4208fcb56303eeba18304",
+      "fetched_at_utc": "2026-11-22T16:14:19.710197+00:00",
+      "files_checked": 4,
+      "commits_checked": 5,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S041",
+      "url": "https://github.com/OpenHands/OpenHands/pull/17259",
+      "head_sha": "803c633775af79dceb3f63265b3819b04cd38486",
+      "fetched_at_utc": "2026-11-22T16:14:18.079414+00:00",
+      "files_checked": 6,
+      "commits_checked": 2,
+      "files_with_api_patch": 6
+    },
+    {
+      "id": "S042",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1479",
+      "head_sha": "ec01c271173307cdc4fe63f8b9b5dc923c7aed36",
+      "fetched_at_utc": "2026-11-22T16:14:21.210209+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S043",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/11657",
+      "head_sha": "c2308685efecad1aaa583bbc666eaadc445166df",
+      "fetched_at_utc": "2026-11-22T16:14:21.654554+00:00",
+      "files_checked": 42,
+      "commits_checked": 5,
+      "files_with_api_patch": 42
+    },
+    {
+      "id": "S044",
+      "url": "https://github.com/OpenHands/OpenHands/pull/17104",
+      "head_sha": "3b6bc1f042975116ba0955602237cd84d3b8da82",
+      "fetched_at_utc": "2026-11-22T16:14:25.503824+00:00",
+      "files_checked": 5,
+      "commits_checked": 6,
+      "files_with_api_patch": 5
+    },
+    {
+      "id": "S045",
+      "url": "https://github.com/anomalyco/opencode/pull/15095",
+      "head_sha": "5f33c077cea87c9fb26319f5e41198b2a9bb3a7d",
+      "fetched_at_utc": "2026-11-22T16:14:25.301785+00:00",
+      "files_checked": 1,
+      "commits_checked": 3,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S046",
+      "url": "https://github.com/aaif-goose/goose/pull/11514",
+      "head_sha": "d95312abd11aef4325d75783a43a469c66059f9b",
+      "fetched_at_utc": "2026-11-22T16:14:25.659887+00:00",
+      "files_checked": 291,
+      "commits_checked": 54,
+      "files_with_api_patch": 277
+    },
+    {
+      "id": "S047",
+      "url": "https://github.com/continuedev/continue/pull/11084",
+      "head_sha": "9e1ea3d85b8e602e30d217eb30438f97bbcd3bc2",
+      "fetched_at_utc": "2026-11-22T16:14:24.460477+00:00",
+      "files_checked": 3,
+      "commits_checked": 2,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S048",
+      "url": "https://github.com/Aider-AI/aider/pull/5977",
+      "head_sha": "04d7db6374d9198bd780db7436b2d51dfc54d445",
+      "fetched_at_utc": "2026-11-22T16:14:25.256592+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S049",
+      "url": "https://github.com/Aider-AI/aider/pull/5303",
+      "head_sha": "46edf05de655640fdba61ce48094671cbf012432",
+      "fetched_at_utc": "2026-11-22T16:14:40.203713+00:00",
+      "files_checked": 691,
+      "commits_checked": 1,
+      "files_with_api_patch": 508
+    },
+    {
+      "id": "S050",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1239",
+      "head_sha": "edd6427555f5ef2d903b170fbcf2dc27dda18744",
+      "fetched_at_utc": "2026-11-22T16:14:30.048104+00:00",
+      "files_checked": 6,
+      "commits_checked": 2,
+      "files_with_api_patch": 6
+    },
+    {
+      "id": "S051",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1654",
+      "head_sha": "75f200f8dcc1bfb7c3f86f8e6616d5f7fb8e9121",
+      "fetched_at_utc": "2026-11-22T16:14:28.174296+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S052",
+      "url": "https://github.com/OpenHands/OpenHands/pull/13846",
+      "head_sha": "6e44e08cb568f2b1c3fb920d6e98323e116ea553",
+      "fetched_at_utc": "2026-11-22T16:14:30.807330+00:00",
+      "files_checked": 2,
+      "commits_checked": 3,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S053",
+      "url": "https://github.com/continuedev/continue/pull/8021",
+      "head_sha": "9f87311b59e66bf4d3d60ff93a00c76494e2f479",
+      "fetched_at_utc": "2026-11-22T16:14:29.210926+00:00",
+      "files_checked": 1,
+      "commits_checked": 7,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S054",
+      "url": "https://github.com/OpenHands/OpenHands/pull/11156",
+      "head_sha": "a1b716b8d1cd2c7e0968c7a5ef76d62e472d0512",
+      "fetched_at_utc": "2026-11-22T16:14:30.165563+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S055",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1387",
+      "head_sha": "fe3d6af974539d394baa110fa2ce8677bade4eac",
+      "fetched_at_utc": "2026-11-22T16:14:31.660614+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S056",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/8647",
+      "head_sha": "33f5d5ce8e4fc87b09970b31202ead698777dc39",
+      "fetched_at_utc": "2026-11-22T16:14:32.370324+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S057",
+      "url": "https://github.com/QwenLM/qwen-code/pull/5775",
+      "head_sha": "413191088be20b2b5dd3d085b55b7e0efc1e4b5c",
+      "fetched_at_utc": "2026-11-22T16:14:37.330071+00:00",
+      "files_checked": 136,
+      "commits_checked": 1,
+      "files_with_api_patch": 115
+    },
+    {
+      "id": "S058",
+      "url": "https://github.com/langchain-ai/langgraph/pull/7846",
+      "head_sha": "24bdee47f90adaae46b55012f5a969bd660690eb",
+      "fetched_at_utc": "2026-11-22T16:14:35.630945+00:00",
+      "files_checked": 8,
+      "commits_checked": 1,
+      "files_with_api_patch": 8
+    },
+    {
+      "id": "S059",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/2859",
+      "head_sha": "2aed558db4bd91b5dec6f1d44a0de4fd38289c09",
+      "fetched_at_utc": "2026-11-22T16:14:36.776203+00:00",
+      "files_checked": 9,
+      "commits_checked": 1,
+      "files_with_api_patch": 9
+    },
+    {
+      "id": "S060",
+      "url": "https://github.com/QwenLM/qwen-code/pull/9625",
+      "head_sha": "f903862a2e2aa91782acad3e3f56f4590ad98c23",
+      "fetched_at_utc": "2026-11-22T16:14:36.911049+00:00",
+      "files_checked": 6,
+      "commits_checked": 3,
+      "files_with_api_patch": 6
+    },
+    {
+      "id": "S061",
+      "url": "https://github.com/continuedev/continue/pull/9091",
+      "head_sha": "9439090b6be84b4ae525d6b78fdb74d838d7b7d6",
+      "fetched_at_utc": "2026-11-22T16:14:36.328287+00:00",
+      "files_checked": 5,
+      "commits_checked": 1,
+      "files_with_api_patch": 5
+    },
+    {
+      "id": "S062",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1381",
+      "head_sha": "32708cd5bdabd360fa76a4124c0b170a937a1822",
+      "fetched_at_utc": "2026-11-22T16:14:38.969202+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S063",
+      "url": "https://github.com/OpenHands/OpenHands/pull/19746",
+      "head_sha": "13d3296771ce309dc63aabf453a0559615e5e90f",
+      "fetched_at_utc": "2026-11-22T16:14:41.304894+00:00",
+      "files_checked": 8,
+      "commits_checked": 2,
+      "files_with_api_patch": 8
+    },
+    {
+      "id": "S064",
+      "url": "https://github.com/anomalyco/opencode/pull/52607",
+      "head_sha": "2b8221847aaf83526435dfa16765854e4cdeb13e",
+      "fetched_at_utc": "2026-11-22T16:14:42.710426+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S065",
+      "url": "https://github.com/SWE-agent/mini-swe-agent/pull/692",
+      "head_sha": "a3347cf45d457e939e5622a0047c88dd393ba5fd",
+      "fetched_at_utc": "2026-11-22T16:14:39.601985+00:00",
+      "files_checked": 2,
+      "commits_checked": 2,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S066",
+      "url": "https://github.com/OpenHands/OpenHands/pull/8492",
+      "head_sha": "db5c97e141649acd356d7d9beb685c6ac1fa033f",
+      "fetched_at_utc": "2026-11-22T16:14:41.923423+00:00",
+      "files_checked": 25,
+      "commits_checked": 6,
+      "files_with_api_patch": 25
+    },
+    {
+      "id": "S067",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1496",
+      "head_sha": "aeb474abd3c397c5b1651c2e2178348bfd7367df",
+      "fetched_at_utc": "2026-11-22T16:14:43.648266+00:00",
+      "files_checked": 35,
+      "commits_checked": 2,
+      "files_with_api_patch": 35
+    },
+    {
+      "id": "S068",
+      "url": "https://github.com/Aider-AI/aider/pull/5236",
+      "head_sha": "ab267f09187d6ce062dd9ecfd1e20480f5813f6e",
+      "fetched_at_utc": "2026-11-22T16:14:44.755073+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S069",
+      "url": "https://github.com/QwenLM/qwen-code/pull/6261",
+      "head_sha": "a77ce580fe7a17b63ae6f236b00c976b86c83197",
+      "fetched_at_utc": "2026-11-22T16:14:46.067969+00:00",
+      "files_checked": 8,
+      "commits_checked": 10,
+      "files_with_api_patch": 8
+    },
+    {
+      "id": "S070",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/8193",
+      "head_sha": "34d3ed702d1522dd68fd36879006bf20d7932cad",
+      "fetched_at_utc": "2026-11-22T16:14:47.263517+00:00",
+      "files_checked": 71,
+      "commits_checked": 18,
+      "files_with_api_patch": 71
+    },
+    {
+      "id": "S071",
+      "url": "https://github.com/anomalyco/opencode/pull/27478",
+      "head_sha": "7ea0537bae793a8ecaba8725b2dbae657f2a7958",
+      "fetched_at_utc": "2026-11-22T16:14:45.258985+00:00",
+      "files_checked": 3,
+      "commits_checked": 3,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S072",
+      "url": "https://github.com/crewAIInc/crewAI/pull/3817",
+      "head_sha": "27c08e48a75c04b8dfadf5a404e4ee39476b4c4a",
+      "fetched_at_utc": "2026-11-22T16:14:48.542108+00:00",
+      "files_checked": 6,
+      "commits_checked": 2,
+      "files_with_api_patch": 5
+    },
+    {
+      "id": "S073",
+      "url": "https://github.com/OpenHands/OpenHands/pull/16883",
+      "head_sha": "d6ec6e39a146f8a135cdb35c2d61dcfa4fb8b070",
+      "fetched_at_utc": "2026-11-22T16:14:49.923367+00:00",
+      "files_checked": 6,
+      "commits_checked": 6,
+      "files_with_api_patch": 6
+    },
+    {
+      "id": "S074",
+      "url": "https://github.com/OpenHands/OpenHands/pull/8819",
+      "head_sha": "cff72072fd44b004d73a502db0819a11c84cf5a5",
+      "fetched_at_utc": "2026-11-22T16:14:47.530788+00:00",
+      "files_checked": 1,
+      "commits_checked": 2,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S075",
+      "url": "https://github.com/OpenHands/OpenHands/pull/13863",
+      "head_sha": "35a31cfdac29b4cd43516082b262c4a05206e0d9",
+      "fetched_at_utc": "2026-11-22T16:14:51.150053+00:00",
+      "files_checked": 2,
+      "commits_checked": 2,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S076",
+      "url": "https://github.com/Aider-AI/aider/pull/5343",
+      "head_sha": "6526a502d8f012115a20b2f03bb7b4d52e422c4e",
+      "fetched_at_utc": "2026-11-22T16:14:48.981653+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S077",
+      "url": "https://github.com/QwenLM/qwen-code/pull/2776",
+      "head_sha": "657982fcdd79b12c30139c3ec71bcdaddc84ac96",
+      "fetched_at_utc": "2026-11-22T16:14:51.579019+00:00",
+      "files_checked": 16,
+      "commits_checked": 11,
+      "files_with_api_patch": 16
+    },
+    {
+      "id": "S078",
+      "url": "https://github.com/QwenLM/qwen-code/pull/10690",
+      "head_sha": "c8a05a52d89047d2e8a4e690c710638794f80538",
+      "fetched_at_utc": "2026-11-22T16:14:53.208856+00:00",
+      "files_checked": 24,
+      "commits_checked": 6,
+      "files_with_api_patch": 24
+    },
+    {
+      "id": "S079",
+      "url": "https://github.com/anomalyco/opencode/pull/4270",
+      "head_sha": "5168ed12aacb888f143980ed2a8dae02ff851a69",
+      "fetched_at_utc": "2026-11-22T16:14:53.216695+00:00",
+      "files_checked": 3,
+      "commits_checked": 3,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S080",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/6962",
+      "head_sha": "ac303043476cb235ef0c3b82292c37a9790af6a3",
+      "fetched_at_utc": "2026-11-22T16:14:51.642717+00:00",
+      "files_checked": 2,
+      "commits_checked": 2,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S081",
+      "url": "https://github.com/aaif-goose/goose/pull/10816",
+      "head_sha": "ec5cdd6df51c3525eac2a28cd46b27911c7dd8f8",
+      "fetched_at_utc": "2026-11-22T16:14:54.531949+00:00",
+      "files_checked": 3,
+      "commits_checked": 1,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S082",
+      "url": "https://github.com/QwenLM/qwen-code/pull/6136",
+      "head_sha": "f96313aaad7030104837d135042b12f2ced40001",
+      "fetched_at_utc": "2026-11-22T16:14:54.031940+00:00",
+      "files_checked": 4,
+      "commits_checked": 4,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S083",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/4073",
+      "head_sha": "7045929c21c63b4b6e59e315497684b1d26d98ee",
+      "fetched_at_utc": "2026-11-22T16:14:55.607546+00:00",
+      "files_checked": 1,
+      "commits_checked": 3,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S084",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/11075",
+      "head_sha": "9114e647b9191dffe31a52b1a2488d54a7662f14",
+      "fetched_at_utc": "2026-11-22T16:14:56.244263+00:00",
+      "files_checked": 8,
+      "commits_checked": 4,
+      "files_with_api_patch": 8
+    },
+    {
+      "id": "S085",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/7013",
+      "head_sha": "570950f4641a9bfe74b3acd8abe53402bfe2f2c2",
+      "fetched_at_utc": "2026-11-22T16:14:58.769613+00:00",
+      "files_checked": 4,
+      "commits_checked": 1,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S086",
+      "url": "https://github.com/SWE-agent/mini-swe-agent/pull/774",
+      "head_sha": "76f0e23add10bf05f883179867e53b0806851384",
+      "fetched_at_utc": "2026-11-22T16:14:56.416176+00:00",
+      "files_checked": 4,
+      "commits_checked": 1,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S087",
+      "url": "https://github.com/continuedev/continue/pull/7933",
+      "head_sha": "cfe4295e6916fb2d5d104a52b044b4ae44998adc",
+      "fetched_at_utc": "2026-11-22T16:14:56.937880+00:00",
+      "files_checked": 1,
+      "commits_checked": 2,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S088",
+      "url": "https://github.com/QwenLM/qwen-code/pull/6369",
+      "head_sha": "47ef71f91a80db65d5e96ecfd4e952c81411a97c",
+      "fetched_at_utc": "2026-11-22T16:14:58.716655+00:00",
+      "files_checked": 3,
+      "commits_checked": 8,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S089",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/2899",
+      "head_sha": "c8d506002e65c5480664125286c5ab43898cba0c",
+      "fetched_at_utc": "2026-11-22T16:15:00.350096+00:00",
+      "files_checked": 2,
+      "commits_checked": 1,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S090",
+      "url": "https://github.com/anomalyco/opencode/pull/37530",
+      "head_sha": "edf0ce766dc8488b2122caac35eee5346843894a",
+      "fetched_at_utc": "2026-11-22T16:14:58.784146+00:00",
+      "files_checked": 10,
+      "commits_checked": 1,
+      "files_with_api_patch": 10
+    },
+    {
+      "id": "S091",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/4982",
+      "head_sha": "a8720931814924ed1ef53cf1f6ddbe6b946bbda6",
+      "fetched_at_utc": "2026-11-22T16:15:00.853153+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S092",
+      "url": "https://github.com/QwenLM/qwen-code/pull/11527",
+      "head_sha": "6c80b5ecddabf7c3d25d059d7253f26dfd74421b",
+      "fetched_at_utc": "2026-11-22T16:15:02.228389+00:00",
+      "files_checked": 17,
+      "commits_checked": 1,
+      "files_with_api_patch": 17
+    },
+    {
+      "id": "S093",
+      "url": "https://github.com/Aider-AI/aider/pull/4813",
+      "head_sha": "adb4a714088547fd57810e99cd0e906ac242f03f",
+      "fetched_at_utc": "2026-11-22T16:15:04.393328+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S094",
+      "url": "https://github.com/SWE-agent/SWE-agent/pull/1531",
+      "head_sha": "e8605f72acdb05e45ed11f767eb09315053e0174",
+      "fetched_at_utc": "2026-11-22T16:15:02.869023+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S095",
+      "url": "https://github.com/OpenHands/OpenHands/pull/13720",
+      "head_sha": "9b574ba5cb840588392b41d1b5352c0a9fd717e5",
+      "fetched_at_utc": "2026-11-22T16:15:05.077465+00:00",
+      "files_checked": 3,
+      "commits_checked": 9,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S096",
+      "url": "https://github.com/anomalyco/opencode/pull/32353",
+      "head_sha": "aca5f8e3731bd35d97686997e7b75a171a55a646",
+      "fetched_at_utc": "2026-11-22T16:15:25.994337+00:00",
+      "files_checked": 1988,
+      "commits_checked": 43,
+      "files_with_api_patch": 1984
+    },
+    {
+      "id": "S097",
+      "url": "https://github.com/Aider-AI/aider/pull/3942",
+      "head_sha": "fbdf3ce82397da2f4cd02e973b92c751c45bb39c",
+      "fetched_at_utc": "2026-11-22T16:15:05.835284+00:00",
+      "files_checked": 9,
+      "commits_checked": 6,
+      "files_with_api_patch": 9
+    },
+    {
+      "id": "S098",
+      "url": "https://github.com/browser-use/browser-use/pull/3141",
+      "head_sha": "69c03360951b399bdb072eacd04fb4fb10b65992",
+      "fetched_at_utc": "2026-11-22T16:15:08.690221+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S099",
+      "url": "https://github.com/aaif-goose/goose/pull/8743",
+      "head_sha": "2fe2d01526924a2c9b909875bab0f5fbb2af7ca3",
+      "fetched_at_utc": "2026-11-22T16:15:09.161794+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S100",
+      "url": "https://github.com/anomalyco/opencode/pull/61275",
+      "head_sha": "f3faae353bd56d17baf479c43e57af060b244ed8",
+      "fetched_at_utc": "2026-11-22T16:15:10.846538+00:00",
+      "files_checked": 15,
+      "commits_checked": 1,
+      "files_with_api_patch": 15
+    },
+    {
+      "id": "S101",
+      "url": "https://github.com/mastra-ai/mastra/pull/22046",
+      "head_sha": "8f4466d14320ad2234b87ac1a64b940821dcf20d",
+      "fetched_at_utc": "2026-11-22T16:15:09.860783+00:00",
+      "files_checked": 8,
+      "commits_checked": 1,
+      "files_with_api_patch": 8
+    },
+    {
+      "id": "S102",
+      "url": "https://github.com/QwenLM/qwen-code/pull/16763",
+      "head_sha": "5cfacc5caffba0eb2ffb75cf42db0104aefb9ee5",
+      "fetched_at_utc": "2026-11-22T16:15:09.193835+00:00",
+      "files_checked": 3,
+      "commits_checked": 2,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S103",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/10815",
+      "head_sha": "9258c1869b7410c428a4261d0d700ef9131911c9",
+      "fetched_at_utc": "2026-11-22T16:15:13.060809+00:00",
+      "files_checked": 1,
+      "commits_checked": 5,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S104",
+      "url": "https://github.com/Aider-AI/aider/pull/5162",
+      "head_sha": "51cfb24c73b8a3dc313dc6c25a5d038c3f82b055",
+      "fetched_at_utc": "2026-11-22T16:15:13.453508+00:00",
+      "files_checked": 4,
+      "commits_checked": 2,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S105",
+      "url": "https://github.com/crewAIInc/crewAI/pull/4164",
+      "head_sha": "4f0b6f6427118f4f058a40a59aa1f791685eedba",
+      "fetched_at_utc": "2026-11-22T16:15:14.846825+00:00",
+      "files_checked": 3,
+      "commits_checked": 1,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S106",
+      "url": "https://github.com/cline/cline/pull/12740",
+      "head_sha": "3b3e7117f3142ac7f6bed83f0f7292a76bec5ee6",
+      "fetched_at_utc": "2026-11-22T16:15:15.704744+00:00",
+      "files_checked": 3,
+      "commits_checked": 1,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S107",
+      "url": "https://github.com/QwenLM/qwen-code/pull/1492",
+      "head_sha": "1e3791f30aa1f13a1fed28ce32cb968f1cfaa7a3",
+      "fetched_at_utc": "2026-11-22T16:15:14.599661+00:00",
+      "files_checked": 3,
+      "commits_checked": 3,
+      "files_with_api_patch": 3
+    },
+    {
+      "id": "S108",
+      "url": "https://github.com/anomalyco/opencode/pull/34844",
+      "head_sha": "1d2636e0857771873000bee8e653ef23e51423fa",
+      "fetched_at_utc": "2026-11-22T16:15:18.436378+00:00",
+      "files_checked": 4,
+      "commits_checked": 1,
+      "files_with_api_patch": 4
+    },
+    {
+      "id": "S109",
+      "url": "https://github.com/mastra-ai/mastra/pull/15895",
+      "head_sha": "f1e4563c87b798a93e7afce7ce21805af77ac32a",
+      "fetched_at_utc": "2026-11-22T16:15:17.292950+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S110",
+      "url": "https://github.com/cline/cline/pull/15303",
+      "head_sha": "ca7375293b0b53ac5abfd97c0d51e76b7403b864",
+      "fetched_at_utc": "2026-11-22T16:15:18.181759+00:00",
+      "files_checked": 17,
+      "commits_checked": 6,
+      "files_with_api_patch": 17
+    },
+    {
+      "id": "S111",
+      "url": "https://github.com/OpenHands/software-agent-sdk/pull/1512",
+      "head_sha": "b888126a0f990f584cb7768b633176ed1031ae82",
+      "fetched_at_utc": "2026-11-22T16:15:17.710078+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S112",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/5626",
+      "head_sha": "eabbe464f6432511b0cb39820cd15a084b9475b6",
+      "fetched_at_utc": "2026-11-22T16:15:22.054693+00:00",
+      "files_checked": 73,
+      "commits_checked": 65,
+      "files_with_api_patch": 73
+    },
+    {
+      "id": "S113",
+      "url": "https://github.com/OpenHands/OpenHands/pull/12369",
+      "head_sha": "12909a30d2de5d94cc3d2c724ba7f76e686de50e",
+      "fetched_at_utc": "2026-11-22T16:15:24.379965+00:00",
+      "files_checked": 14,
+      "commits_checked": 6,
+      "files_with_api_patch": 14
+    },
+    {
+      "id": "S114",
+      "url": "https://github.com/Aider-AI/aider/pull/5226",
+      "head_sha": "ab722b7d26a18efe9c26b8fc44030b12ba1728c6",
+      "fetched_at_utc": "2026-11-22T16:15:22.640353+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S115",
+      "url": "https://github.com/OpenHands/OpenHands/pull/16245",
+      "head_sha": "8de88bf978358b0e6fb9056881251184d0fe297a",
+      "fetched_at_utc": "2026-11-22T16:15:22.572635+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S116",
+      "url": "https://github.com/OpenHands/OpenHands/pull/17136",
+      "head_sha": "54f7ddf267f2acff4ba5b4ee9621b8c9363eb74c",
+      "fetched_at_utc": "2026-11-22T16:15:24.156509+00:00",
+      "files_checked": 1,
+      "commits_checked": 2,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S117",
+      "url": "https://github.com/OpenHands/OpenHands/pull/14254",
+      "head_sha": "184d9f278590e1f2a8b880b711bce24e3d30cab8",
+      "fetched_at_utc": "2026-11-22T16:15:26.500327+00:00",
+      "files_checked": 65,
+      "commits_checked": 4,
+      "files_with_api_patch": 64
+    },
+    {
+      "id": "S118",
+      "url": "https://github.com/aaif-goose/goose/pull/5778",
+      "head_sha": "e38be4888b3c2ba66ae0c6e55d68c6dc7c146c29",
+      "fetched_at_utc": "2026-11-22T16:15:27.357252+00:00",
+      "files_checked": 1,
+      "commits_checked": 2,
+      "files_with_api_patch": 1
+    },
+    {
+      "id": "S119",
+      "url": "https://github.com/Aider-AI/aider/pull/5617",
+      "head_sha": "a57e63af557a08db292eb63cf995341d5a2e85db",
+      "fetched_at_utc": "2026-11-22T16:15:29.006132+00:00",
+      "files_checked": 2,
+      "commits_checked": 2,
+      "files_with_api_patch": 2
+    },
+    {
+      "id": "S120",
+      "url": "https://github.com/RooCodeInc/Roo-Code/pull/3932",
+      "head_sha": "1103930c2cb3a894915dc153b345eea0f4c06ef1",
+      "fetched_at_utc": "2026-11-22T16:15:28.328474+00:00",
+      "files_checked": 1,
+      "commits_checked": 1,
+      "files_with_api_patch": 1
+    }
+  ]
+}
